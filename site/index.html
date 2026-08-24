@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>KNT Manager — Gerenciador de contas Roblox para Windows</title>
+<meta name="description" content="Site oficial do KNT Manager: o gerenciador multi-conta para Roblox. Abra dezenas de instâncias ao mesmo tempo, organize contas em grupos, controle qualidade, FPS e volume, gere alts e monitore tudo em um painel. Grátis para Windows 10/11."/>
+<meta name="theme-color" content="#0b0c0f"/>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="KNT Manager"/>
+<meta property="og:title" content="KNT Manager — Gerenciador de contas Roblox para Windows"/>
+<meta property="og:description" content="Abra várias contas Roblox ao mesmo tempo e gerencie tudo de um painel. Grátis para Windows 10/11."/>
+<meta property="og:image" content="https://kntt9.github.io/MultiRoblox-RAM/screenshots/dashboard.png"/>
+<meta property="og:url" content="https://kntt9.github.io/MultiRoblox-RAM/"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237d6dff'/%3E%3Cstop offset='1' stop-color='%234f46e5'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Ctext x='32' y='44' font-family='Arial,sans-serif' font-size='36' font-weight='800' fill='%23fff' text-anchor='middle'%3EK%3C/text%3E%3C/svg%3E"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/>
+<style>
+/* ════════════════════════════════════════════════════════════════════
+   KNT Manager — site oficial
+   Identidade herdada do app: escuro, violeta, Inter. Produto em primeiro.
+   ════════════════════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b0c0f;--s1:#121318;--s2:#1a1c22;--s3:#23262e;--s4:#2e323c;
+  --bd:rgba(255,255,255,.07);--bd2:rgba(255,255,255,.14);
+  --t1:#f2f3f6;--t2:#a7aab3;--t3:#6f727b;
+  --ac:#5c5ce0;--ac-h:#7d6dff;--ac2:rgba(92,92,224,.16);--ac3:rgba(92,92,224,.45);
+  --green:#3ecf8e;--amber:#f5a623;--red:#f06f6f;--blue:#38bdf8;
+  --grad:linear-gradient(135deg,#7d6dff,#5c5ce0 55%,#4f46e5);
+  --grad-soft:linear-gradient(135deg,rgba(125,109,255,.16),rgba(92,92,224,.05));
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono',Consolas,monospace;
+  --r:14px;--r2:10px;
+}
+html{scroll-behavior:smooth;scroll-padding-top:80px}
+body{font-family:var(--font);background:var(--bg);color:var(--t1);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+::selection{background:var(--ac3)}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;display:block}
+.material-icons-round{font-size:20px;vertical-align:-4px}
+:focus-visible{outline:2px solid var(--ac-h);outline-offset:2px;border-radius:6px}
+.container{max-width:1140px;margin:0 auto;padding:0 24px}
+
+/* ── topbar ─────────────────────────────────────────────────────────── */
+.topbar{position:sticky;top:0;z-index:50;background:rgba(11,12,15,.85);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--bd)}
+.topbar-in{display:flex;align-items:center;gap:20px;height:60px}
+.brand{display:flex;align-items:center;gap:11px;font-weight:800;letter-spacing:-.02em;font-size:16px}
+.brand-mark{width:30px;height:30px;border-radius:9px;background:var(--grad);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 4px 12px -3px var(--ac3)}
+.brand small{font-size:10px;font-weight:600;color:var(--t3);margin-left:6px;border:1px solid var(--bd);background:var(--s2);padding:2px 7px;border-radius:6px;letter-spacing:.04em}
+.top-nav{display:flex;gap:2px;margin-left:auto}
+.top-nav a{font-size:13px;font-weight:500;color:var(--t2);padding:8px 13px;border-radius:8px;transition:background .15s,color .15s}
+.top-nav a:hover{background:var(--s2);color:var(--t1)}
+.top-cta{display:inline-flex;align-items:center;gap:7px;background:var(--grad);color:#fff;font-weight:700;font-size:13px;padding:9px 16px;border-radius:9px;box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 8px 20px -8px var(--ac3);transition:transform .15s,filter .15s;white-space:nowrap}
+.top-cta:hover{transform:translateY(-1px);filter:brightness(1.08)}
+.btn-discord{display:inline-flex;align-items:center;gap:7px;background:var(--s2);border:1px solid var(--bd);color:var(--t1);font-weight:600;font-size:13px;padding:8px 14px;border-radius:9px;transition:all .15s}
+.btn-discord:hover{border-color:var(--bd2);background:var(--s3)}
+.btn-discord svg{width:15px;height:15px}
+
+/* ── hero ───────────────────────────────────────────────────────────── */
+.hero{position:relative;padding:76px 0 84px;overflow:hidden}
+.hero::before{content:'';position:absolute;inset:0;background:
+  radial-gradient(760px 420px at 16% 0%,rgba(92,92,224,.18),transparent 65%),
+  radial-gradient(600px 400px at 88% 25%,rgba(125,109,255,.10),transparent 60%);pointer-events:none}
+.hero-grid{position:relative;display:grid;grid-template-columns:.92fr 1.08fr;gap:60px;align-items:center}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ac-h);background:var(--ac2);border:1px solid var(--ac3);padding:6px 13px;border-radius:999px;margin-bottom:20px}
+.hero h1{font-size:clamp(32px,4.6vw,52px);font-weight:900;letter-spacing:-.035em;line-height:1.08;margin-bottom:16px}
+.hero h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p.lead{font-size:16.5px;color:var(--t2);max-width:500px;margin-bottom:26px}
+.hero-cta{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;font-family:var(--font);font-weight:700;font-size:15px;padding:14px 24px;border-radius:12px;cursor:pointer;border:none;transition:transform .15s,box-shadow .2s,filter .15s;white-space:nowrap}
+.btn-primary{background:var(--grad);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 10px 26px -8px var(--ac3)}
+.btn-primary:hover{transform:translateY(-2px);filter:brightness(1.08)}
+.btn-ghost{background:var(--s2);border:1px solid var(--bd2);color:var(--t1)}
+.btn-ghost:hover{background:var(--s3);transform:translateY(-2px)}
+.btn .material-icons-round{font-size:19px}
+.btn-dl{flex-direction:column;line-height:1.15;padding:11px 20px}
+.btn-dl small{display:block;margin-top:3px;font-size:11px;font-weight:600;opacity:.72;letter-spacing:.01em;line-height:1.35}
+.hero-meta{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--t3);font-weight:500}
+.hero-meta b{color:var(--t2);font-weight:600}
+.hero-meta .sep{opacity:.4}
+.hero-link{margin-top:18px}
+.hero-link a{color:var(--t3);font-size:13px;font-weight:500;border-bottom:1px dashed var(--bd2);padding-bottom:1px;transition:color .15s}
+.hero-link a:hover{color:var(--ac-h);border-color:var(--ac3)}
+
+/* ── app screenshot emoldurado (produto em primeiro) ────────────────── */
+.shot-wrap{position:relative}
+.shot-frame{position:relative;background:var(--s1);border:1px solid var(--bd2);border-radius:16px;box-shadow:0 44px 90px -34px rgba(0,0,0,.85),0 0 0 1px rgba(0,0,0,.4);overflow:hidden}
+.shot-bar{display:flex;align-items:center;gap:8px;padding:11px 14px;background:var(--s2);border-bottom:1px solid var(--bd)}
+.shot-dot{width:10px;height:10px;border-radius:50%}
+.shot-dot.r{background:#ff5f57}.shot-dot.y{background:#febc2e}.shot-dot.g{background:#28c840}
+.shot-title{margin-left:10px;font-size:11.5px;font-weight:600;color:var(--t3);display:flex;align-items:center;gap:7px}
+.shot-title .mark{width:14px;height:14px;border-radius:4px;background:var(--grad);display:inline-block}
+.shot-frame img{width:100%;height:auto;display:block}
+.shot-chip{position:absolute;top:14px;right:14px;background:rgba(18,19,24,.9);border:1px solid var(--bd2);font-size:11px;font-weight:600;color:var(--t2);padding:5px 11px;border-radius:999px;display:flex;align-items:center;gap:7px;backdrop-filter:blur(6px)}
+.shot-chip::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.shot-caption{position:absolute;left:14px;bottom:14px;right:14px;background:rgba(11,12,15,.78);border:1px solid var(--bd);border-radius:10px;padding:10px 14px;font-size:12.5px;color:var(--t2);backdrop-filter:blur(8px);display:flex;align-items:center;gap:10px}
+.shot-caption .material-icons-round{color:var(--ac-h);font-size:17px}
+.shot-caption b{color:var(--t1);font-weight:700}
+
+/* ── sections ───────────────────────────────────────────────────────── */
+section{padding:80px 0}
+.sec-head{max-width:680px;margin:0 auto 48px;text-align:center}
+.sec-kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ac-h);margin-bottom:14px}
+.sec-kicker::before,.sec-kicker::after{content:'';width:22px;height:1px;background:var(--ac3)}
+.sec-head h2{font-size:clamp(26px,3.6vw,36px);font-weight:800;letter-spacing:-.03em;line-height:1.15;margin-bottom:12px}
+.sec-head p{font-size:15px;color:var(--t2)}
+.sec-head.left{text-align:left;margin:0 0 36px}
+.sec-head.left .sec-kicker::before{display:none}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.stat{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:22px 20px;text-align:center;transition:border-color .2s,transform .2s}
+.stat:hover{border-color:var(--bd2);transform:translateY(-3px)}
+.stat b{display:block;font-size:26px;font-weight:800;letter-spacing:-.03em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;font-variant-numeric:tabular-nums;line-height:1.2}
+.stat span{font-size:12px;color:var(--t3);font-weight:500}
+
+/* features */
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+.feat{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:26px 24px;transition:border-color .2s,transform .2s,box-shadow .25s}
+.feat:hover{border-color:var(--bd2);transform:translateY(-3px);box-shadow:0 24px 48px -24px rgba(0,0,0,.7)}
+.feat-ic{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;background:var(--grad-soft);border:1px solid var(--ac3);color:var(--ac-h)}
+.feat-ic .material-icons-round{font-size:21px}
+.feat-ic.g{background:rgba(62,207,142,.1);border-color:rgba(62,207,142,.25);color:var(--green)}
+.feat-ic.a{background:rgba(245,166,35,.1);border-color:rgba(245,166,35,.25);color:var(--amber)}
+.feat-ic.b{background:rgba(56,189,248,.1);border-color:rgba(56,189,248,.25);color:var(--blue)}
+.feat-ic.r{background:rgba(240,111,111,.1);border-color:rgba(240,111,111,.25);color:var(--red)}
+.feat h3{font-size:15.5px;font-weight:700;letter-spacing:-.01em;margin-bottom:6px}
+.feat .what{font-size:13px;color:var(--t2);line-height:1.6}
+.feat .why{display:flex;gap:8px;font-size:12.5px;color:var(--t3);line-height:1.55;margin-top:12px;padding-top:12px;border-top:1px solid var(--bd)}
+.feat .why .material-icons-round{font-size:15px;color:var(--green);flex-shrink:0;margin-top:2px}
+.feat code{font-family:var(--mono);font-size:11px;background:var(--s2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;color:var(--t2)}
+
+/* diferenciais */
+.edge{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.edge-item{display:flex;gap:16px;background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:24px}
+.edge-item .ic{width:40px;height:40px;border-radius:11px;background:var(--grad);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 8px 20px -8px var(--ac3)}
+.edge-item .ic .material-icons-round{color:#fff;font-size:20px}
+.edge-item h3{font-size:15px;font-weight:700;margin-bottom:5px}
+.edge-item p{font-size:13px;color:var(--t2);line-height:1.6}
+
+/* screenshots showcase */
+.show{display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:start}
+.show-main{position:relative;background:var(--s1);border:1px solid var(--bd2);border-radius:16px;overflow:hidden}
+.show-main img{width:100%;height:auto;cursor:zoom-in}
+.show-main figcaption{display:flex;align-items:center;gap:10px;padding:13px 16px;border-top:1px solid var(--bd);font-size:13px;color:var(--t2)}
+.show-main figcaption .material-icons-round{color:var(--ac-h);font-size:18px}
+.show-main figcaption b{color:var(--t1)}
+.show-nav{display:flex;flex-direction:column;gap:8px}
+.show-thumb{display:flex;align-items:center;gap:11px;background:var(--s1);border:1px solid var(--bd);border-radius:11px;padding:8px;cursor:pointer;text-align:left;font-family:var(--font);transition:border-color .15s,background .15s}
+.show-thumb:hover{border-color:var(--bd2);background:var(--s2)}
+.show-thumb.on{border-color:var(--ac3);background:var(--ac2)}
+.show-thumb img{width:74px;height:46px;object-fit:cover;border-radius:7px;flex-shrink:0}
+.show-thumb span{font-size:12.5px;font-weight:600;color:var(--t2)}
+.show-thumb.on span{color:var(--t1)}
+.show-hint{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--t3);margin-top:10px}
+
+/* como funciona */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;counter-reset:step}
+.step{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:28px 24px;position:relative}
+.step::before{counter-increment:step;content:counter(step);position:absolute;top:20px;right:22px;font-size:42px;font-weight:900;letter-spacing:-.04em;color:transparent;-webkit-text-stroke:1px var(--s4)}
+.step .ic{width:44px;height:44px;border-radius:12px;background:var(--grad);display:flex;align-items:center;justify-content:center;margin-bottom:18px;box-shadow:0 10px 22px -8px var(--ac3)}
+.step .ic .material-icons-round{color:#fff;font-size:22px}
+.step b{display:block;font-size:15.5px;font-weight:700;margin-bottom:8px}
+.step p{font-size:13px;color:var(--t2)}
+.step code{font-family:var(--mono);font-size:11px;background:var(--s2);border:1px solid var(--bd);border-radius:5px;padding:1px 6px;color:var(--t2)}
+
+/* download */
+.dl-zone{background:var(--grad-soft);border:1px solid var(--ac3);border-radius:22px;padding:56px 48px;text-align:center;position:relative;overflow:hidden}
+.dl-zone::before{content:'';position:absolute;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(125,109,255,.16),transparent 70%);top:-180px;left:-120px;pointer-events:none}
+.dl-zone::after{content:'';position:absolute;width:380px;height:380px;border-radius:50%;background:radial-gradient(circle,rgba(92,92,224,.14),transparent 70%);bottom:-160px;right:-100px;pointer-events:none}
+.dl-zone>*{position:relative;z-index:1}
+.dl-zone h2{font-size:clamp(26px,3.6vw,36px);font-weight:800;letter-spacing:-.03em;margin-bottom:10px}
+.dl-badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--green);background:rgba(62,207,142,.1);border:1px solid rgba(62,207,142,.25);padding:5px 13px;border-radius:999px;margin-bottom:14px}
+.dl-badge::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
+.dl-zone p.sub{font-size:15px;color:var(--t2);max-width:560px;margin:0 auto 28px}
+.dl-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:24px}
+.dl-btn{display:inline-flex;align-items:center;gap:12px;background:var(--grad);color:#fff;font-weight:800;font-size:16px;padding:17px 30px;border-radius:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 16px 40px -12px var(--ac3);transition:transform .15s,filter .15s}
+.dl-btn:hover{transform:translateY(-3px);filter:brightness(1.09)}
+.dl-btn .material-icons-round{font-size:23px}
+.dl-btn small{display:block;margin-top:4px;font-size:11px;font-weight:600;opacity:.75;line-height:1.4}
+.dl-alt{background:var(--s2);border:1px solid var(--bd2);box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+.dl-alt:hover{background:var(--s3)}
+.dl-meta{display:flex;justify-content:center;gap:24px;flex-wrap:wrap;font-size:12.5px;color:var(--t3);font-weight:500}
+.dl-meta b{color:var(--t2);font-weight:600}
+.dl-meta .sep{opacity:.4}
+.req{max-width:620px;margin:32px auto 0;background:var(--s1);border:1px solid var(--bd);border-radius:var(--r2);padding:20px 24px;text-align:left}
+.req b{font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);display:block;margin-bottom:12px}
+.req ul{list-style:none;display:grid;gap:9px}
+.req li{display:flex;gap:10px;font-size:13px;color:var(--t2);align-items:flex-start}
+.req .material-icons-round{font-size:16px;color:var(--green);flex-shrink:0;margin-top:1px}
+.req li.warn .material-icons-round{color:var(--amber)}
+
+/* changelog */
+.clog{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.clog-item{display:grid;grid-template-columns:170px 1fr;gap:22px;background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:24px}
+.clog-ver{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--ac-h);display:flex;flex-direction:column;gap:6px}
+.clog-ver .date{font-size:11px;color:var(--t3);font-family:var(--font)}
+.clog-item.current{border-color:var(--ac3);background:var(--grad-soft)}
+.clog-item.current .clog-ver{color:var(--t1)}
+.clog-item.current .clog-ver::after{content:'atual';display:inline-block;font-family:var(--font);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--green);background:rgba(62,207,142,.1);border:1px solid rgba(62,207,142,.25);padding:2px 8px;border-radius:999px;width:fit-content}
+.clog-body ul{list-style:none;display:grid;gap:7px}
+.clog-body li{display:flex;gap:10px;font-size:13.5px;color:var(--t2);line-height:1.55}
+.clog-body .material-icons-round{font-size:16px;color:var(--green);flex-shrink:0;margin-top:2px}
+.clog-more{text-align:center;margin-top:18px}
+.clog-more a{font-size:13px;font-weight:600;color:var(--ac-h);border-bottom:1px dashed var(--ac3);padding-bottom:1px;transition:color .15s}
+.clog-more a:hover{color:var(--t1)}
+
+/* segurança */
+.sec-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.sec-item{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:24px}
+.sec-item .ic{width:40px;height:40px;border-radius:11px;background:var(--grad-soft);border:1px solid var(--ac3);color:var(--ac-h);display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+.sec-item .ic .material-icons-round{font-size:20px}
+.sec-item h3{font-size:14.5px;font-weight:700;margin-bottom:6px}
+.sec-item p{font-size:13px;color:var(--t2);line-height:1.6}
+.sec-note{margin-top:16px;background:rgba(245,166,35,.05);border:1px solid rgba(245,166,35,.2);border-radius:var(--r2);padding:16px 20px;font-size:12.5px;color:var(--t2);line-height:1.6}
+.sec-note b{color:var(--amber)}
+
+/* faq */
+.faq{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
+.faq-q{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r2);overflow:hidden;transition:border-color .2s}
+.faq-q.open{border-color:var(--ac3)}
+.faq-btn{width:100%;display:flex;align-items:center;gap:14px;padding:17px 20px;background:none;border:none;color:var(--t1);font-family:var(--font);font-size:14.5px;font-weight:600;text-align:left;cursor:pointer}
+.faq-btn .material-icons-round{color:var(--ac-h);font-size:19px;flex-shrink:0}
+.faq-btn .arrow{margin-left:auto;color:var(--t3);font-size:20px;transition:transform .2s;flex-shrink:0}
+.faq-q.open .arrow{transform:rotate(180deg);color:var(--ac-h)}
+.faq-a{display:none;padding:0 20px 17px 53px;font-size:13.5px;color:var(--t2);line-height:1.7}
+.faq-q.open .faq-a{display:block;animation:fade .25s ease}
+@keyframes fade{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+
+/* footer */
+footer{border-top:1px solid var(--bd);padding:52px 0 36px;background:var(--s1)}
+.foot-grid{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:36px}
+.foot-brand p{font-size:13px;color:var(--t3);max-width:320px;margin-top:14px}
+.foot h4{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);margin-bottom:14px}
+.foot a{display:block;font-size:13px;color:var(--t2);padding:4px 0;transition:color .15s}
+.foot a:hover{color:var(--ac-h)}
+.foot-credit{display:flex;align-items:center;gap:10px;padding:9px 0;font-size:13px;color:var(--t2)}
+.foot-credit .av{width:30px;height:30px;border-radius:8px;background:var(--s3);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--t1);flex-shrink:0}
+.foot-credit small{display:block;font-size:11px;color:var(--t3)}
+.foot-bottom{margin-top:36px;padding-top:22px;border-top:1px solid var(--bd);display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--t3)}
+.foot-bottom .disc{color:var(--t3)}
+
+/* lightbox */
+.lightbox{position:fixed;inset:0;z-index:100;background:rgba(6,7,9,.94);display:none;align-items:center;justify-content:center;padding:40px}
+.lightbox.open{display:flex;animation:fade .2s ease}
+.lightbox img{max-width:min(1200px,92vw);max-height:82vh;border-radius:12px;border:1px solid var(--bd2);box-shadow:0 40px 100px -30px rgba(0,0,0,.9)}
+.lb-caption{position:absolute;bottom:26px;left:0;right:0;text-align:center;font-size:13px;color:var(--t2)}
+.lb-btn{position:absolute;top:50%;transform:translateY(-50%);width:46px;height:46px;border-radius:50%;background:var(--s2);border:1px solid var(--bd2);color:var(--t1);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}
+.lb-btn:hover{background:var(--s3)}
+.lb-btn.prev{left:22px}.lb-btn.next{right:22px}
+.lb-close{position:absolute;top:20px;right:20px;width:40px;height:40px;border-radius:50%;background:var(--s2);border:1px solid var(--bd2);color:var(--t1);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}
+.lb-close:hover{background:var(--s3)}
+
+/* reveal */
+.reveal{opacity:0;transform:translateY(20px);transition:opacity .55s ease,transform .55s ease}
+.reveal.in{opacity:1;transform:none}
+
+/* responsive */
+@media (max-width:1020px){
+  .hero-grid{grid-template-columns:1fr;gap:44px}
+  .show{grid-template-columns:1fr}
+  .show-nav{flex-direction:row;flex-wrap:wrap}
+  .edge{grid-template-columns:1fr}
+  .foot-grid{grid-template-columns:1fr 1fr}
+}
+@media (max-width:860px){
+  .top-nav{display:none}
+  .feat-grid{grid-template-columns:1fr 1fr}
+  .stats{grid-template-columns:1fr 1fr}
+  .steps{grid-template-columns:1fr}
+  .sec-grid{grid-template-columns:1fr}
+}
+@media (max-width:600px){
+  .feat-grid,.stats{grid-template-columns:1fr}
+  section{padding:56px 0}
+  .dl-zone{padding:40px 22px}
+  .hero{padding:56px 0 64px}
+  .clog-item{grid-template-columns:1fr;gap:12px}
+  .foot-grid{grid-template-columns:1fr}
+  .btn-discord{display:none}
+  .shot-caption{display:none}
+  .top-cta{font-size:12px;padding:8px 12px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  .reveal{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ══ topbar ══ -->
+<header class="topbar">
+  <div class="container topbar-in">
+    <a class="brand" href="#top">
+      <span class="brand-mark">K</span>
+      KNT Manager<small data-dl-version>v0.6.0</small>
+    </a>
+    <nav class="top-nav" aria-label="Navegação principal">
+      <a href="#recursos">Recursos</a>
+      <a href="#screenshots">Capturas</a>
+      <a href="#download">Download</a>
+      <a href="#changelog">Novidades</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="top-cta" href="#download"><span class="material-icons-round" style="font-size:17px">download</span> Baixar</a>
+    <a class="btn-discord" href="https://discord.gg/6eNAcGKmpC" target="_blank" rel="noopener" aria-label="Servidor no Discord">
+      <svg viewBox="0 0 127.14 96.36" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/></svg>
+      Discord
+    </a>
+  </div>
+</header>
+
+<!-- ══ hero ══ -->
+<section class="hero" id="top">
+  <div class="container hero-grid">
+    <div>
+      <span class="hero-badge">Gerenciador multi-conta para Roblox</span>
+      <h1>Gerencie suas contas Roblox em <span class="grad">um único lugar</span></h1>
+      <p class="lead">Abra dezenas de instâncias ao mesmo tempo, organize contas em grupos, controle qualidade, FPS e volume e monitore tudo em um painel limpo e rápido — no seu PC, sem nuvem.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary btn-dl" href="MultiRoblox_0.6.0_x64-setup.exe" download data-dl-setup>
+          <span class="material-icons-round">install_desktop</span>
+          <span data-dl-setup-label>Baixar para Windows<small>Instalador · v0.6.0 · 3,0 MB</small></span>
+        </a>
+        <a class="btn btn-ghost btn-dl" href="MultiRoblox.exe" download data-dl-portable>
+          <span class="material-icons-round">save_alt</span>
+          <span>Versão portátil<small>Sem instalação · 8,5 MB</small></span>
+        </a>
+      </div>
+      <div class="hero-meta">
+        <span>Windows <b>10 / 11</b></span><span class="sep">•</span>
+        <span>Atualizações <b>automáticas</b></span><span class="sep">•</span>
+        <span style="color:var(--green)"><b>Grátis</b></span>
+      </div>
+      <div class="hero-link"><a href="#recursos">Conheça os recursos ↓</a></div>
+    </div>
+
+    <!-- interface real do app -->
+    <div class="shot-wrap reveal in">
+      <div class="shot-frame">
+        <div class="shot-bar">
+          <span class="shot-dot r"></span><span class="shot-dot y"></span><span class="shot-dot g"></span>
+          <span class="shot-title"><span class="mark"></span> KNT Manager — Painel</span>
+        </div>
+        <img src="screenshots/dashboard.png" width="1440" height="900" alt="Painel do KNT Manager mostrando contas, instâncias em execução e categorias" loading="eager"/>
+        <span class="shot-chip">3 em execução</span>
+        <div class="shot-caption"><span class="material-icons-round">dashboard</span><span><b>Painel</b> — visão geral de contas, instâncias e categorias</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ stats ══ -->
+<section style="padding:0 0 72px">
+  <div class="container">
+    <div class="stats">
+      <div class="stat reveal"><b>Sem limite</b><span>de instâncias — depende do hardware</span></div>
+      <div class="stat reveal"><b>1 clique</b><span>abre um grupo inteiro de contas</span></div>
+      <div class="stat reveal"><b>3 em 1</b><span>contas + gerador + tracking</span></div>
+      <div class="stat reveal"><b>Grátis</b><span>sem cadastro e sem anúncios</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ recursos ══ -->
+<section id="recursos" style="background:var(--s1);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd)">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="sec-kicker">Recursos</span>
+      <h2>Tudo que você precisa para farmar, tradear ou jogar em várias contas</h2>
+      <p>Cada recurso existe para economizar cliques e te deixar no controle total. Sem enrolação: o que faz e por que importa.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat reveal">
+        <span class="feat-ic"><span class="material-icons-round">manage_accounts</span></span>
+        <h3>Contas em massa</h3>
+        <p class="what">Adicione quantas contas quiser colando o cookie <code>.ROBLOSECURITY</code>. Nome, avatar e validade do cookie são verificados automaticamente. Salve a senha de cada conta e copie com um clique pelo menu do card.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Cadastrar dezenas de contas leva segundos — e copiar senhas também.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic g"><span class="material-icons-round">rocket_launch</span></span>
+        <h3>Multi-instância real</h3>
+        <p class="what">Abra vários clientes Roblox ao mesmo tempo, cada um logado numa conta, e entre em jogos por ID, link de servidor privado ou <code>placeId:jobId</code>.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Farm e trade rodando lado a lado, sem alternar janelas.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic a"><span class="material-icons-round">inventory_2</span></span>
+        <h3>Grupos com 1 clique</h3>
+        <p class="what">Monte grupos ("Farm", "Trade") e abra todos os integrantes juntos, na ordem certa, com um único botão. Cada conta pode ter seu jogo-alvo.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Sua rotina inteira começa em um clique.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic"><span class="material-icons-round">graphic_eq</span></span>
+        <h3>Mixer global</h3>
+        <p class="what">Qualidade gráfica, limite de FPS e volume mestre aplicados a todas as instâncias ao mesmo tempo — com prioridade de CPU por conta.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Ajustar 20 janelas uma a uma acaba no primeiro dia.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic b"><span class="material-icons-round">shuffle</span></span>
+        <h3>Gerador de contas</h3>
+        <p class="what">Gere alts pelas APIs BloxGen ou Altgen com a sua chave, ou use o modo manual gratuito que já preenche o cadastro para você.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Conta nova com usuário, senha e cookie prontos.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic r"><span class="material-icons-round">photo_camera</span></span>
+        <h3>Tracking no Discord</h3>
+        <p class="what">Capturas de tela de cada instância enviadas automaticamente a um webhook do Discord em intervalos que você define.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Acompanhe o farm de qualquer lugar, sem abrir o PC.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic g"><span class="material-icons-round">bolt</span></span>
+        <h3>Anti-AFK + limpeza de RAM</h3>
+        <p class="what">Mantém instâncias ativas além do kick de inatividade de 20 minutos e libera memória de todas as janelas sem travar o jogo.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Farms estáveis por horas, mesmo com muitas janelas.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic a"><span class="material-icons-round">bar_chart</span></span>
+        <h3>Charts ao vivo</h3>
+        <p class="what">Jogos mais jogados e em alta da Roblox direto no app, com busca e acesso rápido à página de cada jogo.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Escolha o jogo certo com base em dados reais.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic"><span class="material-icons-round">palette</span></span>
+        <h3>Organização & segurança</h3>
+        <p class="what">Categorias, 12 temas, interface em português e inglês, cookies e senhas criptografados no seu PC, backup com senha, cópia rápida de credenciais e log completo de ações.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Controle total com a tranquilidade de dados locais.</p>
+      </div>
+      <div class="feat reveal">
+        <span class="feat-ic g"><span class="material-icons-round">system_update_alt</span></span>
+        <h3>Atualização automática</h3>
+        <p class="what">O app verifica novas versões ao iniciar e instala com um clique — sem baixar nada manualmente nem perder configurações.</p>
+        <p class="why"><span class="material-icons-round">bolt</span> Você nunca fica para trás, a instalação se mantém.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ screenshots ══ -->
+<section id="screenshots">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="sec-kicker">Na prática</span>
+      <h2>Veja o KNT Manager funcionando</h2>
+      <p>Capturas de tela reais da interface do programa.</p>
+    </div>
+    <div class="show reveal">
+      <figure class="show-main" id="show-main">
+        <img id="show-img" src="screenshots/dashboard.png" width="1440" height="900" alt="Painel do KNT Manager" loading="eager"/>
+        <figcaption id="show-cap"><span class="material-icons-round">dashboard</span><span><b>Painel</b> — visão geral de contas, instâncias e categorias</span></figcaption>
+      </figure>
+      <div class="show-nav" id="show-nav" role="tablist" aria-label="Capturas de tela">
+        <button class="show-thumb on" role="tab" aria-selected="true" data-i="0"><img src="screenshots/dashboard.png" width="74" height="46" alt="" loading="lazy"/><span>Painel</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="1"><img src="screenshots/accounts.png" width="74" height="46" alt="" loading="lazy"/><span>Contas</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="2"><img src="screenshots/groups.png" width="74" height="46" alt="" loading="lazy"/><span>Grupos</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="3"><img src="screenshots/mixer.png" width="74" height="46" alt="" loading="lazy"/><span>Mixer</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="4"><img src="screenshots/generator.png" width="74" height="46" alt="" loading="lazy"/><span>Gerador</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="5"><img src="screenshots/charts.png" width="74" height="46" alt="" loading="lazy"/><span>Charts</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="6"><img src="screenshots/tracking.png" width="74" height="46" alt="" loading="lazy"/><span>Tracking</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="7"><img src="screenshots/settings.png" width="74" height="46" alt="" loading="lazy"/><span>Config.</span></button>
+        <button class="show-thumb" role="tab" aria-selected="false" data-i="8"><img src="screenshots/logs.png" width="74" height="46" alt="" loading="lazy"/><span>Logs</span></button>
+      </div>
+    </div>
+    <p class="show-hint"><span class="material-icons-round" style="font-size:15px">open_in_full</span> Clique na imagem para ampliar</p>
+  </div>
+</section>
+
+<!-- ══ diferenciais ══ -->
+<section style="background:var(--s1);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd)">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="sec-kicker">Por que KNT Manager</span>
+      <h2>Tudo sob controle</h2>
+    </div>
+    <div class="edge">
+      <div class="edge-item reveal">
+        <span class="ic"><span class="material-icons-round">layers</span></span>
+        <div><h3>Multi-instância</h3><p>Gerencie várias instâncias do Roblox sem precisar alternar manualmente entre dezenas de janelas.</p></div>
+      </div>
+      <div class="edge-item reveal">
+        <span class="ic"><span class="material-icons-round">folder</span></span>
+        <div><h3>Organização</h3><p>Mantenha suas contas organizadas em grupos e categorias, cada uma com seu jogo-alvo.</p></div>
+      </div>
+      <div class="edge-item reveal">
+        <span class="ic"><span class="material-icons-round">tune</span></span>
+        <div><h3>Controle</h3><p>Qualidade gráfica, FPS, volume e prioridade de CPU configurados de um painel só.</p></div>
+      </div>
+      <div class="edge-item reveal">
+        <span class="ic"><span class="material-icons-round">speed</span></span>
+        <div><h3>Desempenho</h3><p>Quantas instâncias rodam depende do hardware — o app ajuda a aguentar mais com controle de prioridade e limpeza de RAM.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ como funciona ══ -->
+<section id="como-funciona">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="sec-kicker">Como funciona</span>
+      <h2>Comece em menos de 2 minutos</h2>
+    </div>
+    <div class="steps">
+      <div class="step reveal">
+        <span class="ic"><span class="material-icons-round">download</span></span>
+        <b>1. Baixe e abra</b>
+        <p>Execute o <code>MultiRoblox.exe</code> — sem instalador, é só rodar. O Windows pode pedir confirmação na primeira vez.</p>
+      </div>
+      <div class="step reveal">
+        <span class="ic"><span class="material-icons-round">vpn_key</span></span>
+        <b>2. Adicione suas contas</b>
+        <p>Clique em <b>Add Account</b> e cole o cookie da conta (F12 → Cookies → <code>.ROBLOSECURITY</code>). A conta aparece com nome, ID e status do cookie.</p>
+      </div>
+      <div class="step reveal">
+        <span class="ic"><span class="material-icons-round">sports_esports</span></span>
+        <b>3. Abra e controle tudo</b>
+        <p>Dê <b>Start</b> em uma conta ou grupo para abrir o Roblox com ela logada. Ajuste qualidade, FPS e volume no Mixer e monitore no painel.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ download ══ -->
+<section id="download" style="background:var(--s1);border-top:1px solid var(--bd)">
+  <div class="container">
+    <div class="dl-zone reveal">
+      <span class="dl-badge" data-dl-version>v0.6.0</span> · Windows 10 / 11
+      <h2>Baixe o KNT Manager</h2>
+      <p class="sub">Grátis, sem cadastro. Escolha o instalador (recomendado — cria atalho no menu Iniciar e mantém as atualizações automáticas) ou o executável portátil.</p>
+      <div class="dl-row">
+        <a class="dl-btn" href="MultiRoblox_0.6.0_x64-setup.exe" download data-dl-setup>
+          <span class="material-icons-round">install_desktop</span>
+          <span data-dl-setup-label>Baixar para Windows<small>Instalador · MultiRoblox_0.6.0_x64-setup.exe · 3,0 MB</small></span>
+        </a>
+        <a class="dl-btn dl-alt" href="MultiRoblox.exe" download data-dl-portable>
+          <span class="material-icons-round">save_alt</span>
+          <span data-dl-portable-label>Baixar portátil<small>MultiRoblox.exe · 8,5 MB · sem instalação</small></span>
+        </a>
+      </div>
+      <div class="dl-meta">
+        <span>Versão <b data-dl-version>v0.6.0</b></span><span class="sep">•</span>
+        <span>Instalador <b>3,0 MB</b></span><span class="sep">•</span>
+        <span>Portátil <b>8,5 MB</b></span><span class="sep">•</span>
+        <span>Atualizações <b>gratuitas e automáticas</b></span>
+      </div>
+      <div class="req">
+        <b>Requisitos</b>
+        <ul>
+          <li><span class="material-icons-round">check_circle</span> Windows 10 ou 11 (64 bits)</li>
+          <li><span class="material-icons-round">check_circle</span> Roblox instalado e atualizado</li>
+          <li><span class="material-icons-round">check_circle</span> Conexão com a internet</li>
+          <li class="warn"><span class="material-icons-round">info</span> Se o SmartScreen avisar, clique em <b>"Mais informações" → "Executar assim mesmo"</b> — o executável não é assinado.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ changelog ══ -->
+<section id="changelog">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="sec-kicker">Novidades</span>
+      <h2>Changelog</h2>
+    </div>
+    <div class="clog">
+      <div class="clog-item current reveal">
+        <div class="clog-ver">v0.6.0<span class="date">16 de agosto de 2026</span></div>
+        <div class="clog-body">
+          <ul>
+            <li><span class="material-icons-round">check</span> Mensagem do painel atualizada com o aviso de versão.</li>
+            <li><span class="material-icons-round">check</span> Fluxo de atualização automática validado de ponta a ponta.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="clog-item reveal">
+        <div class="clog-ver">v0.5.0</div>
+        <div class="clog-body">
+          <ul>
+            <li><span class="material-icons-round">check</span> Atualização automática: verificação de versão no início, botão em Configurações e instalação com um clique.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="clog-more"><a href="https://github.com/Kntt9/MultiRoblox-RAM/releases" target="_blank" rel="noopener">Ver histórico completo no GitHub →</a></div>
+  </div>
+</section>
+
+<!-- ══ segurança ══ -->
+<section id="seguranca" style="background:var(--s1);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd)">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="sec-kicker">Segurança e privacidade</span>
+      <h2>Seus dados, no seu PC</h2>
+      <p>Como o KNT Manager lida com seus cookies e contas — sem promessas vazias.</p>
+    </div>
+    <div class="sec-grid">
+      <div class="sec-item reveal">
+        <span class="ic"><span class="material-icons-round">storage</span></span>
+        <h3>Armazenamento local</h3>
+        <p>Suas contas e cookies ficam apenas no seu computador. Não existe nuvem: nada é enviado para servidores do KNT Manager.</p>
+      </div>
+      <div class="sec-item reveal">
+        <span class="ic"><span class="material-icons-round">lock</span></span>
+        <h3>Cookies criptografados</h3>
+        <p>Os cookies são gravados criptografados em disco — AES-256-GCM com chave definida por você ou a criptografia nativa do Windows.</p>
+      </div>
+      <div class="sec-item reveal">
+        <span class="ic"><span class="material-icons-round">backup</span></span>
+        <h3>Backup com senha</h3>
+        <p>Exporte um backup protegido por senha e restaure em outra máquina quando quiser. Seus dados continuam seus.</p>
+      </div>
+      <div class="sec-item reveal">
+        <span class="ic"><span class="material-icons-round">language</span></span>
+        <h3>O que o app consulta na internet</h3>
+        <p>Checa atualizações no GitHub, carrega os gráficos da Roblox e valida cookies. O Tracking só envia capturas se você configurar um webhook do Discord.</p>
+      </div>
+    </div>
+    <div class="sec-note reveal">
+      <b>Importante:</b> o app usa o cookie <code>.ROBLOSECURITY</code> para entrar nas suas contas — trate-o como uma senha. Multi-conta e alts têm risco inerente de banimento pela Roblox; use contas que você pode perder. Nenhum gerenciador pode prometer "100% seguro" ou "banimento impossível".
+    </div>
+  </div>
+</section>
+
+<!-- ══ faq ══ -->
+<section id="faq">
+  <div class="container">
+    <div class="sec-head reveal">
+      <span class="sec-kicker">FAQ</span>
+      <h2>Perguntas frequentes</h2>
+    </div>
+    <div class="faq">
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> O KNT Manager é gratuito?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Sim, 100% gratuito, sem anúncios e sem cadastro. O gerador de contas usa chaves de serviços externos (BloxGen/Altgen) que você adiciona se quiser — o app em si não cobra nada.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Quais versões do Windows são suportadas?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Windows 10 e 11, em versões de 64 bits.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Quantas contas posso executar ao mesmo tempo?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Não há limite definido pelo app — depende do seu hardware (memória RAM e CPU). O gerenciador abre cada conta como uma instância separada e oferece prioridade de CPU e limpeza de RAM para aguentar mais janelas.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Preciso instalar alguma dependência?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Não. É um único <code style="font-family:var(--mono);font-size:11.5px;background:var(--s2);padding:1px 5px;border-radius:4px">.exe</code>. O app baixa uma cópia própria do Chrome na primeira vez que você usa o login automático.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Existe versão portátil?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Sim — o <code style="font-family:var(--mono);font-size:11.5px;background:var(--s2);padding:1px 5px;border-radius:4px">MultiRoblox.exe</code> roda sem instalação. O instalador é recomendado porque cria atalho no menu Iniciar e mantém as atualizações automáticas.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Onde meus dados ficam armazenados?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Tudo fica no seu PC, com cookies criptografados em disco. Você pode definir uma chave de criptografia própria, fazer backup com senha e restaurar em outra máquina quando quiser.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Como funciona o sistema de contas?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Você cola o cookie <code style="font-family:var(--mono);font-size:11.5px;background:var(--s2);padding:1px 5px;border-radius:4px">.ROBLOSECURITY</code> da conta (F12 → Cookies). O app valida, mostra nome, avatar e validade do cookie, e usa esse cookie para abrir o Roblox logado naquela conta.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Funciona com qualquer jogo da Roblox?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Sim. Você define o jogo por conta ou grupo usando o ID do lugar, um link de servidor privado, um link de convite (<code style="font-family:var(--mono);font-size:11.5px;background:var(--s2);padding:1px 5px;border-radius:4px">share link</code>) ou <code style="font-family:var(--mono);font-size:11.5px;background:var(--s2);padding:1px 5px;border-radius:4px">placeId:jobId</code> para entrar num servidor específico.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> Minhas contas podem ser banidas?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Usar várias contas (multi-conta/alts) tem risco inerente de banimento por parte da Roblox. Use contas que você pode perder. O KNT Manager não promete "banimento impossível" — ninguém pode.</div>
+      </div>
+      <div class="faq-q reveal">
+        <button class="faq-btn" aria-expanded="false"><span class="material-icons-round">help_outline</span> O KNT Manager é afiliado à Roblox?<span class="material-icons-round arrow">expand_more</span></button>
+        <div class="faq-a">Não. O KNT Manager não é afiliado, patrocinado ou oficialmente associado à Roblox Corporation. É um projeto independente.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ footer ══ -->
+<footer>
+  <div class="container">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top"><span class="brand-mark">K</span> KNT Manager</a>
+        <p>Gerenciador de contas Roblox para Windows. Abra várias instâncias, organize contas em grupos, gere alts e monitore tudo de um lugar só.</p>
+      </div>
+      <div class="foot">
+        <h4>Produto</h4>
+        <a href="#recursos">Recursos</a>
+        <a href="#screenshots">Capturas</a>
+        <a href="#download">Download</a>
+        <a href="#changelog">Novidades</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <div class="foot">
+        <h4>Comunidade</h4>
+        <a href="https://discord.gg/6eNAcGKmpC" target="_blank" rel="noopener">Servidor no Discord</a>
+        <a href="https://github.com/Kntt9/MultiRoblox-RAM" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/Kntt9/MultiRoblox-RAM/issues" target="_blank" rel="noopener">Reportar um problema</a>
+        <div class="foot-credit"><span class="av">P</span><span>pookiepepelss<small>Desenvolvedor principal</small></span></div>
+        <div class="foot-credit"><span class="av">X</span><span>xern<small>Co-desenvolvedor</small></span></div>
+      </div>
+      <div class="foot">
+        <h4>Links</h4>
+        <a href="https://github.com/Kntt9/MultiRoblox-RAM/releases" target="_blank" rel="noopener">Releases e downloads</a>
+        <a href="https://github.com/Kntt9/MultiRoblox-RAM/blob/main/UPDATING.md" target="_blank" rel="noopener">Notas de atualização</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 KNT Manager — fork do projeto MultiRoblox.</span>
+      <span class="disc">KNT Manager não é afiliado, patrocinado ou associado à Roblox Corporation.</span>
+    </div>
+  </div>
+</footer>
+
+<!-- ══ lightbox ══ -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Visualização ampliada">
+  <img id="lb-img" src="" alt="Captura de tela ampliada do KNT Manager"/>
+  <div class="lb-caption" id="lb-cap"></div>
+  <button class="lb-btn prev" id="lb-prev" aria-label="Anterior"><span class="material-icons-round">chevron_left</span></button>
+  <button class="lb-btn next" id="lb-next" aria-label="Próxima"><span class="material-icons-round">chevron_right</span></button>
+  <button class="lb-close" id="lb-close" aria-label="Fechar"><span class="material-icons-round">close</span></button>
+</div>
+
+<script>
+// ══ reveal on scroll (respeita prefers-reduced-motion) ══
+const io = new IntersectionObserver(es => {
+  es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+}, { threshold: 0.1 });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+// ══ FAQ accordion ══
+document.querySelectorAll('.faq-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const q = btn.closest('.faq-q');
+    const wasOpen = q.classList.contains('open');
+    document.querySelectorAll('.faq-q.open').forEach(x => x.classList.remove('open'));
+    if (!wasOpen) q.classList.add('open');
+    btn.setAttribute('aria-expanded', String(!wasOpen));
+  });
+});
+
+// ══ showcase de screenshots + lightbox ══
+const SHOTS = [
+  ['dashboard', 'Painel', 'visão geral de contas, instâncias e categorias'],
+  ['accounts', 'Contas', 'adicione e gerencie contas com nome, ID e validade do cookie'],
+  ['groups', 'Grupos', 'organize contas e abra todos os integrantes de uma vez'],
+  ['mixer', 'Mixer', 'qualidade gráfica, FPS e volume para todas as instâncias'],
+  ['generator', 'Gerador', 'gere alts via BloxGen, Altgen ou modo manual'],
+  ['charts', 'Charts', 'jogos mais jogados e em alta da Roblox, ao vivo'],
+  ['tracking', 'Tracking', 'capturas de tela enviadas para um webhook do Discord'],
+  ['settings', 'Configurações', 'temas, criptografia, backups e preferências'],
+  ['logs', 'Logs', 'histórico completo de ações do app'],
+];
+const showImg = document.getElementById('show-img');
+const showCap = document.getElementById('show-cap');
+const thumbs = [...document.querySelectorAll('.show-thumb')];
+let cur = 0;
+
+function setShot(i) {
+  cur = (i + SHOTS.length) % SHOTS.length;
+  const [file, name, desc] = SHOTS[cur];
+  showImg.src = 'screenshots/' + file + '.png';
+  showImg.alt = name + ' do KNT Manager';
+  showCap.innerHTML = '<span class="material-icons-round">' + (cur === 5 ? 'bar_chart' : 'image') + '</span><span><b>' + name + '</b> — ' + desc + '</span>';
+  thumbs.forEach((t, k) => { t.classList.toggle('on', k === cur); t.setAttribute('aria-selected', String(k === cur)); });
+}
+thumbs.forEach((t, i) => t.addEventListener('click', () => setShot(i)));
+
+const lb = document.getElementById('lightbox');
+const lbImg = document.getElementById('lb-img');
+const lbCap = document.getElementById('lb-cap');
+function openLb(i) {
+  cur = i;
+  const [file, name, desc] = SHOTS[cur];
+  lbImg.src = 'screenshots/' + file + '.png';
+  lbCap.textContent = name + ' — ' + desc;
+  lb.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  document.getElementById('lb-close').focus();
+}
+function closeLb() { lb.classList.remove('open'); document.body.style.overflow = ''; }
+document.getElementById('show-img').addEventListener('click', () => openLb(cur));
+document.getElementById('show-main').addEventListener('click', e => { if (e.target.closest('img')) openLb(cur); });
+document.getElementById('lb-close').addEventListener('click', closeLb);
+document.getElementById('lb-prev').addEventListener('click', e => { e.stopPropagation(); setShot(cur - 1); openLb(cur); });
+document.getElementById('lb-next').addEventListener('click', e => { e.stopPropagation(); setShot(cur + 1); openLb(cur); });
+lb.addEventListener('click', e => { if (e.target === lb) closeLb(); });
+document.addEventListener('keydown', e => {
+  if (!lb.classList.contains('open')) return;
+  if (e.key === 'Escape') closeLb();
+  if (e.key === 'ArrowLeft') { setShot(cur - 1); openLb(cur); }
+  if (e.key === 'ArrowRight') { setShot(cur + 1); openLb(cur); }
+});
+</script>
+</body>
+</html>
+
+<script>
+// ── Auto-update download links from GitHub API ──
+(async function() {
+  try {
+    const resp = await fetch('https://api.github.com/repos/Kntt9/MultiRoblox-RAM/releases/latest');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const tag = data.tag_name || '';
+    const version = tag.replace(/^v/, '');
+    if (!version) return;
+    const setupAsset = (data.assets || []).find(a => a.name && a.name.endsWith('-setup.exe'));
+    const setupUrl = setupAsset ? setupAsset.browser_download_url : '#';
+    const setupSize = setupAsset ? (setupAsset.size / (1024 * 1024)).toFixed(1) + ' MB' : '';
+    const exeAsset = (data.assets || []).find(a => a.name === 'MultiRoblox.exe');
+    const exeUrl = exeAsset ? exeAsset.browser_download_url : '#';
+    const exeSize = exeAsset ? (exeAsset.size / (1024 * 1024)).toFixed(1) + ' MB' : '';
+
+    // Update all version strings
+    document.querySelectorAll('[data-dl-version]').forEach(el => el.textContent = 'v' + version);
+    document.querySelectorAll('[data-dl-version-tag]').forEach(el => el.textContent = tag);
+
+    // Update installer download links
+    document.querySelectorAll('[data-dl-setup]').forEach(el => {
+      el.href = setupUrl;
+      el.setAttribute('download', '');
+    });
+    // Update installer labels
+    document.querySelectorAll('[data-dl-setup-label]').forEach(el => {
+      el.innerHTML = 'Baixar para Windows<small>Instalador · ' + (setupAsset ? setupAsset.name : '') + (setupSize ? ' · ' + setupSize : '') + '</small>';
+    });
+
+    // Update portable download links
+    document.querySelectorAll('[data-dl-portable]').forEach(el => {
+      el.href = exeUrl;
+      el.setAttribute('download', '');
+    });
+    document.querySelectorAll('[data-dl-portable-label]').forEach(el => {
+      el.innerHTML = 'Baixar portátil<small>MultiRoblox.exe' + (exeSize ? ' · ' + exeSize : '') + ' · sem instalação</small>';
+    });
+
+    // Update stats
+    document.querySelectorAll('[data-dl-setup-size]').forEach(el => el.textContent = setupSize || '3,0 MB');
+    document.querySelectorAll('[data-dl-setup-name]').forEach(el => el.textContent = setupAsset ? setupAsset.name : 'MultiRoblox_setup.exe');
+  } catch(e) { console.log('Could not fetch latest release:', e); }
+})();
+</script>

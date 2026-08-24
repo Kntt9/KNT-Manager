@@ -1,0 +1,14 @@
+{
+  "name": "mr_tauri",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "web:build": "node web/build-web.mjs",
+    "web:serve": "node web/server.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

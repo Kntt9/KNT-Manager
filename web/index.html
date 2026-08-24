@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.rbxcdn.com https://*.roblox.com; connect-src 'self' https://*.roblox.com https://core.bloxgen.net https://api.altgen.me https://discord.com; object-src 'none'; base-uri 'self'; frame-src 'none'"/>
+<title>KNT Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/>
+<link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+<div id="titlebar">
+  <div class="tb-brand">
+    <div class="tb-name">KNT Manager</div>
+    <span class="tb-version" id="tb-roblox-ver">-</span>
+    <span class="tb-running" id="tb-running" data-i18n-title="nav.runningTitle" title="Roblox instances launched by KNT Manager and still running" style="display:none"></span>
+  </div>
+  <div class="tb-drag"></div>
+  <button class="tb-btn" id="discord-btn" onclick="openDiscord()" data-i18n-aria="nav.discordAria" aria-label="Join our Discord" style="-webkit-app-region:no-drag">
+    <svg width="15" height="15" viewBox="0 0 127.14 96.36" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/>
+    </svg>
+  </button>
+  <button class="tb-btn" onclick="openModal('m-help')" data-i18n-aria="common.help" aria-label="Help" style="-webkit-app-region:no-drag"><span class="material-icons-round" style="font-size:15px">help_outline</span></button>
+  <div class="tb-controls">
+    <button class="tb-btn" onclick="api.minimize()" data-i18n-aria="common.minimize" aria-label="Minimize"><span class="material-icons-round">remove</span></button>
+    <button class="tb-btn" onclick="api.maximize()" data-i18n-aria="common.maximize" aria-label="Maximize"><span class="material-icons-round">crop_square</span></button>
+    <button class="tb-btn close" onclick="api.close()" data-i18n-aria="common.close" aria-label="Close"><span class="material-icons-round">close</span></button>
+  </div>
+</div>
+
+<!-- web build: informational banner (browser demo) -->
+<div class="web-banner" id="web-banner" role="note">
+  <span class="material-icons-round web-banner-ic">public</span>
+  <div class="web-banner-text">
+    <b>KNT Manager Web</b> — versão de demonstração no navegador: os dados ficam salvos aqui no seu navegador (localStorage) e o launch do Roblox é simulado.
+    As APIs da Roblox (Charts, validação de cookie, Altgen) funcionam 100% com o servidor local: <code>node web/server.mjs</code>
+  </div>
+  <button class="web-banner-x" onclick="this.closest('#web-banner').remove()" aria-label="Dismiss">&times;</button>
+</div>
+
+<div id="layout">
+  <nav id="sidebar">
+    <div class="nav-label" data-i18n="nav.secManage">Manage</div>
+    <button class="nav-item active" id="nav-dashboard" onclick="goTo('dashboard')">
+      <span class="material-icons-round">dashboard</span><span data-i18n="nav.dashboard">Dashboard</span>
+    </button>
+    <button class="nav-item" id="nav-accounts" onclick="goTo('accounts')">
+      <span class="material-icons-round">manage_accounts</span><span data-i18n="nav.accounts">Accounts</span>
+    </button>
+    <button class="nav-item" id="nav-packages" onclick="goTo('packages')">
+      <span class="material-icons-round">inventory_2</span><span data-i18n="nav.groups">Groups</span>
+    </button>
+    <button class="nav-item" id="nav-charts" onclick="goTo('charts')">
+      <span class="material-icons-round">bar_chart</span><span data-i18n="nav.charts">Charts</span>
+    </button>
+    <div class="nav-label" data-i18n="nav.secTools">Tools</div>
+    <button class="nav-item" id="nav-mixer" onclick="goTo('mixer')">
+      <span class="material-icons-round">graphic_eq</span><span data-i18n="nav.mixer">Mixer</span>
+    </button>
+    <button class="nav-item" id="nav-generator" onclick="goTo('generator')">
+      <span class="material-icons-round">shuffle</span><span data-i18n="nav.generator">Generator</span>
+    </button>
+    <button class="nav-item" id="nav-tracking" onclick="goTo('tracking')">
+      <span class="material-icons-round">track_changes</span><span data-i18n="nav.tracking">Tracking</span>
+    </button>
+    <div class="nav-label" data-i18n="nav.secApp">App</div>
+    <button class="nav-item" id="nav-settings" onclick="goTo('settings')">
+      <span class="material-icons-round">settings</span><span data-i18n="nav.settings">Settings</span>
+    </button>
+    <button class="nav-item" id="nav-logs" onclick="goTo('logs')">
+      <span class="material-icons-round">terminal</span><span data-i18n="nav.logs">Logs</span>
+    </button>
+    <button class="nav-item" id="nav-credits" onclick="goTo('credits')">
+      <span class="material-icons-round">favorite</span><span data-i18n="nav.credits">Credits</span>
+    </button>
+    <div class="nav-spacer"></div>
+    <button class="btn btn-danger kill-roblox-btn" id="nav-kill" onclick="mixKillAll(this)">
+      <span class="material-icons-round" style="font-size:15px">power_settings_new</span><span data-i18n="nav.kill">Kill Roblox</span>
+    </button>
+    <div class="sb-afk" data-i18n-title="nav.antiAfkTip" title="Keep instances past the 20-minute idle kick">
+      <span class="sb-afk-label"><span class="material-icons-round">bolt</span><span data-i18n="nav.antiAfk">Anti-AFK</span></span>
+      <label class="toggle"><input type="checkbox" id="sb-antiafk" onchange="toggleAntiAfk('sb')"/><span class="toggle-trk"></span></label>
+    </div>
+    <div class="sb-saved">
+      <span class="material-icons-round">dns</span>
+      <div class="sb-saved-text">
+        <div class="sb-saved-main" id="sb-saved-count">0 accounts saved</div>
+        <div class="sb-saved-sub" id="sb-saved-time">Last saved just now</div>
+      </div>
+    </div>
+  </nav>
+  <main id="main">
+    <div class="page-container">
+      <!-- dashboard page -->
+      <div class="page active" id="page-dashboard">
+        <div class="ph">
+          <div>
+            <div class="ph-title"><span class="material-icons-round" style="font-size:19px;color:var(--ac)">dashboard</span><span data-i18n="dash.title">Dashboard</span></div>
+            <div class="ph-sub" id="dash-sub">—</div>
+          </div>
+        </div>
+        <div class="sw">
+          <div class="dash-grid" id="dash-stats"></div>
+          <div class="dash-cols">
+            <div class="sc">
+              <div class="sc-head" data-i18n="dash.alerts">Alerts</div>
+              <div class="dash-panel" id="dash-alerts"></div>
+            </div>
+            <div class="sc">
+              <div class="sc-head" data-i18n="dash.cats">Accounts by category</div>
+              <div class="dash-panel" id="dash-cats"></div>
+            </div>
+          </div>
+          <div class="sc">
+            <div class="sc-head" data-i18n="dash.activity">Activity</div>
+            <div class="dash-panel" id="dash-activity"></div>
+          </div>
+        </div>
+      </div>
+      <!-- accounts page -->
+      <div class="page" id="page-accounts">
+        <div class="ph">
+          <div>
+            <div class="ph-title" data-i18n="accounts.title">Accounts</div>
+            <div class="ph-sub" id="acct-sub">Loading…</div>
+          </div>
+          <div class="ph-actions">
+            <div class="search"><span class="material-icons-round">search</span><input id="acct-search" data-i18n-ph="accounts.searchPh" data-i18n-aria="accounts.searchPh" placeholder="Search accounts..." aria-label="Search accounts" oninput="onAcctSearch(this.value)"/></div>
+            <div class="filter-wrap">
+              <button class="btn-out" id="filter-btn" onclick="toggleFilterMenu(event)"><span class="material-icons-round">filter_list</span><span data-i18n="accounts.filter">Filter</span></button>
+              <div class="filter-menu" id="filter-menu">
+                <button class="active" data-f="all" onclick="setAcctFilter('all')" data-i18n="accounts.all">All accounts</button>
+                <button data-f="running" onclick="setAcctFilter('running')" data-i18n="accounts.running">Running</button>
+                <button data-f="idle" onclick="setAcctFilter('idle')" data-i18n="accounts.notRunning">Not running</button>
+                <button data-f="valid-first" onclick="setAcctFilter('valid-first')" data-i18n="accounts.validFirst">Valid first</button>
+                <button data-f="invalid-first" onclick="setAcctFilter('invalid-first')" data-i18n="accounts.invalidFirst">Invalid first</button>
+                <div class="filter-menu-sep"></div>
+                <div class="filter-menu-label" data-i18n="accounts.category">Category</div>
+                <div id="filter-menu-cats" style="display:none;flex-direction:column;gap:2px"></div>
+                <button data-f="nocat" onclick="setAcctFilter('nocat')" data-i18n="accounts.noCategory">No category</button>
+                <button onclick="openCategories()"><span class="material-icons-round" style="font-size:14px">tune</span><span data-i18n="accounts.manageCategories">Manage categories…</span></button>
+              </div>
+            </div>
+            <button class="btn-out" onclick="openCategories()" data-i18n-title="accounts.categoriesTitle" title="Create, rename or delete categories">
+              <span class="material-icons-round">label</span><span data-i18n="accounts.categories">Categories</span>
+            </button>
+            <button class="btn-out" id="btn-trash" onclick="openTrash()" data-i18n-title="accounts.trashTitle" title="Trash — deleted accounts can be restored here">
+              <span class="material-icons-round">delete</span><span data-i18n="accounts.trash">Trash</span>
+              <span class="trash-count" id="trash-count" style="display:none">0</span>
+            </button>
+            <button class="btn-out" id="acct-closehome-btn" onclick="closeHomeAll()" data-i18n-title="accounts.closeHomeTip" title="Close the Roblox home/tray launcher" style="display:none">
+              <span class="material-icons-round">close</span><span data-i18n="accounts.closeHome">Close tray</span>
+            </button>
+            <button class="btn-out" id="acct-select-btn" onclick="toggleSelectMode()" data-i18n-title="accounts.selectTitle" title="Select multiple accounts for batch actions">
+              <span class="material-icons-round">check_box</span><span data-i18n="accounts.select">Select</span>
+            </button>
+            <div class="view-toggle">
+              <button class="vt active" id="vt-grid" onclick="setAcctView('grid')"><span class="material-icons-round">grid_view</span></button>
+              <button class="vt" id="vt-list" onclick="setAcctView('list')"><span class="material-icons-round">view_list</span></button>
+              <button class="vt" id="vt-compact" onclick="setAcctView('compact')" data-i18n-title="accounts.compactTip" title="Compact cards"><span class="material-icons-round">density_small</span></button>
+            </div>
+          </div>
+        </div>
+        <div class="grid-wrap">
+          <div class="grid" id="grid"></div>
+          <div class="empty" id="empty" style="display:none">
+            <span class="material-icons-round">account_circle</span>
+            <div class="empty-title" data-i18n="accounts.emptyTitle">No accounts</div>
+            <div class="empty-sub" data-i18n="accounts.emptySub">Click "Add account" to sign in with Roblox.</div>
+            <button class="btn btn-primary" style="margin-top:8px;font-size:11.5px;padding:6px 14px" onclick="openLogin()" data-i18n="accounts.addAccount">Add account</button>
+          </div>
+        </div>
+      </div>
+      <!-- packages page -->
+      <div class="page" id="page-packages">
+        <div class="ph" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <div>
+            <div class="ph-title" data-i18n="groups.title">Groups</div>
+            <div class="ph-sub" id="pkg-sub" data-i18n="groups.sub">Group accounts and launch them together with one click</div>
+          </div>
+          <div class="ph-actions">
+            <div class="search" style="min-width:180px"><span class="material-icons-round">search</span><input id="pkg-search" data-i18n-ph="groups.searchPh" data-i18n-aria="groups.searchPh" placeholder="Search groups..." aria-label="Search groups" oninput="onPkgSearch(this.value)"/></div>
+            <div class="filter-wrap">
+              <button class="btn-out" id="pkg-filter-btn" onclick="togglePkgFilter(event)"><span class="material-icons-round">filter_list</span><span data-i18n="accounts.filter">Filter</span></button>
+              <div class="filter-menu" id="pkg-filter-menu">
+                <button class="active" data-f="all" onclick="setPkgFilter('all')" data-i18n="accounts.all">All accounts</button>
+                <button data-f="running" onclick="setPkgFilter('running')" data-i18n="groups.filterRunning">With running</button>
+                <button data-f="downed" onclick="setPkgFilter('downed')" data-i18n="groups.filterDowned">With downed</button>
+                <button data-f="pinned" onclick="setPkgFilter('pinned')" data-i18n="groups.filterPinned">Pinned</button>
+              </div>
+            </div>
+            <button class="btn-out" onclick="togglePkgSort()" id="pkg-sort-btn" data-i18n-title="groups.sortTip" title="Toggle sort: manual / alphabetical">
+              <span class="material-icons-round">sort</span>
+            </button>
+            <button class="btn-out" onclick="importPackage()" data-i18n-title="groups.importTip" title="Import a group from clipboard JSON">
+              <span class="material-icons-round">file_download</span>
+            </button>
+            <button class="btn btn-primary" style="font-size:11.5px;padding:7px 12px;flex-shrink:0" onclick="openCreatePackage()">
+              <span class="material-icons-round" style="font-size:14px">add</span><span data-i18n="groups.new">New group</span>
+            </button>
+          </div>
+        </div>
+        <div class="grid-wrap">
+          <div class="pkg-list" id="pkg-list"></div>
+          <div class="empty" id="pkg-empty" style="display:none">
+            <span class="material-icons-round">inventory_2</span>
+            <div class="empty-title" data-i18n="groups.emptyTitle">No groups yet</div>
+            <div class="empty-sub" data-i18n="groups.emptySub">Create a group to launch several accounts into the same game with one click.</div>
+            <button class="btn btn-primary" style="margin-top:8px;font-size:11.5px;padding:6px 14px" onclick="openCreatePackage()" data-i18n="groups.create">Create group</button>
+          </div>
+        </div>
+      </div>
+      <!-- charts page -->
+      <div class="page" id="page-charts">
+        <div class="ph" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <div>
+            <div class="ph-title" data-i18n="charts.title">Charts</div>
+            <div class="ph-sub" data-i18n="charts.sub">Trending &amp; top games on Roblox</div>
+          </div>
+          <button class="btn btn-ghost" style="font-size:11px;padding:7px 10px;flex-shrink:0" onclick="loadCharts()">
+            <span class="material-icons-round" style="font-size:13px">refresh</span><span data-i18n="charts.refresh">Refresh</span>
+          </button>
+        </div>
+        <div class="charts-inner">
+        <div class="tab-bar" style="flex-shrink:0">
+          <button class="tab-btn active" id="ctab-popular" onclick="switchChartTab('popular')" data-i18n="charts.topPlaying">Top Playing Now</button>
+          <button class="tab-btn" id="ctab-trending" onclick="switchChartTab('trending')" data-i18n="charts.topRated">Top Rated</button>
+          <button class="tab-btn" id="ctab-favorited" onclick="switchChartTab('favorited')" data-i18n="charts.topEarning">Top Earning</button>
+        </div>
+        <div class="chart-search-wrap" style="padding:0 18px 8px">
+          <div class="search" style="width:100%">
+            <span class="material-icons-round">search</span>
+            <input id="chart-search" type="text" data-i18n-ph="charts.searchPh" data-i18n-aria="charts.searchPh" placeholder="Search games…" aria-label="Search games" oninput="filterCharts(this.value)"/>
+          </div>
+        </div>
+        <div class="charts-scroll">
+          <div id="charts-loading" class="charts-loading" style="margin-top:20px">
+            <div class="spin" style="width:18px;height:18px;border-width:2.5px;color:var(--ac)"></div>
+            <span data-i18n="charts.loading">Loading games…</span>
+          </div>
+          <div class="charts-grid" id="charts-grid" style="display:none"></div>
+          <div class="empty" id="charts-empty" style="display:none">
+            <span class="material-icons-round">wifi_off</span>
+            <div class="empty-title" data-i18n="charts.emptyTitle">Couldn't load games</div>
+            <div class="empty-sub" data-i18n="charts.emptySub">Check your connection and press Refresh.</div>
+          </div>
+        </div>
+        </div>
+      </div>
+      <!-- mixer page -->
+      <div class="page" id="page-mixer" style="overflow-y:auto">
+        <div class="ph" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <div>
+            <div class="ph-title" data-i18n="mixer.title">Mixer</div>
+            <div class="ph-sub" data-i18n="mixer.sub">Graphics, FPS and volume for every instance</div>
+          </div>
+        </div>
+        <div class="sw">
+          <!-- Graphics quality -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="mixer.gfx">Graphics Quality</div>
+            <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
+              <div class="sr-left">
+                <div class="sr-label" data-i18n="mixer.gfxLevel">Render quality level</div>
+                <div class="sr-desc" data-i18n="mixer.gfxDesc">Forces a fixed quality (1 = lowest, 21 = max). Applies to all instances on next launch.</div>
+              </div>
+              <div class="mix-row">
+                <label class="mix-auto"><span class="toggle sm"><input type="checkbox" id="mix-gfx-auto" onchange="mixGfxAutoToggle()"/><span class="toggle-trk"></span></span><span data-i18n="mixer.auto">Auto</span></label>
+                <input type="range" class="fps-slider" id="mix-gfx" min="1" max="21" step="1" value="10"
+                       oninput="mixGfxInput(this.value)" onchange="mixGfxCommit()"/>
+                <span class="fps-val-label" id="mix-gfx-val">10</span>
+              </div>
+            </div>
+          </div>
+          <!-- FPS cap -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="mixer.fpsCap">FPS Cap</div>
+            <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
+              <div class="sr-left">
+                <div class="sr-label" data-i18n="mixer.fpsTarget">Target framerate</div>
+                <div class="sr-desc" data-i18n-html="mixer.fpsDesc">Writes to <code>GlobalBasicSettings_13.xml</code>, the method that still works after Roblox's Fast Flag allowlist. Applies on next launch.</div>
+              </div>
+              <div class="mix-row">
+                <label class="mix-auto"><span class="toggle sm"><input type="checkbox" id="mix-fps-unl" onchange="mixFpsUnlToggle()"/><span class="toggle-trk"></span></span><span data-i18n="mixer.unlimited">Unlimited</span></label>
+                <input type="range" class="fps-slider" id="mix-fps" min="10" max="9999" step="5" value="60"
+                       oninput="mixFpsInput(this.value)" onchange="mixFpsCommit()"/>
+                <span class="fps-val-label" id="mix-fps-val" style="min-width:40px">60</span>
+              </div>
+            </div>
+          </div>
+          <!-- Volume -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="mixer.volume">Master Volume</div>
+            <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
+              <div class="sr-left">
+                <div class="sr-label" data-i18n-html="mixer.volumeLive">Roblox volume <span class="badge g" style="margin-left:6px">Live</span></div>
+                <div class="sr-desc" data-i18n="mixer.volumeDesc">Adjusts the OS volume of every running Roblox window instantly. Re-applied to new launches.</div>
+              </div>
+              <div class="mix-row">
+                <span class="material-icons-round" style="font-size:17px;color:var(--t3);flex-shrink:0">volume_up</span>
+                <input type="range" class="fps-slider" id="mix-vol" min="0" max="100" step="1" value="100"
+                       oninput="mixVolInput(this.value)" onchange="mixVolCommit()"/>
+                <span class="fps-val-label" id="mix-vol-val" style="min-width:40px">100%</span>
+              </div>
+            </div>
+          </div>
+          <!-- Apply / actions -->
+          <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+            <button class="btn btn-primary" style="flex:1;justify-content:center;min-width:150px" onclick="mixApply()" id="mix-relaunch-btn">
+              <span class="material-icons-round" style="font-size:15px">check</span><span data-i18n="mixer.apply">Apply</span>
+            </button>
+            <button class="btn btn-danger kill-roblox-btn" style="flex:1;justify-content:center;min-width:150px" onclick="mixKillAll(this)" id="mix-kill-btn">
+              <span class="material-icons-round" style="font-size:15px">power_settings_new</span><span data-i18n="mixer.killAll">Kill all Roblox</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <!-- generator page -->
+      <div class="page" id="page-generator" style="overflow-y:auto">
+        <div class="ph">
+          <div class="ph-title" data-i18n="gen.title">Generator</div>
+          <div class="ph-sub" data-i18n="gen.sub">Generate a Roblox alt via BloxGen or Altgen API</div>
+        </div>
+        <div class="sw">
+          <!-- ══ Section 1: automatic generator (paid APIs) ══ -->
+          <div class="sc gen-sec">
+            <div class="sc-head"><span class="material-icons-round">bolt</span><span data-i18n="gen.autoHead">Automatic generator</span></div>
+            <div class="sr">
+              <div class="sr-left"><div class="sr-label" data-i18n="gen.apiKey">API key</div></div>
+              <input type="password" id="gen-apikey" class="sr-input" data-i18n-ph="gen.apiKeyPh" data-i18n-aria="gen.apiKey" placeholder="BLOX-XXXX... or MG_XXXX..." aria-label="BloxGen or Altgen API key" oninput="genOnKeyInput()" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1)"/>
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genToggleKey()" id="gen-eye-btn">
+                <span class="material-icons-round" id="gen-eye-icon" style="font-size:14px">visibility</span>
+              </button>
+            </div>
+            <div class="sr" id="gen-type-row" style="display:none">
+              <div class="sr-left"><div class="sr-label" data-i18n="gen.type">Account type</div><div class="sr-desc" id="gen-type-desc" data-i18n="gen.altDesc">Fresh alt accounts</div></div>
+              <div class="cdd" id="cdd-gentype" style="width:170px">
+                <div class="cdd-trigger" id="cdd-gentype-trigger" onclick="toggleCdd('gentype')" role="button" tabindex="0" data-i18n-aria="gen.type" aria-label="Account type">
+                  <span class="cdd-label" id="cdd-gentype-label" data-i18n="gen.alt">Alt</span>
+                  <span class="material-icons-round cdd-arrow">expand_more</span>
+                </div>
+                <div class="cdd-menu" id="cdd-gentype-menu">
+                  <div class="cdd-option selected" data-value="alt" onclick="genSetType('alt','Alt','Fresh alt accounts')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="gen.alt">Alt</div><div class="cdd-opt-desc" data-i18n="gen.altDesc">Fresh alt accounts</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="+30 days old" onclick="genSetType('+30 days old','+30 days old','Accounts aged 30+ days')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="gen.type30">+30 days old</div><div class="cdd-opt-desc" data-i18n="gen.type30Desc">Accounts aged 30+ days</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="+1 year old" onclick="genSetType('+1 year old','+1 year old','Accounts aged 1+ year')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="gen.type1y">+1 year old</div><div class="cdd-opt-desc" data-i18n="gen.type1yDesc">Accounts aged 1+ year</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="5+ years old" onclick="genSetType('5+ years old','5+ years old','Accounts aged 5+ years')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="gen.type5y">5+ years old</div><div class="cdd-opt-desc" data-i18n="gen.type5yDesc">Accounts aged 5+ years</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="dump" onclick="genSetType('dump','Dump','Dump accounts with extra account metadata')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="gen.dump">Dump</div><div class="cdd-opt-desc" data-i18n="gen.dumpDesc">Extra account metadata</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sc">
+            <div class="sc-head" data-i18n="gen.output">Output</div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div style="width:100%;display:flex;align-items:stretch;gap:8px">
+                <input type="text" id="gen-output" class="sr-input" readonly data-i18n-ph="gen.outputPh" placeholder="click Generate to create an account" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1);cursor:default;border-radius:var(--r2)"/>
+                <button id="gen-copy-btn" class="btn btn-ghost" style="padding:7px 12px;flex-shrink:0;border-radius:var(--r2)" onclick="genCopy()">
+                  <span class="material-icons-round" style="font-size:15px">content_copy</span>
+                  <span style="font-size:11.5px" data-i18n="accounts.combo">combo</span>
+                </button>
+                <button id="gen-add-btn" class="btn btn-primary" style="padding:7px 12px;flex-shrink:0;border-radius:var(--r2)" onclick="genAddToAccounts()">
+                  <span class="material-icons-round" style="font-size:15px">person_add</span>
+                  <span style="font-size:11.5px" data-i18n="common.add">add</span>
+                </button>
+              </div>
+              <div id="gen-counter" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--t3);letter-spacing:.02em"></div>
+            </div>
+          </div>
+          <button id="gen-btn" class="btn btn-primary" style="height:34px;font-size:12.5px" onclick="genCombo()">
+              <span class="material-icons-round" style="font-size:15px">bolt</span><span data-i18n="gen.generate">Generate</span>
+            </button>
+          <!-- ══ Section 2: history ══ -->
+          <div class="sc gen-sec" id="gen-history-sc" style="display:none;margin-top:12px">
+            <div class="sc-head" style="display:flex;align-items:center;justify-content:space-between;padding-right:10px">
+              <span class="material-icons-round">history</span><span data-i18n="gen.history">History</span>
+              <button class="btn btn-ghost" onclick="genClearHistory()" data-i18n="gen.clear">Clear</button>
+            </div>
+            <div class="gen-hist-tools">
+              <div class="search" style="flex:1;min-width:0"><span class="material-icons-round">search</span><input id="gen-hist-search" data-i18n-ph="gen.histSearchPh" data-i18n-aria="gen.histSearchPh" placeholder="Search by username..." aria-label="Search history" oninput="genRenderHistory()"/></div>
+              <div class="filter-wrap">
+                <button class="btn-out" id="gen-hist-filter-btn" onclick="toggleGenHistFilter(event)"><span class="material-icons-round">filter_list</span><span id="gen-hist-filter-label" data-i18n="gen.histAll">All</span></button>
+                <div class="filter-menu" id="gen-hist-filter-menu">
+                  <button class="active" data-f="all" onclick="setGenHistFilter('all')" data-i18n="gen.histAll">All</button>
+                  <button data-f="ok" onclick="setGenHistFilter('ok')" data-i18n="gen.histOk">Success</button>
+                  <button data-f="err" onclick="setGenHistFilter('err')" data-i18n="gen.histErr">Failed</button>
+                </div>
+              </div>
+            </div>
+            <div id="gen-history-list" style="display:flex;flex-direction:column;gap:1px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--s4) transparent"></div>
+          </div>
+          <!-- ══ Section 3: free manual generator ══ -->
+          <div class="sc gen-sec gen-manual" style="margin-top:18px;padding-top:14px;border-top:1px solid var(--s3)">
+            <div class="sc-head" style="display:flex;align-items:center;gap:4px">
+              <span class="material-icons-round" style="font-size:15px">casino</span>
+              <span data-i18n="gen.man.head">Create account manually</span>
+            </div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:10px">
+              <div class="sr-left">
+                <div class="sr-label" data-i18n="gen.man.free">Free — one account at a time</div>
+                <div class="sr-desc" data-i18n="gen.man.desc">Generates a username and password here, then opens the official Roblox signup page with them filled in automatically (plus a random birthday). You just solve the CAPTCHA and create the account — nothing else is automated.</div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <button class="btn btn-primary" id="man-gen-btn" onclick="manGen()" style="height:36px;padding:0 14px;font-size:12px">
+                  <span class="material-icons-round" style="font-size:15px">casino</span><span data-i18n="gen.man.genBtn">Generate username &amp; password</span>
+                </button>
+                <button class="btn btn-ghost" id="man-reg-btn" onclick="manGen()" style="height:36px;padding:0 14px;font-size:12px;display:none">
+                  <span class="material-icons-round" style="font-size:15px">refresh</span><span data-i18n="gen.man.regBtn">Regenerate</span>
+                </button>
+              </div>
+            </div>
+            <div id="man-creds" style="display:none;flex-direction:column;gap:8px;padding:2px 16px 10px">
+              <div class="sr" style="border-radius:var(--r2);background:var(--s3)">
+                <div class="sr-left"><div class="sr-label" style="min-width:80px" data-i18n="gen.man.username">Username</div></div>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--t1);word-break:break-all" id="man-user"></span>
+                <button class="btn btn-ghost" onclick="manCopy('man-user')" data-i18n-title="gen.man.copyUser" title="Copy username" style="flex-shrink:0;height:30px;padding:0 10px">
+                  <span class="material-icons-round" style="font-size:14px">content_copy</span>
+                </button>
+              </div>
+              <div class="sr" style="border-radius:var(--r2);background:var(--s3)">
+                <div class="sr-left"><div class="sr-label" style="min-width:80px" data-i18n="gen.man.password">Password</div></div>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--t1);word-break:break-all" id="man-pass"></span>
+                <button class="btn btn-ghost" onclick="manCopy('man-pass')" data-i18n-title="gen.man.copyPass" title="Copy password" style="flex-shrink:0;height:30px;padding:0 10px">
+                  <span class="material-icons-round" style="font-size:14px">content_copy</span>
+                </button>
+              </div>
+            </div>
+            <div style="padding:0 16px 12px">
+              <button class="btn btn-primary" id="man-add-btn" onclick="manOpenSignup()" disabled style="width:100%;justify-content:center;height:38px;font-size:12.5px">
+                <span class="material-icons-round" style="font-size:15px">open_in_new</span><span data-i18n="gen.man.add">Add account to KNT Manager</span>
+              </button>
+            </div>
+            <div id="man-status" class="mst hidden" style="margin:0 16px 14px"></div>
+          </div>
+        </div>
+      </div>
+      <!-- tracking page -->
+      <div class="page" id="page-tracking">
+        <div class="ph">
+          <div>
+            <div class="ph-title" data-i18n="tracking.title">Tracking</div>
+            <div class="ph-sub" data-i18n="tracking.sub">Automated screenshots sent to a Discord webhook</div>
+          </div>
+        </div>
+        <div class="sw">
+          <div class="sc">
+            <div class="sc-head" data-i18n="tracking.webhook">Webhook</div>
+            <div class="sr" style="flex-direction:column;align-items:stretch;gap:8px">
+              <div class="sr-left"><div class="sr-label" data-i18n="tracking.url">Discord webhook URL</div><div class="sr-desc" data-i18n="tracking.urlDesc">Screenshots are posted here as an image upload.</div></div>
+              <input class="sr-input" id="tracking-webhook-url" type="text" placeholder="https://discord.com/api/webhooks/..." onchange="saveTrackingWebhookUrl()" style="width:auto"/>
+            </div>
+            <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
+              <div class="sr-left">
+                <div class="sr-label" data-i18n="tracking.interval">Timed capture interval</div>
+                <div class="sr-desc" data-i18n="tracking.intervalDesc">Capture each enabled account at this interval, and post to the webhook.</div>
+              </div>
+              <div class="mix-row">
+                <span class="material-icons-round" style="font-size:17px;color:var(--t3);flex-shrink:0">schedule</span>
+                <input type="range" class="fps-slider" id="tracking-interval" min="30" max="3600" step="30" value="300"
+                       oninput="trackingIntervalInput(this.value)" onchange="saveTrackingInterval()"/>
+                <span class="fps-val-label" id="tracking-interval-val" style="min-width:60px">5 min</span>
+              </div>
+            </div>
+          </div>
+          <div class="sc tracking-accounts-sc">
+            <div class="sc-head" data-i18n="tracking.accounts">Accounts</div>
+            <div id="tracking-accounts" class="tracking-accounts"></div>
+          </div>
+        </div>
+      </div>
+      <!-- settings page -->
+      <div class="page" id="page-settings">
+        <div class="ph">
+          <div class="ph-title" data-i18n="settings.title">Settings</div>
+          <div class="ph-sub" data-i18n="settings.sub">App preferences &amp; themes</div>
+        </div>
+        <div class="tab-bar" style="flex-shrink:0">
+          <button class="tab-btn active" id="stab-general" onclick="settingsTab('general')" data-i18n="settings.tabGeneral">General</button>
+          <button class="tab-btn" id="stab-performance" onclick="settingsTab('performance')" data-i18n="settings.tabPerformance">Performance</button>
+          <button class="tab-btn" id="stab-roblox" onclick="settingsTab('roblox')" data-i18n="settings.tabRoblox">Roblox</button>
+          <button class="tab-btn" id="stab-privacy" onclick="settingsTab('privacy')" data-i18n="settings.tabPrivacy">Data &amp; Privacy</button>
+          <button class="tab-btn" id="stab-themes" onclick="settingsTab('themes')" data-i18n="settings.tabThemes">Themes</button>
+          <button class="tab-btn" id="stab-about" onclick="settingsTab('about')" data-i18n="settings.tabAbout">About</button>
+        </div>
+        <div class="sw" id="stab-panel-general">
+          <!-- Language -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.language">Language</div>
+            <div class="sr">
+              <div class="sr-left"><div class="sr-label" data-i18n="settings.language">Language</div><div class="sr-desc" data-i18n="settings.languageDesc">Interface language. Changes apply immediately and are saved.</div></div>
+              <div class="cdd" id="cdd-lang" style="width:190px">
+                <div class="cdd-trigger" id="cdd-lang-trigger" onclick="toggleCdd('lang')" role="button" tabindex="0" data-i18n-aria="settings.language" aria-label="Language">
+                  <span class="cdd-label" id="lang-label">English</span>
+                  <span class="material-icons-round cdd-arrow">expand_more</span>
+                </div>
+                <div class="cdd-menu" id="cdd-lang-menu">
+                  <div class="cdd-option" data-value="en" onclick="pickLanguage('en')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">English</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                  <div class="cdd-option" data-value="pt" onclick="pickLanguage('pt')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Português (Brasil)</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Info row -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.about">About</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label">KNT Manager</div><div class="sr-desc" id="stat-app-ver">Version -</div></div></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.accountsSaved">Accounts saved</div></div><span class="badge" id="stat-count">0</span></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.robloxVersion">Roblox version</div></div><span class="badge" id="stat-rblx-ver">-</span></div>
+          </div>
+          <!-- Updates -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="update.title">Updates</div>
+            <div class="sr">
+              <div class="sr-left"><div class="sr-label" data-i18n="update.auto">Automatic updates</div><div class="sr-desc" data-i18n="update.autoDesc">The app checks for a new version on startup and lets you install it with one click.</div></div>
+              <button class="btn btn-ghost" id="btn-check-updates" onclick="checkForUpdates(true)">
+                <span class="material-icons-round" style="font-size:15px">system_update_alt</span><span data-i18n="update.check">Check for updates</span>
+              </button>
+            </div>
+          </div>
+          <!-- Multi-instance -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.multiInstance">Multi-Instance</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.multiInstanceLabel">Multiple Roblox instances</div><div class="sr-desc" data-i18n="settings.multiInstanceDesc">Holds the singleton mutex so multiple clients run at once. Turning this off releases it and lets Roblox go back to allowing only one client.</div></div><label class="toggle"><input type="checkbox" id="set-multiinstance" checked onchange="toggleMultiInstance()"/><span class="toggle-trk"></span></label></div>
+          </div>
+          <!-- Anti-AFK -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.antiAfk">Anti-AFK</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.antiAfkLabel">Keep instances active</div><div class="sr-desc" data-i18n="settings.antiAfkDesc">Taps a benign key into every running instance before Roblox's ~20-minute idle kick.</div></div><label class="toggle"><input type="checkbox" id="set-antiafk" onchange="toggleAntiAfk('set')"/><span class="toggle-trk"></span></label></div>
+            <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
+              <div class="sr-left">
+                <div class="sr-label" data-i18n="settings.tapInterval">Tap interval</div>
+                <div class="sr-desc" data-i18n="settings.tapIntervalDesc">How long an instance can sit idle before it gets tapped. Stays under the ~20-minute kick.</div>
+              </div>
+              <div class="mix-row">
+                <span class="material-icons-round" style="font-size:17px;color:var(--t3);flex-shrink:0">bolt</span>
+                <input type="range" class="fps-slider" id="set-antiafk-interval" min="5" max="19" step="1" value="19"
+                       oninput="antiAfkIntervalInput(this.value)" onchange="antiAfkIntervalCommit()"/>
+                <span class="fps-val-label" id="set-antiafk-interval-val" style="min-width:50px">19 min</span>
+              </div>
+            </div>
+          </div>
+          <!-- Relaunch on disconnect -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.relaunch">Relaunch on Disconnect</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.relaunchLabel">Relaunch on disconnect</div><div class="sr-desc" data-i18n="settings.relaunchDesc">If a running instance disconnects unexpectedly, relaunch that same account back into the same game automatically.</div></div><label class="toggle"><input type="checkbox" id="set-autorelaunch" onchange="toggleAutoRelaunch()"/><span class="toggle-trk"></span></label></div>
+          </div>
+        </div>
+        <div class="sw" id="stab-panel-performance" style="display:none">
+          <!-- Memory -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.memory">Memory</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.trimRam">Trim RAM</div><div class="sr-desc" data-i18n="settings.trimRamDesc">Frees idle memory from every running instance without touching or slowing the game.</div></div><button class="btn btn-ghost" onclick="mixTrimMemory('set-trim-btn')" id="set-trim-btn"><span class="material-icons-round" style="font-size:15px">memory</span><span data-i18n="settings.trimNow">Trim now</span></button></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.autoTrim">Auto trim</div><div class="sr-desc" data-i18n="settings.autoTrimDesc">Trims every running instance automatically on an interval.</div></div><label class="toggle"><input type="checkbox" id="set-autotrim" onchange="toggleAutoTrim()"/><span class="toggle-trk"></span></label></div>
+            <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
+              <div class="sr-left">
+                <div class="sr-label" data-i18n="settings.trimInterval">Trim interval</div>
+                <div class="sr-desc" data-i18n="settings.trimIntervalDesc">How often auto trim runs while instances are open.</div>
+              </div>
+              <div class="mix-row">
+                <span class="material-icons-round" style="font-size:17px;color:var(--t3);flex-shrink:0">memory</span>
+                <input type="range" class="fps-slider" id="set-autotrim-interval" min="1" max="30" step="1" value="5"
+                       oninput="autoTrimIntervalInput(this.value)" onchange="autoTrimIntervalCommit()"/>
+                <span class="fps-val-label" id="set-autotrim-interval-val" style="min-width:50px">5 min</span>
+              </div>
+            </div>
+          </div>
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.cpuPriority">CPU Priority</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.lowPriorityLabel">Lower priority when multiple accounts run</div><div class="sr-desc" data-i18n="settings.lowPriorityDesc">Once more than one account is running, sets all of them to Below Normal priority so the OS scheduler doesn't split CPU evenly across idle instances. Reverts to Normal automatically when back down to one.</div></div><label class="toggle"><input type="checkbox" id="set-lowpriority" onchange="toggleLowPriority()"/><span class="toggle-trk"></span></label></div>
+          </div>
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.renderEngine">Rendering Engine</div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.graphicsApi">Graphics API</div><div class="sr-desc" data-i18n="settings.graphicsApiDesc">Forces which rendering backend Roblox uses via Fast Flags. Automatic lets Roblox pick. Applies on next launch.</div></div>
+              <div class="cdd" id="cdd-rendereng" style="width:100%">
+                <div class="cdd-trigger" id="cdd-rendereng-trigger" onclick="toggleCdd('rendereng')" role="button" tabindex="0" data-i18n-aria="settings.graphicsApi" aria-label="Rendering engine">
+                  <span class="cdd-label" id="cdd-rendereng-label" data-i18n="settings.renderAutomatic">Automatic</span>
+                  <span class="material-icons-round cdd-arrow">expand_more</span>
+                </div>
+                <div class="cdd-menu" id="cdd-rendereng-menu">
+                  <div class="cdd-option selected" data-value="" onclick="setRenderEngine('')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="settings.renderAutomatic">Automatic</div><div class="cdd-opt-desc" data-i18n="settings.renderAutoDesc">Roblox picks the best backend for your GPU</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                  <div class="cdd-option" data-value="d3d11" onclick="setRenderEngine('d3d11')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Direct3D 11</div><div class="cdd-opt-desc" data-i18n="settings.renderD3D11Desc">Default on most Windows systems</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                  <div class="cdd-option" data-value="opengl" onclick="setRenderEngine('opengl')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">OpenGL</div><div class="cdd-opt-desc" data-i18n="settings.renderOpenGLDesc">Fallback for unsupported DirectX drivers</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                  <div class="cdd-option" data-value="vulkan" onclick="setRenderEngine('vulkan')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Vulkan</div><div class="cdd-opt-desc" data-i18n="settings.renderVulkanDesc">Newer GPUs, can improve performance</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="sw" id="stab-panel-roblox" style="display:none">
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.channel">Deployment Channel</div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.channelLabel">Channel</div><div class="sr-desc" data-i18n="settings.channelDesc">Which Roblox deployment channel to launch. Production is the normal LIVE client everyone gets.</div></div>
+              <div class="cdd" id="cdd-channel" style="width:100%">
+                <div class="cdd-trigger" id="cdd-channel-trigger" onclick="toggleCdd('channel')" role="button" tabindex="0" data-i18n-aria="settings.channelLabel" aria-label="Roblox channel">
+                  <span class="cdd-label" id="cdd-channel-label" data-i18n="settings.chProduction">Production (LIVE)</span>
+                  <span class="material-icons-round cdd-arrow">expand_more</span>
+                </div>
+                <div class="cdd-menu" id="cdd-channel-menu">
+                  <div class="cdd-option selected" data-value="" onclick="setRobloxChannel('')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="settings.chProduction">Production (LIVE)</div><div class="cdd-opt-desc" data-i18n="settings.chProductionDesc">The normal, stable channel everyone gets</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                  <div class="cdd-option" data-value="zcanary" onclick="setRobloxChannel('zcanary')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Canary</div><div class="cdd-opt-desc" data-i18n="settings.chCanaryDesc">Roblox's early test channel, less stable</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                  <div class="cdd-option" data-value="zintegration" onclick="setRobloxChannel('zintegration')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Integration</div><div class="cdd-opt-desc" data-i18n="settings.chIntegrationDesc">Roblox's internal test channel, least stable</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                  <div class="cdd-option" data-value="znext" onclick="setRobloxChannel('znext')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Next</div><div class="cdd-opt-desc" data-i18n="settings.chNextDesc">Roblox's upcoming-features preview channel</div></div>
+                    <span class="material-icons-round cdd-check">check</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.lockChannel">Lock channel</div><div class="sr-desc" data-i18n="settings.lockChannelDesc">Always launches the channel above, and refuses to launch a locally installed build that isn't on it. Off just runs whatever's newest on disk.</div></div><label class="toggle"><input type="checkbox" id="set-lockchannel" onchange="toggleLockChannel()"/><span class="toggle-trk"></span></label></div>
+          </div>
+        </div>
+        <div class="sw" id="stab-panel-privacy" style="display:none">
+          <!-- Encryption -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.encryption">Encryption</div>
+            <div class="sr">
+              <div class="sr-left"><div class="sr-label" data-i18n="settings.algo">Algorithm</div><div class="sr-desc" id="stat-enc-algo-desc" data-i18n="settings.algoDesc">Used to encrypt cookies stored on disk.</div></div>
+              <span class="badge g" id="stat-enc-algo">AES-256-GCM</span>
+            </div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.encKey">Encryption key</div><div class="sr-desc" data-i18n="settings.encKeyDesc">Change your encryption key here. You will need to re-enter it on your next launch.</div></div>
+              <div style="width:100%;display:flex;gap:8px;align-items:center">
+                <input type="password" class="sr-input" id="custom-key" data-i18n-ph="settings.encKeyPh" data-i18n-aria="settings.encKey" placeholder="e.g. SecureKey1234@A#" aria-label="Encryption key" style="flex:1;width:auto" oninput="onKeyInput()"/>
+                <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="toggleKeyVisibility()">
+                  <span class="material-icons-round" style="font-size:14px" id="key-vis-icon">visibility</span>
+                </button>
+                <button class="btn btn-primary" style="font-size:12px;height:40px;padding:0 12px" onclick="saveKeySettings()" id="btn-save-key" data-i18n="common.save">Save</button>
+              </div>
+            </div>
+          </div>
+          <!-- Automatic backup -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.autoBackup">Automatic backup</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.autoBackupLabel">Enable automatic backups</div><div class="sr-desc" data-i18n="settings.autoBackupDesc">Automatically saves a password-protected backup of your accounts, groups and settings at the chosen interval.</div></div><label class="toggle"><input type="checkbox" id="set-autobackup" onchange="toggleAutoBackup()"/><span class="toggle-trk"></span></label></div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.autoBackupInterval">Frequency</div></div>
+              <div class="cdd" id="cdd-autofreq" style="width:100%">
+                <div class="cdd-trigger" id="cdd-autofreq-trigger" onclick="toggleCdd('autofreq')" role="button" tabindex="0" data-i18n-aria="settings.autoBackupInterval" aria-label="Backup frequency">
+                  <span class="cdd-label" id="cdd-autofreq-label">Daily</span>
+                  <span class="material-icons-round cdd-arrow">expand_more</span>
+                </div>
+                <div class="cdd-menu" id="cdd-autofreq-menu">
+                  <div class="cdd-option" data-value="1" onclick="setAutoBackupFreq(1)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.hourly">Hourly</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option" data-value="6" onclick="setAutoBackupFreq(6)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.hours6">Every 6 hours</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option" data-value="12" onclick="setAutoBackupFreq(12)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.hours12">Every 12 hours</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option selected" data-value="24" onclick="setAutoBackupFreq(24)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.daily">Daily</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option" data-value="168" onclick="setAutoBackupFreq(168)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.weekly">Weekly</div></div><span class="material-icons-round cdd-check">check</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.autoBackupKeep">Backups kept</div><div class="sr-desc" data-i18n="settings.autoBackupKeepDesc">How many automatic backups are kept. Oldest are deleted first.</div></div>
+              <div class="cdd" id="cdd-autokeep" style="width:100%">
+                <div class="cdd-trigger" id="cdd-autokeep-trigger" onclick="toggleCdd('autokeep')" role="button" tabindex="0" data-i18n-aria="settings.autoBackupKeep" aria-label="Backups kept">
+                  <span class="cdd-label" id="cdd-autokeep-label">5</span>
+                  <span class="material-icons-round cdd-arrow">expand_more</span>
+                </div>
+                <div class="cdd-menu" id="cdd-autokeep-menu">
+                  <div class="cdd-option" data-value="3" onclick="setAutoBackupKeep(3)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">3</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option selected" data-value="5" onclick="setAutoBackupKeep(5)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">5</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option" data-value="10" onclick="setAutoBackupKeep(10)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">10</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option" data-value="20" onclick="setAutoBackupKeep(20)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">20</div></div><span class="material-icons-round cdd-check">check</span></div>
+                  <div class="cdd-option" data-value="50" onclick="setAutoBackupKeep(50)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">50</div></div><span class="material-icons-round cdd-check">check</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.autoBackupPassword">Backup password</div><div class="sr-desc" data-i18n="settings.autoBackupPasswordDesc">Used for automatic backups. Save it somewhere safe — you need it to restore them on another PC.</div></div>
+              <div style="width:100%;display:flex;gap:8px;align-items:center">
+                <code class="inline-code" id="auto-backup-pw" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</code>
+                <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="copyAutoBackupPassword()"><span class="material-icons-round" style="font-size:14px">content_copy</span></button>
+              </div>
+            </div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.backupNow">Back up now</div><div class="sr-desc" data-i18n="settings.backupNowDesc">Create an automatic backup right away in the backups folder.</div></div><button class="btn btn-ghost" id="btn-backup-now" onclick="backupNow()"><span class="material-icons-round" style="font-size:15px">archive</span><span data-i18n="settings.backupNow">Back up now</span></button></div>
+          </div>
+          <!-- Backup -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.backup">Backup</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.createBackup">Create backup</div><div class="sr-desc" data-i18n="settings.createBackupDesc">Save all accounts, groups and settings to a password-protected file. Restorable on this or another PC.</div></div><button class="btn btn-ghost" onclick="openBackupModal('create')"><span class="material-icons-round" style="font-size:15px">save</span><span data-i18n="settings.createBackup">Create backup</span></button></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.restoreBackup">Restore backup</div><div class="sr-desc" data-i18n="settings.restoreBackupDesc">Replaces all current accounts, groups and settings with the contents of a backup file.</div></div><button class="btn btn-ghost" onclick="openBackupModal('restore')"><span class="material-icons-round" style="font-size:15px">restore</span><span data-i18n="settings.restoreBackup">Restore backup</span></button></div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:6px">
+              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.backupHistory">History</div></div>
+              <div style="width:100%" id="auto-backup-list"></div>
+            </div>
+          </div>
+          <!-- Data -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.dataPrivacy">Data &amp; Privacy</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.storage">Storage</div><div class="sr-desc" data-i18n="settings.storageDesc">Cookies are encrypted and stored locally. Nothing leaves your device.</div></div><span class="badge g" data-i18n="settings.localOnly">Local only</span></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.clearAll">Clear all accounts</div><div class="sr-desc" data-i18n="settings.clearAllDesc">Remove all saved accounts and sign-in data.</div></div><button class="btn btn-danger" onclick="clearAll()" data-i18n="settings.clearAllBtn">Clear all</button></div>
+          </div>
+        </div>
+        <!-- Themes tab panel -->
+        <div class="sw" id="stab-panel-themes" style="display:none">
+          <!-- Texture customization -->
+          <div class="sr" style="padding:8px 0;border:none">
+            <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.pattern">Background pattern</div></div>
+            <select class="sr-input" id="texture-pattern" onchange="setThemePattern(this.value)" style="height:32px;max-width:190px"></select>
+          </div>
+          <div class="sr" style="padding:8px 0;border:none">
+            <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.size">Pattern size</div><div class="sr-desc" style="font-size:11px" id="texture-size-val">Auto</div></div>
+            <input type="range" id="texture-size" min="0" max="300" step="4" value="0" oninput="setThemeTexSize(this.value)" style="width:150px;accent-color:var(--ac)">
+          </div>
+          <!-- Texture intensity control -->
+          <div class="sr" style="padding:8px 0;border:none">
+            <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.texture">Texture</div></div>
+            <div class="tex-seg" id="texture-seg">
+              <button class="vt" data-tex="off" onclick="setThemeTexture('off')" data-i18n="themes.off">Off</button>
+              <button class="vt active" data-tex="subtle" onclick="setThemeTexture('subtle')" data-i18n="themes.subtle">Subtle</button>
+              <button class="vt" data-tex="medium" onclick="setThemeTexture('medium')" data-i18n="themes.medium">Medium</button>
+            </div>
+          </div>
+          <div class="themes-grid" id="themes-grid-inner">
+            <div class="theme-card" data-theme="dark" onclick="setTheme('dark')" role="button" tabindex="0" aria-label="Dark theme">
+              <div class="tc-mini" style="--m-bg:#0e0e10;--m-panel:#18181d;--m-ac:#5c5ce0;--m-text:#f0f0f5;--m-dim:rgba(255,255,255,.18);--m-bd:rgba(255,255,255,.06)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeDark">Dark</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#0e0e10"></span><span class="tc-sw" style="background:#18181d"></span><span class="tc-sw" style="background:#5c5ce0"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="light" onclick="setTheme('light')" role="button" tabindex="0" aria-label="Light theme">
+              <div class="tc-mini" style="--m-bg:#f4f4f8;--m-panel:#ffffff;--m-ac:#5c5ce0;--m-text:#0e0e1a;--m-dim:rgba(0,0,0,.14);--m-bd:rgba(0,0,0,.08)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeLight">Light</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#f4f4f8"></span><span class="tc-sw" style="background:#ffffff"></span><span class="tc-sw" style="background:#5c5ce0"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="midnight" onclick="setTheme('midnight')" role="button" tabindex="0" aria-label="Midnight theme">
+              <div class="tc-mini" style="--m-bg:#0a0e1a;--m-panel:#141a2e;--m-ac:#4f7cff;--m-text:#eaf0ff;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(120,150,255,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeMidnight">Midnight</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#0a0e1a"></span><span class="tc-sw" style="background:#141a2e"></span><span class="tc-sw" style="background:#4f7cff"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="aurora" onclick="setTheme('aurora')" role="button" tabindex="0" aria-label="Aurora theme">
+              <div class="tc-mini" style="--m-bg:#07140f;--m-panel:#11221b;--m-ac:#2dd4bf;--m-text:#e6fff7;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(120,255,220,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeAurora">Aurora</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#07140f"></span><span class="tc-sw" style="background:#11221b"></span><span class="tc-sw" style="background:#2dd4bf"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="sunset" onclick="setTheme('sunset')" role="button" tabindex="0" aria-label="Sunset theme">
+              <div class="tc-mini" style="--m-bg:#170b12;--m-panel:#281320;--m-ac:#ff7a59;--m-text:#ffe9df;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,170,140,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeSunset">Sunset</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#170b12"></span><span class="tc-sw" style="background:#281320"></span><span class="tc-sw" style="background:#ff7a59"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="crimson" onclick="setTheme('crimson')" role="button" tabindex="0" aria-label="Crimson theme">
+              <div class="tc-mini" style="--m-bg:#160a0c;--m-panel:#271216;--m-ac:#f43f5e;--m-text:#ffe4e8;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,120,130,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeCrimson">Crimson</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#160a0c"></span><span class="tc-sw" style="background:#271216"></span><span class="tc-sw" style="background:#f43f5e"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="ocean" onclick="setTheme('ocean')" role="button" tabindex="0" aria-label="Ocean theme">
+              <div class="tc-mini" style="--m-bg:#07121a;--m-panel:#0f2030;--m-ac:#38bdf8;--m-text:#dff1ff;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(110,190,255,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeOcean">Ocean</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#07121a"></span><span class="tc-sw" style="background:#0f2030"></span><span class="tc-sw" style="background:#38bdf8"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="grape" onclick="setTheme('grape')" role="button" tabindex="0" aria-label="Grape theme">
+              <div class="tc-mini" style="--m-bg:#120a1c;--m-panel:#211333;--m-ac:#a855f7;--m-text:#f0e4ff;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(190,140,255,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeGrape">Grape</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#120a1c"></span><span class="tc-sw" style="background:#211333"></span><span class="tc-sw" style="background:#a855f7"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="forest" onclick="setTheme('forest')" role="button" tabindex="0" aria-label="Forest theme">
+              <div class="tc-mini" style="--m-bg:#0a1410;--m-panel:#13251c;--m-ac:#4ade80;--m-text:#e2ffec;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(140,220,160,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeForest">Forest</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#0a1410"></span><span class="tc-sw" style="background:#13251c"></span><span class="tc-sw" style="background:#4ade80"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="amber" onclick="setTheme('amber')" role="button" tabindex="0" aria-label="Amber theme">
+              <div class="tc-mini" style="--m-bg:#161106;--m-panel:#271e0d;--m-ac:#f59e0b;--m-text:#fff1d8;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,200,110,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeAmber">Amber</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#161106"></span><span class="tc-sw" style="background:#271e0d"></span><span class="tc-sw" style="background:#f59e0b"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="rose" onclick="setTheme('rose')" role="button" tabindex="0" aria-label="Rose theme">
+              <div class="tc-mini" style="--m-bg:#170b11;--m-panel:#29131f;--m-ac:#fb7185;--m-text:#ffe6ee;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,150,190,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeRose">Rose</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#170b11"></span><span class="tc-sw" style="background:#29131f"></span><span class="tc-sw" style="background:#fb7185"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="graphite" onclick="setTheme('graphite')" role="button" tabindex="0" aria-label="Graphite theme">
+              <div class="tc-mini" style="--m-bg:#0d0e10;--m-panel:#1a1c21;--m-ac:#94a3b8;--m-text:#eef1f6;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(160,170,190,.14)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeGraphite">Graphite</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#0d0e10"></span><span class="tc-sw" style="background:#1a1c21"></span><span class="tc-sw" style="background:#94a3b8"></span></span>
+              </div>
+            </div>
+                    </div>
+        </div>
+      </div>
+      <!-- logs page -->
+      <div class="page" id="page-logs">
+        <div class="ph">
+          <div>
+            <div class="ph-title" data-i18n="logs.title">Logs</div>
+            <div class="ph-sub" data-i18n="logs.sub">Session log. Press Ctrl+F to find.</div>
+          </div>
+        </div>
+        <div id="log-find" class="log-find" style="display:none">
+          <span class="material-icons-round">search</span>
+          <input id="log-find-input" data-i18n-ph="logs.findPh" data-i18n-aria="logs.findPh" placeholder="Find in logs…" aria-label="Find in logs" spellcheck="false" autocomplete="off"/>
+          <span id="log-find-count" class="log-find-count"></span>
+        </div>
+        <div id="logs-list" class="logs-text" tabindex="0">
+          <div class="logs-empty"><span class="material-icons-round">terminal</span><span data-i18n="logs.empty">No log entries yet.</span></div>
+        </div>
+      </div>
+        <!-- About tab panel -->
+        <div class="sw" id="stab-panel-about" style="display:none">
+          <div class="sc">
+            <div class="sc-head"><span class="material-icons-round" style="font-size:14px;margin-right:6px">info</span><span data-i18n="settings.about">About</span></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label">KNT Manager</div><div class="sr-desc" id="stat-app-ver">Version -</div></div></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.accountsSaved">Accounts saved</div></div><span class="badge" id="stat-count">0</span></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.robloxVersion">Roblox version</div></div><span class="badge" id="stat-rblx-ver">-</span></div>
+          </div>
+        </div>
+      <div class="page" id="page-credits">
+        <div class="ph">
+          <div class="ph-title" data-i18n="credits.title">Credits</div>
+          <div class="ph-sub" data-i18n="credits.sub">The people behind KNT Manager.</div>
+        </div>
+        <div class="sw">
+          <div class="credits-list">
+            <div class="credits-note">
+              <span class="material-icons-round">fork_right</span>
+              <div>
+                <div class="credits-note-title" data-i18n="credits.forkTitle">Fork of MultiRoblox</div>
+                <div class="credits-note-sub" data-i18n="credits.forkSub">KNT Manager is a fork of the original MultiRoblox project, built and maintained by the developers below.</div>
+              </div>
+            </div>
+            <div class="credit-card">
+              <div class="credit-av" id="credit-av-pookiepepelss" data-discord-id="1411269394683658270">P</div>
+              <div class="credit-info">
+                <div class="credit-role" data-i18n="credits.lead">Lead Developer</div>
+                <div class="credit-name">pookiepepelss</div>
+              </div>
+              <div class="credit-discord"><span class="material-icons-round">alternate_email</span>pookiepepelss</div>
+            </div>
+            <div class="credit-card">
+              <div class="credit-av" id="credit-av-xern" data-discord-id="1376700787878531167">X</div>
+              <div class="credit-info">
+                <div class="credit-role" data-i18n="credits.co">Co-Developer</div>
+                <div class="credit-name">xern</div>
+              </div>
+              <div class="credit-discord"><span class="material-icons-round">alternate_email</span>xernmc</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<div class="batch-bar" id="batch-bar" style="display:none">
+  <span class="batch-count" id="batch-count">0 selected</span>
+  <button class="btn btn-danger" onclick="batchKill()" data-i18n="batch.kill"><span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill</button>
+  <button class="btn btn-ghost" onclick="batchTrim()" data-i18n="batch.trim"><span class="material-icons-round" style="font-size:15px">memory</span>Trim</button>
+  <button class="btn btn-ghost" onclick="batchToGroup()" data-i18n="batch.toGroup"><span class="material-icons-round" style="font-size:15px">inventory_2</span>To group…</button>
+  <div class="filter-wrap">
+    <button class="btn-out" id="batch-cat-btn" onclick="toggleBatchCats(event)" data-i18n="batch.category"><span class="material-icons-round" style="font-size:15px">label</span>Category</button>
+    <div class="filter-menu" id="batch-cat-menu" style="right:0;left:auto"></div>
+  </div>
+  <button class="btn btn-ghost" onclick="clearSelection()" data-i18n="common.cancel"><span class="material-icons-round" style="font-size:15px">close</span></button>
+</div>
+<!-- tracking region picker -->
+<div class="overlay" id="m-region-picker" data-backdrop-close="true" onclick="if(event.target===this)closeRegionPicker()">
+  <div class="modal" onclick="event.stopPropagation()" style="width:660px;max-width:92vw">
+    <div class="modal-title" data-i18n="tracking.regionTitle">Outline capture region</div>
+    <div class="modal-sub" data-i18n="tracking.regionSub">Drag to outline one or more spots to capture. Click a spot to remove it. Leave empty to capture the full window.</div>
+    <div class="region-picker-wrap" id="region-picker-wrap">
+      <img id="region-picker-img" draggable="false" alt=""/>
+      <div id="region-picker-box" class="region-picker-box" style="display:none"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="resetRegionPicker()" data-i18n="tracking.fullWindow">Full window</button>
+      <button class="btn btn-ghost" onclick="closeRegionPicker()" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-primary" onclick="saveRegionPicker()" data-i18n="tracking.save">Save</button>
+    </div>
+  </div>
+</div>
+<!-- confirm delete -->
+<div class="overlay" id="m-confirm-delete" data-backdrop-close="true">
+  <div class="modal" onclick="event.stopPropagation()" style="width:320px">
+    <div class="modal-title" id="m-confirm-delete-title" data-i18n="confirm.title">Are you sure?</div>
+    <div class="modal-sub" id="m-confirm-delete-msg" data-i18n="confirm.sub">This action cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('m-confirm-delete')" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-danger" id="m-confirm-delete-btn" data-i18n="common.delete">Delete</button>
+    </div>
+  </div>
+</div>
+<!-- encryption unlock / setup modal -->
+<div class="overlay enc-overlay" id="m-enc" data-backdrop-close="false">
+  <div class="modal enc-card" onclick="event.stopPropagation()">
+    <div class="enc-logo"><span class="material-icons-round">lock</span></div>
+    <div class="enc-title" id="enc-title" data-i18n="enc.title">Enter your encryption key</div>
+    <div class="enc-sub" id="enc-desc" data-i18n="enc.desc">Enter the key you set to unlock your saved accounts.</div>
+    <div class="enc-field">
+      <span class="material-icons-round enc-field-ic">lock_outline</span>
+      <input type="password" id="enc-input" data-i18n-ph="enc.placeholder" placeholder="Enter your encryption key" style="flex:1;min-width:0;background:none;border:none;outline:none;color:var(--t1);font-family:var(--font);font-size:13px" onkeydown="if(event.key==='Enter')submitEnc()" autocomplete="off" spellcheck="false"/>
+      <button class="enc-eye" onclick="toggleKeyVisibility('enc-input','enc-vis-icon')" aria-label="Show or hide key">
+        <span class="material-icons-round" id="enc-vis-icon">visibility</span>
+      </button>
+    </div>
+    <div class="enc-err" id="enc-err" role="alert"></div>
+    <button class="btn btn-primary enc-submit" id="enc-action" onclick="submitEnc()">
+      <span class="material-icons-round enc-submit-ic">lock_open</span><span data-i18n="enc.unlock">Unlock</span>
+    </button>
+    <button class="enc-clear" id="enc-clear-data" onclick="clearAppData()" data-i18n="enc.clearData">Clear local data</button>
+    <div class="enc-privacy"><span class="material-icons-round">lock</span><span data-i18n="enc.localOnly">Your data stays on this device</span></div>
+  </div>
+</div>
+<!-- login modal -->
+<div class="overlay" id="m-login" data-backdrop-close="true">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title" data-i18n="login.title">Add Account</div>
+    <!-- Step 1: choose method -->
+    <div id="login-panel-choose">
+      <div class="modal-sub" style="margin-bottom:14px" data-i18n="login.chooseSub">How would you like to sign in?</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn btn-primary" style="justify-content:flex-start;gap:10px;padding:10px 14px" onclick="startBrowserLogin()">
+          <span class="material-icons-round" style="font-size:16px">language</span>
+          <span><span style="font-weight:600" data-i18n="login.browser">Sign in with Roblox</span><span style="font-weight:400;opacity:.6;margin-left:8px;font-size:11.5px" data-i18n="login.browserHint">Opens the Roblox login page</span></span>
+        </button>
+        <button class="btn btn-ghost" style="justify-content:flex-start;gap:10px;padding:10px 14px;border:1px solid var(--bd)" onclick="showCookiePanel()">
+          <span class="material-icons-round" style="font-size:16px">vpn_key</span>
+          <span><span style="font-weight:600" data-i18n="login.cookie">Paste Cookie</span><span style="font-weight:400;opacity:.6;margin-left:8px;font-size:11.5px" data-i18n="login.cookieHint">Use your .ROBLOSECURITY cookie</span></span>
+        </button>
+      </div>
+    </div>
+    <!-- Step 2a: browser login waiting -->
+    <div id="login-panel-browser" style="display:none">
+      <!-- Downloading Chrome -->
+      <div id="login-dl" style="display:none">
+        <div style="font-size:13px;font-weight:500;color:var(--t1);margin-bottom:10px" data-i18n="login.downloading">Downloading Chrome…</div>
+        <div style="background:var(--s3);border-radius:4px;height:6px;overflow:hidden;margin-bottom:6px">
+          <div id="dl-bar" style="height:100%;background:var(--ac);width:0%;transition:width .3s;border-radius:4px"></div>
+        </div>
+        <div style="font-size:11px;color:var(--t3)"><span data-i18n="login.firstTime">First time only:</span> <span id="dl-pct">0%</span></div>
+      </div>
+      <!-- Waiting for login -->
+      <div id="login-waiting" class="login-wait" style="display:none">
+        <div class="spin" style="width:18px;height:18px;border-width:2.5px;color:var(--ac)"></div>
+        <p data-i18n-html="login.waitingHtml">Waiting for login…<br/><span style="font-size:12px;color:var(--t2);font-weight:500">Sign in on the Chrome window that just opened.</span></p>
+      </div>
+    </div>
+    <!-- Step 2b: cookie input -->
+    <div id="login-panel-cookie" style="display:none">
+      <div class="modal-sub" style="margin-bottom:8px" data-i18n-html="login.pasteSub">Paste your <code style="font-size:11px;background:var(--s3);padding:1px 5px;border-radius:4px">.ROBLOSECURITY</code> cookie below.</div>
+      <div class="field" style="margin-bottom:4px">
+        <input type="password" id="cookie-input" placeholder="_|WARNING:-DO-NOT-SHARE-THIS--Roblox..." aria-label=".ROBLOSECURITY cookie" onkeydown="if(event.key==='Enter')addByCookie()"/>
+      </div>
+      <div style="font-size:11px;color:var(--t3)" data-i18n="login.cookieHintSteps">F12 → Application → Cookies → roblox.com → .ROBLOSECURITY</div>
+    </div>
+    <div class="mst hidden" id="login-status"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-login-back" style="display:none;margin-right:auto" onclick="backToChoose()">
+        <span class="material-icons-round" style="font-size:15px">arrow_back</span><span data-i18n="common.back">Back</span>
+      </button>
+      <button class="btn btn-ghost" onclick="cancelLogin()" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-primary" id="btn-cookie-add" style="display:none" onclick="addByCookie()">
+        <span class="material-icons-round" style="font-size:15px">check</span><span data-i18n="login.addAccount">Add Account</span>
+      </button>
+    </div>
+  </div>
+</div>
+<!-- Package modal -->
+<div class="overlay" id="m-package" data-backdrop-close="false">
+  <div class="modal pm" onclick="event.stopPropagation()" style="width:440px;padding:0">
+    <div class="pm-head">
+      <div class="pm-title" id="pkg-modal-title" data-i18n="groups.titleNew">New group</div>
+      <div class="pm-subtle" data-i18n="groups.subtle">Launch the whole set in one click from the Groups tab.</div>
+    </div>
+    <div class="pm-body">
+      <div class="pm-field-label" data-i18n="groups.name">Group name</div>
+      <input type="text" id="in-pkg-name" class="pm-input" data-i18n-ph="groups.namePh" data-i18n-aria="groups.name" placeholder="e.g. Farm Squad or Trading Alts" aria-label="Group name"/>
+      <div class="pm-row-inline">
+        <div style="flex:1">
+          <div class="pm-field-label" data-i18n="groups.color">Color</div>
+          <div class="pkg-color-row" id="pkg-color-row">
+            <button type="button" class="pkg-color-swatch" data-color="" title="Default"><span class="material-icons-round">close</span></button>
+            <button type="button" class="pkg-color-swatch" data-color="#5c5ce0" style="background:#5c5ce0"></button>
+            <button type="button" class="pkg-color-swatch" data-color="#3ecf8e" style="background:#3ecf8e"></button>
+            <button type="button" class="pkg-color-swatch" data-color="#f5a623" style="background:#f5a623"></button>
+            <button type="button" class="pkg-color-swatch" data-color="#f06f6f" style="background:#f06f6f"></button>
+            <button type="button" class="pkg-color-swatch" data-color="#3b82f6" style="background:#3b82f6"></button>
+            <button type="button" class="pkg-color-swatch" data-color="#c084fc" style="background:#c084fc"></button>
+            <button type="button" class="pkg-color-swatch" data-color="#22d3ee" style="background:#22d3ee"></button>
+          </div>
+        </div>
+        <div style="width:130px">
+          <div class="pm-field-label" data-i18n="groups.delay">Launch delay</div>
+          <input type="number" id="in-pkg-delay" class="pm-input" min="0" max="60000" step="500" value="0" title="ms between account launches"/>
+        </div>
+      </div>
+      <div class="pm-section">
+        <span class="pm-field-label" style="margin:0" data-i18n="groups.accounts">Accounts</span>
+        <span class="pm-count" id="pkg-count">0 selected</span>
+        <button class="btn btn-ghost" style="font-size:10.5px;padding:3px 8px;margin-left:auto" onclick="pkgPickAll(true)" data-i18n="groups.selectAll">Select all</button>
+        <button class="btn btn-ghost" style="font-size:10.5px;padding:3px 8px" onclick="pkgPickAll(false)" data-i18n="groups.selectNone">None</button>
+      </div>
+      <div class="search" style="margin:8px 0"><span class="material-icons-round">search</span><input id="pkg-picker-search" data-i18n-ph="groups.pickerSearchPh" data-i18n-aria="groups.pickerSearchPh" placeholder="Filter accounts..." aria-label="Filter accounts" oninput="renderPackagePicker(collectPkgChecked())"/></div>
+      <div class="pkg-account-picker" id="pkg-account-picker" onchange="updatePkgCount()"></div>
+      <div class="pm-field-label" style="margin-top:10px" data-i18n="groups.launchOrder">Launch order</div>
+      <div class="pkg-order-row" id="pkg-order-row"></div>
+    </div>
+    <div class="pm-foot">
+      <button class="btn btn-ghost" onclick="closeModal('m-package')" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-primary" onclick="savePackageModal()"><span class="material-icons-round">save</span><span data-i18n="groups.save">Save group</span></button>
+    </div>
+  </div>
+</div>
+<!-- Edit modal -->
+<div class="overlay" id="m-edit" data-backdrop-close="false">
+  <div class="modal" onclick="event.stopPropagation()">
+    <button class="modal-x" onclick="closeModal('m-edit')" data-i18n-aria="common.close" aria-label="Close">&times;</button>
+    <div class="modal-title" id="edit-title" data-i18n="edit.title">Edit account</div>
+    <div class="modal-sub" style="margin-bottom:14px" data-i18n="edit.sub">Change what shows up on the account card.</div>
+    <div class="edit-head">
+      <div class="edit-av" id="edit-av"></div>
+      <div>
+        <div class="edit-head-name" id="edit-head-name"></div>
+        <div class="edit-head-meta" id="edit-head-meta"></div>
+      </div>
+    </div>
+    <div class="field">
+      <label for="in-nickname" data-i18n="edit.alias">Alias</label>
+      <input type="text" id="in-nickname" data-i18n-ph="edit.aliasPh" placeholder="e.g. MainAlt or FarmBot"/>
+    </div>
+    <div class="field">
+      <label for="in-description" data-i18n="edit.description">Description</label>
+      <textarea id="in-description" data-i18n-ph="edit.descriptionPh" placeholder="Personal note..."></textarea>
+    </div>
+    <div class="field">
+      <label for="in-category" data-i18n="edit.category">Category</label>
+      <div class="cdd cat-cdd" id="cdd-in-category">
+        <div class="cdd-trigger" id="cdd-in-category-trigger" onclick="toggleCdd('in-category')" onkeydown="catTriggerKey(event)" role="button" tabindex="0" aria-label="Category">
+          <span class="cat-dot cdd-cat-dot" id="in-category-dot" style="background:var(--s4)"></span>
+          <span class="cdd-label" id="in-category-label" data-i18n="edit.noCategory">No category</span>
+          <span class="material-icons-round cdd-arrow">expand_more</span>
+        </div>
+        <div class="cdd-menu cat-menu" id="cdd-in-category-menu">
+          <div class="cdd-search" id="cat-search-wrap" style="display:none">
+            <span class="material-icons-round">search</span>
+            <input id="cat-search-input" data-i18n-ph="edit.searchCatsPh" placeholder="Search categories…" oninput="catSearchInput(this.value)" aria-label="Search categories"/>
+          </div>
+          <div class="cat-options" id="in-category-options"></div>
+        </div>
+      </div>
+      <div class="field-hint" data-i18n="edit.categoryHint">Organize accounts into groups. Create and manage categories with the Categories button in the Accounts toolbar.</div>
+    </div>
+    <div class="field">
+      <label for="in-target" data-i18n="edit.target">Game ID, Invite Link, or Private Server Link</label>
+      <input type="text" id="in-target" data-i18n-ph="edit.targetPh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..."/>
+    </div>
+    <div class="field">
+      <label for="in-password" data-i18n="edit.password">Password</label>
+      <div style="display:flex;gap:8px;align-items:stretch">
+        <input type="password" id="in-password" data-i18n-ph="edit.passwordPh" placeholder="Account password" style="flex:1;min-width:0" autocomplete="off" spellcheck="false"/>
+        <button class="btn btn-ghost" style="flex-shrink:0;height:34px;padding:0 8px" onclick="togglePassVis()" title="Show/hide"><span class="material-icons-round" style="font-size:16px" id="pass-vis-icon">visibility_off</span></button>
+      </div>
+      <div class="field-hint" data-i18n="edit.passwordHint">Optional. Stored encrypted on your PC only.</div>
+    </div>
+    <div class="field">
+      <button class="btn btn-ghost" id="edit-refresh-btn" style="width:100%;justify-content:center" onclick="refreshEditFromRoblox()">
+        <span class="material-icons-round" style="font-size:15px">refresh</span><span data-i18n="edit.refresh">Refresh from Roblox</span>
+      </button>
+      <div class="field-hint" data-i18n="edit.refreshHint">Re-fetches the username and user ID from the saved cookie.</div>
+    </div>
+    <div class="field">
+      <label for="in-follow" data-i18n="edit.follow">Follow user</label>
+      <div style="display:flex;gap:8px;align-items:stretch">
+        <input type="text" id="in-follow" data-i18n-ph="edit.followPh" placeholder="username" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();followUserLookup();}"/>
+        <button class="btn btn-ghost" id="follow-btn" style="flex-shrink:0" onclick="followUserLookup()">
+          <span class="material-icons-round" style="font-size:15px">person_search</span><span data-i18n="edit.followFind">Find</span>
+        </button>
+      </div>
+      <div class="field-hint" id="follow-status" data-i18n="edit.followHint">Finds the server they're in and fills the target above.</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('m-edit')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEdit()"><span class="material-icons-round">save</span><span data-i18n="common.save">Save</span></button>
+    </div>
+  </div>
+</div>
+<!-- launch modal -->
+<div class="overlay" id="m-launch" data-backdrop-close="true">
+  <div class="modal" onclick="event.stopPropagation()" style="width:340px">
+    <div class="prev" id="launch-prev"></div>
+    <div class="mst hidden" id="launch-status"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-launch-cancel" onclick="cancelLaunchOrClose()" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-primary" id="btn-launch" onclick="doLaunch()" data-i18n="launch.start">Start</button>
+    </div>
+  </div>
+</div>
+<!-- game info modal -->
+<div class="overlay" id="m-game" data-backdrop-close="true">
+  <div class="modal" onclick="event.stopPropagation()" style="width:340px">
+    <img class="game-thumb-preview" id="game-modal-thumb" src="" alt=""/>
+    <div class="modal-title" id="game-modal-name" style="margin-bottom:6px">Game</div>
+    <div class="modal-sub" id="game-modal-stat" style="margin-bottom:12px"></div>
+    <div style="font-size:11px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px" data-i18n="charts.placeId">Place ID</div>
+    <div class="game-id-row">
+      <span class="game-id-val" id="game-modal-id"></span>
+      <button class="btn btn-ghost" style="padding:4px 9px;font-size:11px;flex-shrink:0" onclick="copyGameId()"><span class="material-icons-round" style="font-size:13px">content_copy</span><span data-i18n="charts.copy">Copy</span></button>
+    </div>
+    <div class="modal-actions" style="margin-top:0">
+      <button class="btn btn-ghost" onclick="closeModal('m-game')" data-i18n="charts.close">Close</button>
+      <button class="btn btn-primary" onclick="gamePageOpen()"><span class="material-icons-round">open_in_new</span><span data-i18n="charts.gamePage">Game Page</span></button>
+    </div>
+  </div>
+</div>
+<!-- trash modal -->
+<div class="overlay" id="m-trash" data-backdrop-close="true">
+  <div class="modal" onclick="event.stopPropagation()" style="width:480px;max-width:92vw">
+    <div class="modal-title" data-i18n="trash.title">Trash</div>
+    <div class="modal-sub" id="trash-total">0 accounts</div>
+    <div class="trash-list" id="trash-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('m-trash')" data-i18n="trash.close">Close</button>
+      <button class="btn btn-danger" id="trash-empty-btn" style="display:none" onclick="trashEmpty()">
+        <span class="material-icons-round" style="font-size:15px">delete_sweep</span><span data-i18n="trash.empty">Empty trash</span>
+      </button>
+    </div>
+  </div>
+</div>
+<!-- categories modal -->
+<div class="overlay" id="m-categories" data-backdrop-close="true">
+  <div class="modal" onclick="event.stopPropagation()" style="width:440px;max-width:92vw">
+    <div class="modal-title" data-i18n="cat.title">Categories</div>
+    <div class="modal-sub" data-i18n="cat.sub">Organize accounts. Click a color dot to change it. Rename or delete any category — accounts are never removed with it.</div>
+    <div style="display:flex;gap:8px;margin:12px 0">
+      <input type="text" id="cat-new-name" class="sr-input" data-i18n-ph="cat.newPh" data-i18n-aria="cat.newPh" placeholder="New category name…" style="flex:1;width:auto" onkeydown="if(event.key==='Enter')catAdd()" aria-label="New category name"/>
+      <button class="btn btn-primary" onclick="catAdd()"><span class="material-icons-round" style="font-size:15px">add</span><span data-i18n="common.add">Add</span></button>
+    </div>
+    <div class="trash-list" id="cat-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeModal('m-categories')" data-i18n="common.done">Done</button>
+    </div>
+  </div>
+</div>
+<!-- backup modal -->
+<div class="overlay" id="m-backup" data-backdrop-close="true">
+  <div class="modal" onclick="event.stopPropagation()" style="width:360px">
+    <div class="modal-title" id="bk-title" data-i18n="backup.titleCreate">Create backup</div>
+    <div class="modal-sub" id="bk-desc" style="margin-bottom:0" data-i18n="backup.descCreate">Choose a password to protect the backup file.</div>
+    <div style="margin:14px 0 2px">
+      <input type="password" class="sr-input" id="bk-pass" data-i18n-ph="backup.passPh" placeholder="Backup password" style="width:100%" onkeydown="if(event.key==='Enter')submitBackup()" autocomplete="off" spellcheck="false"/>
+    </div>
+    <div id="bk-err" style="display:none;color:var(--red);font-size:12px;margin-top:6px"></div>
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="btn btn-ghost" onclick="closeModal('m-backup')" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-primary" id="bk-action" onclick="submitBackup()" data-i18n="backup.create">Create backup</button>
+    </div>
+  </div>
+</div>
+<!-- update modal -->
+<div class="overlay" id="m-update" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-update')">
+  <div class="modal" onclick="event.stopPropagation()" style="width:360px">
+    <div class="modal-title" style="display:flex;align-items:center;gap:9px"><span class="material-icons-round" style="font-size:19px;color:var(--ac)">system_update_alt</span><span data-i18n="update.availableTitle">Update available</span></div>
+    <div class="modal-sub" id="update-desc">—</div>
+    <div id="update-notes" style="font-size:12.5px;color:var(--t2);background:var(--s2);border:1px solid var(--bd);border-radius:9px;padding:10px 12px;max-height:140px;overflow-y:auto;white-space:pre-wrap;line-height:1.5;margin-bottom:12px;display:none"></div>
+    <div class="mst hidden" id="update-status"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('m-update')" data-i18n="update.later">Later</button>
+      <button class="btn btn-primary" id="btn-update-install" onclick="installUpdate()"><span class="material-icons-round" style="font-size:15px">download</span><span data-i18n="update.install">Download &amp; Install</span></button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="av-tip" id="av-tip">
+  <div class="av-tip-top">
+    <div class="av-tip-av" id="av-tip-av">?</div>
+    <div class="av-tip-id">
+      <div class="av-tip-name" id="av-tip-name">-</div>
+      <div class="av-tip-uname" id="av-tip-uname">-</div>
+    </div>
+  </div>
+  <div class="av-tip-row">
+    <span class="material-icons-round">event</span>
+    <span id="av-tip-created">Loading…</span>
+  </div>
+</div>
+<script src="i18n/en.js"></script>
+<script src="i18n/pt.js"></script>
+<script src="bridge.js"></script>
+<script src="renderer.js"></script>
+<!-- help modal -->
+<div class="overlay" id="m-help" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-help')">
+  <div class="modal" onclick="event.stopPropagation()" style="width:380px">
+    <div class="modal-title" data-i18n="help.title">How to use</div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin:14px 0">
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <span class="material-icons-round" style="font-size:16px;color:var(--ac);margin-top:1px;flex-shrink:0">person_add</span>
+        <div><div style="font-size:12.5px;font-weight:600;color:var(--t1);margin-bottom:2px" data-i18n="help.addTitle">Add Account</div><div style="font-size:12px;color:var(--t2)" data-i18n-html="help.addDesc">Click Add Account in the sidebar. Sign in via browser or paste your <code style="font-family:'JetBrains Mono',monospace;font-size:10.5px;background:var(--s3);padding:1px 5px;border-radius:4px">.ROBLOSECURITY</code> cookie.</div></div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <span class="material-icons-round" style="font-size:16px;color:var(--ac);margin-top:1px;flex-shrink:0">rocket_launch</span>
+        <div><div style="font-size:12.5px;font-weight:600;color:var(--t1);margin-bottom:2px" data-i18n="help.launchTitle">Launch</div><div style="font-size:12px;color:var(--t2)" data-i18n-html="help.launchDesc">Click Start on any card. Set a game ID, private server link, or <code style="font-family:'JetBrains Mono',monospace;font-size:10.5px;background:var(--s3);padding:1px 5px;border-radius:4px">placeId:jobId</code> via the edit button to launch directly into a game or specific server.</div></div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <span class="material-icons-round" style="font-size:16px;color:var(--ac);margin-top:1px;flex-shrink:0">more_horiz</span>
+        <div><div style="font-size:12.5px;font-weight:600;color:var(--t1);margin-bottom:2px" data-i18n="help.rmbTitle">Right-click a card</div><div style="font-size:12px;color:var(--t2)" data-i18n="help.rmbDesc">Kill the instance, copy the user ID/username/cookie, or open the account logged in in a real browser.</div></div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <span class="material-icons-round" style="font-size:16px;color:var(--ac);margin-top:1px;flex-shrink:0">tune</span>
+        <div><div style="font-size:12.5px;font-weight:600;color:var(--t1);margin-bottom:2px" data-i18n="help.mixerTitle">Mixer</div><div style="font-size:12px;color:var(--t2)" data-i18n="help.mixerDesc">Set graphics quality, FPS cap, and volume for every instance. Applies on next launch.</div></div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <span class="material-icons-round" style="font-size:16px;color:var(--ac);margin-top:1px;flex-shrink:0">shuffle</span>
+        <div><div style="font-size:12.5px;font-weight:600;color:var(--t1);margin-bottom:2px" data-i18n="help.genTitle">Generator</div><div style="font-size:12px;color:var(--t2)" data-i18n-html="help.genDesc">Paste a BloxGen (<code style="font-family:'JetBrains Mono',monospace;font-size:10.5px;background:var(--s3);padding:1px 5px;border-radius:4px">BLOX-</code>) or Altgen (<code style="font-family:'JetBrains Mono',monospace;font-size:10.5px;background:var(--s3);padding:1px 5px;border-radius:4px">MG_</code>) API key and click Generate to create an alt account.</div></div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <span class="material-icons-round" style="font-size:16px;color:var(--ac);margin-top:1px;flex-shrink:0">bolt</span>
+        <div><div style="font-size:12.5px;font-weight:600;color:var(--t1);margin-bottom:2px" data-i18n="help.afkTitle">Anti-AFK &amp; RAM trim</div><div style="font-size:12px;color:var(--t2)" data-i18n="help.afkDesc">Toggle in Settings to keep instances from idle-kicking and free memory automatically.</div></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeModal('m-help')" data-i18n="help.gotIt">Got it</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

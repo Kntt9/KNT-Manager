@@ -1,0 +1,29 @@
+# ── Rust / Tauri build artifacts ────────────────────────────────
+src-tauri/target/
+target/
+*.pdb
+
+# ── Compiled app / release output ───────────────────────────────
+dist/
+
+# ── Node ────────────────────────────────────────────────────────
+node_modules/
+
+# ── Logs ────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS junk ─────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ── IDE / editor ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+
+# ── Secrets — NEVER commit ─────────────────────────────────────
+src-tauri/.updater-secret/
+src-tauri/nsis/_test/
+src-tauri/resources/*.exe

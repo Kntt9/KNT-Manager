@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MultiRoblox",
+  "version": "2.0.0",
+  "identifier": "com.multiroblox.client",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "KNT Manager",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 800,
+        "minHeight": 680,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": "#0e0e10",
+        "visible": false,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "publisher": "Kntt9",
+    "copyright": "Copyright (c) 2026 Kntt9",
+    "homepage": "https://github.com/Kntt9/MultiRoblox-RAM",
+    "shortDescription": "Run and manage multiple Roblox accounts",
+    "longDescription": "MultiRoblox lets you run several Roblox clients at once and manage multiple accounts from a single dashboard.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ]
+      }
+    },
+    "resources": [
+      "resources/*"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVDRDcwNDczMTQ4RTYxRUUKUldUdVlZNFVjd1RYWERsL1IrTFQzNlZKVVByYlRCdnp2MTRxMW9jSDFVejVqQW02VUdwdUpjdG8K",
+      "endpoints": [
+        "https://github.com/Kntt9/MultiRoblox-RAM/releases/latest/download/latest-version.json"
+      ]
+    }
+  }
+}
