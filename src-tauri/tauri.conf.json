@@ -35,7 +35,7 @@
     "createUpdaterArtifacts": true,
     "publisher": "Kntt9",
     "copyright": "Copyright (c) 2026 Kntt9",
-    "homepage": "https://github.com/Kntt9/MultiRoblox-RAM",
+    "homepage": "https://github.com/Kntt9/KNT-Manager",
     "shortDescription": "Run and manage multiple Roblox accounts",
     "longDescription": "MultiRoblox lets you run several Roblox clients at once and manage multiple accounts from a single dashboard.",
     "windows": {
@@ -50,17 +50,17 @@
       "resources/*"
     ],
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.ico"
-    ]
+          "icons/icon.ico",
+          "icons/32x32.png",
+          "icons/128x128.png",
+          "icons/128x128@2x.png"
+        ]
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVDRDcwNDczMTQ4RTYxRUUKUldUdVlZNFVjd1RYWERsL1IrTFQzNlZKVVByYlRCdnp2MTRxMW9jSDFVejVqQW02VUdwdUpjdG8K",
       "endpoints": [
-        "https://github.com/Kntt9/MultiRoblox-RAM/releases/latest/download/latest-version.json"
+        "https://github.com/Kntt9/KNT-Manager/releases/latest/download/latest-version.json"
       ]
     }
   }
