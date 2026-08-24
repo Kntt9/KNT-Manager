@@ -71,7 +71,7 @@ That produces `dist\MultiRoblox.exe`. The frontend lives in `src/` and is embedd
 
 ## 🤝 Credits
 
-**KNT Manager** is a fork of the original [MultiRoblox](https://github.com/) project, rebuilt and extended by:
+**KNT Manager** is a fork of the original [MultiRoblox](https://github.com/PookiePepelsss/MultiRoblox-RAM) project, rebuilt and extended by:
 
 | | |
 |---|---|
