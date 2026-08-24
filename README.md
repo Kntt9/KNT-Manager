@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/knt-logo-horizontal.svg" alt="KNT Manager" width="340"/>
+  <img src="src/assets/knt-logo.png" alt="KNT Manager" width="140"/>
 </p>
 
 <p align="center">
