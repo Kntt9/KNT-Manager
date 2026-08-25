@@ -38,6 +38,12 @@ pub struct AppState {
     /// game process died but a hidden launcher/home window is still around.
     /// UI shows them amber instead of plain closed.
     pub home_accounts: Mutex<std::collections::HashSet<String>>,
+    /// account id -> deadline (ms) until which a close candidate that
+    /// hasn't confirmed "home" yet keeps being re-checked before it is
+    /// declared closed. The launcher/home window can lag a couple seconds
+    /// behind the game window closing, and closing too early turned a
+    /// legit home into a permanent closed.
+    pub home_retry_deadline: Mutex<HashMap<String, i64>>,
 
     pub csrf_cache: Mutex<HashMap<String, (String, i64)>>,
     pub ticket_cache: Mutex<HashMap<String, (String, i64)>>,
@@ -101,6 +107,7 @@ impl AppState {
             manual_kills: Mutex::new(std::collections::HashSet::new()),
             watch_pid_cache: Mutex::new(None),
             home_accounts: Mutex::new(std::collections::HashSet::new()),
+            home_retry_deadline: Mutex::new(HashMap::new()),
             csrf_cache: Mutex::new(HashMap::new()),
             ticket_cache: Mutex::new(HashMap::new()),
             last_launch_ts: Mutex::new(0),

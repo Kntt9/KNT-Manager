@@ -1409,6 +1409,17 @@ fn is_launcher_process(pid: u32) -> bool {
     }
 }
 
+// True when the live process at `pid` is a RobloxPlayerBeta.exe (any
+// install/version folder). Used to recognize the normal-Roblox "home"
+// state: closing a game with X does not kill the process — it becomes the
+// hidden tray launcher, still alive but no longer an active game window.
+fn is_roblox_player_process(pid: u32) -> bool {
+    match process_exe_path(pid) {
+        Some(p) => p.to_lowercase().contains("robloxplayerbeta.exe"),
+        None => false,
+    }
+}
+
 pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: &str) -> Value {
     state.manual_kills.lock().unwrap().insert(account_id.to_string());
     
@@ -1419,6 +1430,7 @@ pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: 
         state.miss_counts.lock().unwrap().remove(account_id);
         state.account_pids.lock().unwrap().remove(account_id);
         state.home_accounts.lock().unwrap().remove(account_id);
+        state.home_retry_deadline.lock().unwrap().remove(account_id);
         clear_manual_priority(state, account_id);
         stop_watch_poll_if_idle(state);
         persist_instances(state);
@@ -1926,9 +1938,18 @@ async fn watch_tick(app: &AppHandle) {
             let launcher_tray = pid_here.is_some()
                 && is_launcher_process(pid_here.unwrap())
                 && !any_running;
+            // Normal Roblox: closing the game with X does not kill the
+            // process — it becomes the hidden tray launcher (home). If the
+            // helper's home probe missed it (timing), a live
+            // RobloxPlayerBeta process that is no longer an active game
+            // window is still the home state.
+            let roblox_tray = pid_here.is_some()
+                && is_roblox_player_process(pid_here.unwrap())
+                && pid_is_alive(pid_here.unwrap())
+                && !alive_pids.contains(&pid_here.unwrap());
             let went_home = match &home_now {
                 Some(h) if !h.is_empty() && !is_manual => true,
-                Some(_) => launcher_tray && !is_manual,
+                Some(_) => (launcher_tray || roblox_tray) && !is_manual,
                 None => continue, // probe failed — defer this account
             };
             if went_home {
@@ -1936,6 +1957,7 @@ async fn watch_tick(app: &AppHandle) {
                 state.watched_accounts.lock().unwrap().remove(account_id);
                 state.miss_counts.lock().unwrap().remove(account_id);
                 state.account_pids.lock().unwrap().remove(account_id);
+                state.home_retry_deadline.lock().unwrap().remove(account_id);
                 clear_manual_priority(&state, account_id);
                 let accounts = crate::storage::load_accounts(&state);
                 let username = accounts
@@ -1951,8 +1973,20 @@ async fn watch_tick(app: &AppHandle) {
                     Some(serde_json::json!({ "accountId": account_id, "username": username })),
                 );
                 let _ = app.emit("roblox:home", account_id.clone());
-            } else {
+            } else if is_manual {
                 closed.push(account_id.clone());
+            } else {
+                // Not confirmed home yet. The home/tray window can lag a
+                // couple of seconds behind the game window closing — give it
+                // a short retry window before declaring the account closed,
+                // so a legit home isn't burned into a permanent closed.
+                let mut retry = state.home_retry_deadline.lock().unwrap();
+                let deadline = retry.entry(account_id.clone()).or_insert_with(|| now + 4_000);
+                if now >= *deadline {
+                    retry.remove(account_id);
+                    drop(retry);
+                    closed.push(account_id.clone());
+                }
             }
         }
     }
@@ -1970,6 +2004,7 @@ async fn watch_tick(app: &AppHandle) {
         
         state.watched_accounts.lock().unwrap().remove(account_id);
         state.miss_counts.lock().unwrap().remove(account_id);
+        state.home_retry_deadline.lock().unwrap().remove(account_id);
         let accounts = crate::storage::load_accounts(&state);
         let acct = accounts
             .iter()
