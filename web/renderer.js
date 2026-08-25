@@ -3099,6 +3099,61 @@ async function launchPkgToServer(index) {
   renderPackages();
 }
 
+// Launches each account of a group into a DIFFERENT free server, so no two
+// accounts land in the same instance. Useful to spread a group across servers.
+async function distributePkg(pkgId) {
+  const p = packages.find(x => x.id === pkgId);
+  if (!p) return;
+  const members = pkgMembers(p);
+  if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  const link = String(p.link || '').trim();
+  const placeId = link.split(/[:,]/)[0];
+  if (!/^\d+$/.test(placeId)) { toast(t('srv.errResolve'), 'err'); return; }
+  const acc = members[0];
+  const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
+  const freeServers = [];
+  let cursor = '';
+  for (let page = 0; page < 10 && freeServers.length < members.length; page++) {
+    const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    const r = await fetcher(url);
+    const data = (r && r.data) || {};
+    const batch = (data.data) || [];
+    for (const s of batch) {
+      if (s.playing < (s.maxPlayers || 1)) freeServers.push(s);
+      if (freeServers.length >= members.length) break;
+    }
+    cursor = data.nextPageCursor || '';
+    if (!cursor) break;
+  }
+  if (!freeServers.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
+  for (let i = freeServers.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [freeServers[i], freeServers[j]] = [freeServers[j], freeServers[i]];
+  }
+  const total = Math.min(members.length, freeServers.length);
+  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+  let ok = 0;
+  for (let i = 0; i < total; i++) {
+    const m = members[i];
+    const s = freeServers[i];
+    const target = placeId + ':' + s.id;
+    logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+    try {
+      const res = await api.launchRoblox(m.id, m.cookie, target);
+      if (res && res.success) {
+        ok++;
+        markLaunched(m.id);
+        _srvJoined[m.id] = { placeId: String(placeId), jobId: s.id, serverId: String(s.id).slice(0, 8), username: m.username || m.id };
+      } else if (res && res.error) {
+        _flagCookieMaybeDead(m.id, res.error);
+      }
+    } catch (e) { /* keep going */ }
+    if (delay > 0 && ok < total) await new Promise(r => setTimeout(r, delay));
+  }
+  toast(t('pkg.distributedN', { ok: ok, total: total, name: p.name }), ok === total ? 'ok' : 'err');
+  renderPackages();
+}
+
 function joinRandomServer() {
   if (!_srvCtx || (!_srvCtx.accountId && !_srvCtx.packageId)) return;
   if (!_srvList.length) { toast(t('srv.randomNone'), 'err'); return; }
@@ -3335,6 +3390,7 @@ function renderPackages() {
             onkeydown="if(event.key==='Enter'){this.blur();}"/>
         </div>
         ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn" onclick="openPkgServerList('${p.id}')" title="${esc(t('srv.title'))}" aria-label="${esc(t('srv.title'))}"><span class="material-icons-round">dns</span></button>` : ''}
+        ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn" onclick="distributePkg('${p.id}')" title="${esc(t('pkg.distribute'))}" aria-label="${esc(t('pkg.distribute'))}"><span class="material-icons-round">call_split</span></button>` : ''}
         <button class="btn btn-launch pkg-launch-btn" onclick="launchPackage('${p.id}')" ${members.length ? '' : 'disabled'}>
           ${esc(t('groups.startAll'))}
         </button>
@@ -3577,8 +3633,19 @@ async function launchPackage(id) {
   const link = (p.link || '').trim();
   let okCount = 0;
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+  let autoTarget = null;
+  const linkPlace = link.split(/[:,]/)[0];
+  if (/^\d+$/.test(linkPlace) && !link.includes(':')) {
+    try {
+      const fetcher = members[0] && members[0].cookie ? (u) => api.robloxGetAuth(u, members[0].cookie) : (u) => api.robloxGet(u);
+      const r = await fetcher('https://games.roblox.com/v1/games/' + linkPlace + '/servers/Public?limit=50&sortOrder=Asc');
+      const servers = (r && r.data && r.data.data) || [];
+      const free = servers.find(s => s.playing < (s.maxPlayers || 1)) || servers[0];
+      if (free) autoTarget = linkPlace + ':' + free.id;
+    } catch (e) { /* fall back to the plain link */ }
+  }
   for (const m of members) {
-    const target = link || m.gameTarget || null;
+    const target = autoTarget || link || m.gameTarget || null;
     logEntry('info', 'launch', `Launching Roblox for ${m.username || m.id} (package)...`, { accountId: m.id, username: m.username || null, userId: m.userId || null, target: target || 'Roblox home' });
     const res = await api.launchRoblox(m.id, m.cookie, target);
     const chip = document.getElementById('pkg-chip-' + id + '-' + m.id);
@@ -3586,6 +3653,10 @@ async function launchPackage(id) {
       okCount++;
       logEntry('ok', 'launch', `Launched as ${m.username || m.id} (package)`, { accountId: m.id, username: m.username || null });
       markLaunched(m.id);
+      if (autoTarget) {
+        const [pid, ...rest] = autoTarget.split(':');
+        _srvJoined[m.id] = { placeId: pid, jobId: rest.join(':'), serverId: String(rest.join(':')).slice(0, 8), username: m.username || m.id };
+      }
       if (chip) { chip.className = 'pkg-chip ok'; chip.innerHTML = '<span class="material-icons-round">check_circle</span>' + esc(m.nickname || m.username || ''); }
     } else if (chip) {
       chip.className = 'pkg-chip err';
