@@ -495,7 +495,7 @@ pub fn running_account_ids(state: &AppState, alive: &std::collections::HashSet<u
     let pids = state.account_pids.lock().unwrap();
     let mut ids: Vec<String> = pids
         .iter()
-        .filter(|(_, pid)| alive.contains(pid))
+        .filter(|(_, pid)| alive.contains(pid) || is_launcher_process(**pid))
         .map(|(id, _)| id.clone())
         .collect();
     if !alive.is_empty() {
@@ -693,7 +693,11 @@ pub async fn sync_running_instances(app: &AppHandle, state: &AppState) -> Result
     let mut claimed: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut survivors: Vec<(String, u32)> = Vec::new();
     for (id, pid) in &tracked {
-        if alive_pids.contains(pid) && claimed.insert(*pid) {
+        // is_launcher_process keeps custom-launcher accounts (Fishtrap etc.)
+        // as survivors — their process name isn't RobloxPlayerBeta.exe so
+        // they never show up in alive_pids. It only matches the configured
+        // launcher exe, so recycled PIDs can't fake a running account.
+        if (alive_pids.contains(pid) || is_launcher_process(*pid)) && claimed.insert(*pid) {
             survivors.push((id.clone(), *pid));
         }
     }
@@ -1350,6 +1354,57 @@ fn pid_is_alive(_pid: u32) -> bool {
     false
 }
 
+// Returns the full path of the executable for a given PID. Used to
+// distinguish a custom-launcher (Fishtrap etc.) process from a recycled
+// PID that happens to be alive but points at a completely unrelated exe.
+#[cfg(windows)]
+fn process_exe_path(pid: u32) -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(h) => {
+                let mut buf = [0u16; 1024];
+                let mut len = buf.len() as u32;
+                let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+                CloseHandle(h).ok();
+                if ok.is_ok() {
+                    Some(String::from_utf16_lossy(&buf[..len as usize]))
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+}
+#[cfg(not(windows))]
+fn process_exe_path(_pid: u32) -> Option<String> {
+    None
+}
+
+// True when the live process at `pid` matches the user-configured custom
+// launcher path (case-insensitive). Returns false when no custom launcher
+// is configured, so the normal RobloxPlayerBeta path is never affected.
+fn is_launcher_process(pid: u32) -> bool {
+    let s = crate::settings::load_settings();
+    let path = s
+        .get("launcherPath")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let Some(path) = path else {
+        return false;
+    };
+    match process_exe_path(pid) {
+        Some(p) => p.eq_ignore_ascii_case(path),
+        None => false,
+    }
+}
+
 pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: &str) -> Value {
     state.manual_kills.lock().unwrap().insert(account_id.to_string());
     
@@ -1789,7 +1844,13 @@ async fn watch_tick(app: &AppHandle) {
         // is "ours", so fall back to the coarse "is anything running at all"
         // signal instead of declaring it closed outright.
         let mut running = match pid {
-            Some(p) => alive_pids.contains(&p),
+            // Tracked PID: alive_pids only contains RobloxPlayerBeta.exe
+            // processes. A custom launcher (Fishtrap etc.) won't be in that
+            // set, so fall back to checking whether the live process is
+            // literally the configured launcher exe — never a blanket
+            // "any PID is alive" (that would treat recycled PIDs as running
+            // and break close-detection for the normal Roblox path).
+            Some(p) => alive_pids.contains(&p) || is_launcher_process(p),
             None => any_running,
         };
         // Adopt an unclaimed PID only for an account that has never had one
