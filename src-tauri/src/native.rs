@@ -1815,15 +1815,6 @@ async fn watch_tick(app: &AppHandle) {
     let now = now_ms();
     let mut closed: Vec<String> = Vec::new();
     let mut candidates: Vec<String> = Vec::new();
-    // Custom launcher configured? Its exe often exits right after handing
-    // off to the real Roblox client, so accounts launched through it need
-    // orphan-adoption to keep tracking the child RobloxPlayerBeta.
-    let launcher_enabled = crate::settings::load_settings()
-        .get("launcherPath")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .is_some();
     let claimed: std::collections::HashSet<u32> = {
         let watched = state.watched_accounts.lock().unwrap();
         let pids = state.account_pids.lock().unwrap();
@@ -1872,18 +1863,14 @@ async fn watch_tick(app: &AppHandle) {
         // account gets a real PID, and this is the secondary net for the rare
         // case where Roblox took longer to start than that poll's window.
         //
-        // Deliberately NOT applied to an account whose tracked PID just died
-        // for the normal Roblox path (would pin a closed account on Running).
-        // Custom launchers are an exception: their exe may take a while to
-        // hand off to the real Roblox client (login, patching), so the child
-        // RobloxPlayerBeta must be adoptable for up to ~90s after launch.
-        // After that window an account is "established": a later PID death
-        // (user closed the game with X) goes to home/closed, never re-adopts
-        // a stranger's process — that inverted two accounts' states.
-        // A manually-killed account also never adopts.
+        // Deliberately NOT applied to an account whose tracked PID just died:
+        // handing it whichever stranger happens to be alive (a client the
+        // user opened outside MultiRoblox, or one left over from a previous
+        // session) is what used to pin a closed account on Running forever
+        // and stop the count from ever coming down. Custom-launcher accounts
+        // get their real client PID captured at launch time instead.
         let is_manual_kill = state.manual_kills.lock().unwrap().contains(&account_id);
-        let in_launch_grace = now < ready_at + 75_000;
-        if !orphans.is_empty() && !is_manual_kill && (pid.is_none() || (launcher_enabled && in_launch_grace)) {
+        if !orphans.is_empty() && !is_manual_kill && pid.is_none() {
             let adopted = orphans.remove(0);
             state
                 .account_pids
@@ -2358,11 +2345,25 @@ pub async fn do_launch(
     }
     match spawned_pid {
         Some(pid) => {
+            // Custom launcher: the spawned exe is the launcher itself, which
+            // typically opens the real Roblox client as a child and may then
+            // exit (handoff). Wait for that child RobloxPlayerBeta and track
+            // IT instead — precise attribution at launch time, so the watch
+            // loop never has to guess which process belongs to which account.
+            let mut tracked_pid = pid;
+            if launcher_path.is_some() {
+                let before = cached_or_spawn_pids(app, state).await.unwrap_or_default();
+                if let Some(child) =
+                    wait_for_new_roblox_pid(app, state, &before, Duration::from_secs(45)).await
+                {
+                    tracked_pid = child;
+                }
+            }
             state
                 .account_pids
                 .lock()
                 .unwrap()
-                .insert(account_id.to_string(), pid);
+                .insert(account_id.to_string(), tracked_pid);
             // Mirror it out straight away: the attribution is only useful for
             // startup recovery if it survives the app being closed with this
             // client still open.
