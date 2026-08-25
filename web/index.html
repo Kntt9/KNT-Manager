@@ -490,6 +490,22 @@
           <div class="ph-title" data-i18n="exploits.title">Exploits</div>
           <div class="ph-sub" data-i18n="exploits.sub">Roblox exploit status &amp; directory (WEAO)</div>
         </div>
+        <div class="exploits-guide">
+          <div class="exploits-guide-item">
+            <span class="exploits-guide-ic"><span class="material-icons-round">bolt</span></span>
+            <div class="exploits-guide-body">
+              <div class="exploits-guide-name" data-i18n="exploits.guideExt">⚡ External</div>
+              <div class="exploits-guide-desc" data-i18n="exploits.guideExtDesc">Não executam scripts .lua. São ferramentas externas que rodam por fora do Roblox (nível de kernel/driver) — como aimbot, ESP e mira. Não injetam executor de scripts.</div>
+            </div>
+          </div>
+          <div class="exploits-guide-item">
+            <span class="exploits-guide-ic"><span class="material-icons-round">code</span></span>
+            <div class="exploits-guide-body">
+              <div class="exploits-guide-name" data-i18n="exploits.guideExec">Executores</div>
+              <div class="exploits-guide-desc" data-i18n="exploits.guideExecDesc">Executam scripts .lua dentro do Roblox — o executor tradicional. Você cola ou carrega um script e ele roda funções no jogo.</div>
+            </div>
+          </div>
+        </div>
         <div class="sw">
           <div class="sc">
             <div class="sc-head" style="display:flex;align-items:center;justify-content:space-between;padding-right:10px">
@@ -499,7 +515,7 @@
               </button>
             </div>
             <div class="tab-bar" id="exploits-tabs" style="flex-shrink:0;border-bottom:1px solid var(--bd)">
-              <button class="tab-btn active" id="etab-all" onclick="exploitsTab('all')" data-i18n="exploits.all">Todos</button>
+              <button class="tab-btn active" id="etab-exec" onclick="exploitsTab('exec')" data-i18n="exploits.exec">Executores</button>
               <button class="tab-btn" id="etab-free" onclick="exploitsTab('free')" data-i18n="exploits.free">Grátis</button>
               <button class="tab-btn" id="etab-paid" onclick="exploitsTab('paid')" data-i18n="exploits.paid">Pagos</button>
               <button class="tab-btn" id="etab-external" onclick="exploitsTab('external')" data-i18n="exploits.external">External</button>
@@ -1407,6 +1423,26 @@
     </div>
     <div class="modal-actions">
       <button class="btn btn-primary" onclick="closeModal('m-help')" data-i18n="help.gotIt">Got it</button>
+    </div>
+  </div>
+</div>
+<!-- exploits consent modal -->
+<div class="overlay" id="m-exploits-consent">
+  <div class="modal" style="width:min(470px,92vw);padding:26px">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
+      <div class="consent-ic"><span class="material-icons-round">gpp_maybe</span></div>
+      <div style="font-size:16px;font-weight:700;color:var(--t1)" data-i18n="exploits.consentTitle">Aviso — uso de exploits</div>
+      <div style="font-size:12px;line-height:1.65;color:var(--t2);text-align:left" data-i18n="exploits.consentBody">Esta aba reúne ferramentas de terceiros (exploits) para o Roblox. O uso dessas ferramentas viola os Termos de Serviço do Roblox e pode resultar em punições. Ao continuar, você assume toda a responsabilidade.</div>
+      <div class="consent-list">
+        <div class="consent-item"><span class="material-icons-round">warning</span><span data-i18n="exploits.consent1">Banimento permanente da sua conta</span></div>
+        <div class="consent-item"><span class="material-icons-round">warning</span><span data-i18n="exploits.consent2">Perda de itens, robux e progresso</span></div>
+        <div class="consent-item"><span class="material-icons-round">warning</span><span data-i18n="exploits.consent3">Ferramentas de terceiros — download e uso por sua conta e risco</span></div>
+        <div class="consent-item"><span class="material-icons-round">warning</span><span data-i18n="exploits.consent4">O KNT Manager não é afiliado nem responsável por essas ferramentas</span></div>
+      </div>
+      <div style="display:flex;gap:10px;width:100%;margin-top:6px">
+        <button class="btn btn-ghost" onclick="exploitsDecline()" style="flex:1" data-i18n="exploits.consentNo">Não aceito</button>
+        <button class="btn btn-primary" onclick="exploitsAccept()" style="flex:1" data-i18n="exploits.consentYes">Entendi e aceito</button>
+      </div>
     </div>
   </div>
 </div>

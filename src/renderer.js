@@ -1472,7 +1472,10 @@ function goTo(p) {
   if (p === 'packages') renderPackages();
   if (p === 'mixer') mixInit();
   if (p === 'tracking') renderTrackingPage();
-  if (p === 'exploits') loadExploits();
+  if (p === 'exploits') {
+    if (exploitsNeedsConsent()) openModal('m-exploits-consent');
+    else loadExploits();
+  }
   // generator page
   refreshAllSliderFills();
 }
@@ -6031,7 +6034,7 @@ async function installUpdate() {
 
 // ── Exploits page (WEAO directory) ────────────────────────────────────────
 let _exploits = null;
-let _exploitsTab = 'all';
+let _exploitsTab = 'exec';
 
 function exploitsTab(tab) {
   _exploitsTab = tab;
@@ -6064,6 +6067,7 @@ function renderExploits() {
   const platform = (document.getElementById('exploits-platform') || {}).value || '';
   const statusF = (document.getElementById('exploits-status') || {}).value || '';
   let items = _exploits || [];
+  if (_exploitsTab === 'exec') items = items.filter(e => e.extype !== 'wexternal');
   if (_exploitsTab === 'free') items = items.filter(e => !!e.free);
   if (_exploitsTab === 'paid') items = items.filter(e => !e.free);
   if (_exploitsTab === 'external') items = items.filter(e => e.extype === 'wexternal');
@@ -6100,4 +6104,21 @@ function renderExploits() {
       '</div>' +
     '</div>';
   }).join('');
+}
+
+// ── Exploits consent (first-time disclaimer) ──────────────────────────────
+function exploitsNeedsConsent() {
+  try { return !localStorage.getItem('knt.exploits.consent'); }
+  catch (e) { return true; }
+}
+
+function exploitsAccept() {
+  try { localStorage.setItem('knt.exploits.consent', '1'); } catch (e) {}
+  closeModal('m-exploits-consent');
+  loadExploits();
+}
+
+function exploitsDecline() {
+  closeModal('m-exploits-consent');
+  goTo('dashboard');
 }
