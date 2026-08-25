@@ -2790,17 +2790,28 @@ async function _autoPickServer(id) {
     fetchers.push((u) => api.robloxGet(u));
     for (const fetcher of fetchers) {
       try {
-        const r = await fetcher('https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc');
-        const servers = (r && r.data && r.data.data) || [];
-        const free = servers.find(s => s.playing < (s.maxPlayers || 1)) || servers[0];
-        if (free) {
+        let all = [];
+        let cursor = '';
+        for (let page = 0; page < 3; page++) {
+          const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+          const r = await fetcher(url);
+          const data = (r && r.data) || {};
+          all = all.concat((data.data) || []);
+          cursor = data.nextPageCursor || '';
+          if (!cursor || all.length >= 100) break;
+        }
+        if (!all.length) continue;
+        const free = all.filter(s => s.playing < (s.maxPlayers || 1));
+        const pool = free.length ? free : all;
+        const pick = pool.slice().sort((a, b) => (a.playing || 0) - (b.playing || 0))[0];
+        if (pick) {
           if (launchAcc && launchAcc.id === id && !launchAcc._srvTarget && !_launchingId) {
-            launchAcc._srvTarget = placeId + ':' + free.id;
+            launchAcc._srvTarget = placeId + ':' + pick.id;
             launchAcc._srvPlaceId = placeId;
             const uid = document.querySelector('#launch-prev .prev-uid');
             if (uid) {
               const gameName = _gameNameCache[id] || extractTargetLabel(target);
-              uid.textContent = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(free.id).slice(0, 8);
+              uid.textContent = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(pick.id).slice(0, 8);
             }
           }
           return;
