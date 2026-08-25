@@ -390,6 +390,7 @@ async function continueInit() {
   api.onRobloxClosed(id => {
     _launchedIds.delete(id);
     _homeIds.delete(id);
+    _srvClearJoined(id);
     delete _launchedAt[id];
     const closedAcct = accounts.find(a => a.id === id);
     logEntry('info', 'close', `Roblox closed for ${closedAcct ? closedAcct.username : id}`, { accountId: id, username: closedAcct?.username || null, userId: closedAcct?.userId || null });
@@ -414,6 +415,7 @@ async function continueInit() {
   api.onRobloxHome(id => {
     _homeIds.add(id);
     _launchedIds.delete(id);
+    _srvClearJoined(id);
     delete _launchedAt[id];
     pushActivity('home', 'amber', t('act.home', { u: esc(_acctLabel(id)) }));
     const card = document.querySelector(`.card[data-id="${id}"]`);
@@ -3270,6 +3272,14 @@ async function doLaunch() {
     // _srvTarget is a one-shot override set by "join this specific server".
     const target = launchAcc._srvTarget || launchAcc.gameTarget || null;
     launchAcc._srvTarget = null;
+    // If this launch targets a specific server (placeId:jobId), remember it
+    // so every account's server picker can highlight where this account is.
+    if (target && target.includes(':')) {
+      const [pid, ...rest] = target.split(':');
+      _srvJoined[launchAcc.id] = { placeId: pid, jobId: rest.join(':'), serverId: String(rest.join(':')).slice(0, 8), username: launchAcc.username || launchAcc.id };
+    } else {
+      _srvClearJoined(launchAcc.id);
+    }
     res = await api.launchRoblox(launchAcc.id, launchAcc.cookie, target);
   } catch (e) {
     // Should never reject in practice (the backend command always resolves
@@ -3512,9 +3522,7 @@ function launchToServer(index) {
   if (!acc) return;
   // Temporarily override the account's target for this single launch only.
   acc._srvTarget = target;
-  // Remember which server this account joined, so other accounts' server
-  // pickers can highlight it at the top.
-  _srvJoined[id] = { placeId: _srvCtx.placeId, jobId: s.id, serverId: String(s.id).slice(0, 8), username: acc.username || id };
+  acc._srvPlaceId = _srvCtx.placeId;
   openLaunch(id);
   logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
 }
@@ -3549,7 +3557,7 @@ function joinPastedServer() {
   if (!acc) return;
   closeModal('m-servers');
   acc._srvTarget = placeId + ':' + jobId;
-  _srvJoined[id] = { placeId: placeId, jobId: jobId, serverId: String(jobId).slice(0, 8), username: acc.username || id };
+  acc._srvPlaceId = placeId;
   openLaunch(id);
   logEntry('info', 'launch', 'Joining pasted server for ' + (acc.username || id), { accountId: id, target: placeId + ':' + jobId });
 }
