@@ -3311,18 +3311,11 @@ async function openServerList(placeId, ctx) {
   if (sub) sub.textContent = t('srv.game') + ' ' + placeId;
   openModal('m-servers');
   try {
-    // placeId -> universeId (cached, same as package covers)
-    let uni = _pkgPlaceCache[placeId];
-    if (!uni) {
-      const r = await api.robloxGet('https://apis.roblox.com/universes/v1/places/' + placeId + '/universe');
-      uni = r && r.data ? r.data.universeId : null;
-      if (uni) _pkgPlaceCache[placeId] = uni;
-    }
-    if (!uni) throw new Error(t('srv.errResolve'));
-    // The server list endpoint requires a logged-in session — use the
-    // selected account's cookie when available.
+    // The server-list endpoint takes the PLACE ID directly — converting to
+    // universeId first made it reject with "The place is invalid" and the
+    // picker never showed anything.
     const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
-    const srvUrl = 'https://games.roblox.com/v1/games/' + uni + '/servers/Public?limit=50';
+    const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50';
     const r2 = acc && acc.cookie
       ? await api.robloxGetAuth(srvUrl, acc.cookie)
       : await api.robloxGet(srvUrl);
