@@ -1248,7 +1248,7 @@
   </div>
 </div>
 <!-- launch modal -->
-<div class="overlay" id="m-launch" data-backdrop-close="true">
+<div class="overlay" id="m-launch" onclick="if(event.target===this)cancelLaunchOrClose()">
   <div class="modal" onclick="event.stopPropagation()" style="width:340px">
     <div class="prev" id="launch-prev"></div>
     <div class="mst hidden" id="launch-status"></div>

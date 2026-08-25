@@ -2753,7 +2753,11 @@ async function reloadAllData() {
 function openLaunch(id) {
   launchAcc = accounts.find(a => a.id === id); if (!launchAcc) return;
   const target = launchAcc.gameTarget || '';
-  const gameName = _gameNameCache[launchAcc.id] || (target ? extractTargetLabel(target) : '');
+  let gameName = _gameNameCache[launchAcc.id] || (target ? extractTargetLabel(target) : '');
+  if (launchAcc._srvTarget && String(launchAcc._srvTarget).includes(':')) {
+    const jobId = String(launchAcc._srvTarget).split(':').slice(1).join(':');
+    gameName = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(jobId).slice(0, 8);
+  }
   const p = document.getElementById('launch-prev');
   p.innerHTML = '<div class="prev-av" id="prev-av">' + esc((launchAcc.username || '?')[0].toUpperCase()) + '</div>' +
     '<div><div class="prev-name">' + esc(launchAcc.username) + '</div>' +
@@ -2816,6 +2820,7 @@ async function cancelLaunchOrClose() {
     try { await api.cancelLaunch(id); } catch {}
     logEntry('warn', 'launch', 'Launch cancelled', { accountId: id });
   }
+  if (launchAcc) { launchAcc._srvTarget = null; launchAcc._srvPlaceId = null; }
   closeModal('m-launch');
 }
 
