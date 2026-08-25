@@ -585,6 +585,17 @@
       } catch {}
       return { ok: false, status: 0, data: null };
     },
+    weaoExploits: async () => {
+      try {
+        const r = await fetch('/proxy?url=' + encodeURIComponent('https://weao.xyz/api/status/exploits'), { signal: AbortSignal.timeout(12000) });
+        if (r.ok) return await r.json();
+      } catch {}
+      try {
+        const r = await fetch('https://weao.xyz/api/status/exploits', { signal: AbortSignal.timeout(12000) });
+        if (r.ok) return await r.json();
+      } catch {}
+      return null;
+    },
     followUser: async (cookie, username) => {
       try {
         const r = await fetch('/api/follow-user', {

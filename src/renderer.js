@@ -1472,6 +1472,7 @@ function goTo(p) {
   if (p === 'packages') renderPackages();
   if (p === 'mixer') mixInit();
   if (p === 'tracking') renderTrackingPage();
+  if (p === 'exploits') loadExploits();
   // generator page
   refreshAllSliderFills();
 }
@@ -6026,4 +6027,65 @@ async function installUpdate() {
     if (st) { st.className = 'mst err'; st.innerHTML = '<span class="material-icons-round">error_outline</span>' + esc(t('update.failed', { msg: (e && e.message) || e })); }
     if (btn) { btn.disabled = false; btn.innerHTML = '<span class="material-icons-round" style="font-size:15px">download</span>' + esc(t('update.install')); }
   }
+}
+
+// ── Exploits page (WEAO directory) ────────────────────────────────────────
+let _exploits = null;
+
+async function loadExploits() {
+  const list = document.getElementById('exploits-list');
+  const ic = document.getElementById('exploits-refresh-ic');
+  if (ic) ic.classList.add('spin');
+  if (list) list.innerHTML = '<div class="srv-skeleton" style="padding:18px 20px"><div class="skel-line" style="width:60%"></div><div class="skel-line" style="width:85%"></div><div class="skel-line" style="width:45%"></div></div>';
+  try {
+    const data = await api.weaoExploits();
+    _exploits = Array.isArray(data) ? data : [];
+    renderExploits();
+  } catch (e) {
+    if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title">' + esc(t('exploits.errTitle')) + '</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="loadExploits()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span>' + esc(t('srv.retry')) + '</span></button></div>';
+  } finally {
+    if (ic) ic.classList.remove('spin');
+  }
+}
+
+function renderExploits() {
+  const list = document.getElementById('exploits-list');
+  if (!list) return;
+  const platform = (document.getElementById('exploits-platform') || {}).value || '';
+  const statusF = (document.getElementById('exploits-status') || {}).value || '';
+  const freeOnly = (document.getElementById('exploits-free') || {}).checked || false;
+  let items = _exploits || [];
+  if (platform) items = items.filter(e => e.platform === platform);
+  if (statusF === 'updated') items = items.filter(e => !!e.updateStatus);
+  if (statusF === 'notupdated') items = items.filter(e => !e.updateStatus);
+  if (freeOnly) items = items.filter(e => !!e.free);
+  if (!items.length) {
+    list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">bolt</span><div class="srv-state-title">' + esc(t('exploits.none')) + '</div><div class="srv-state-desc">' + esc(t('exploits.noneDesc')) + '</div></div>';
+    return;
+  }
+  list.innerHTML = items.map((e, i) => {
+    const updated = !!e.updateStatus;
+    const logo = (e.slug && e.slug.logo) || '';
+    const unc = e.suncPercentage != null ? e.suncPercentage : (e.uncStatus ? 'UNC' : '');
+    const price = e.cost || (e.free ? t('exploits.free') : '');
+    return '<div class="exploit-item" style="animation-delay:' + (i * 25) + 'ms">' +
+      (logo ? '<img class="exploit-logo" src="' + esc(logo) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'"/>' : '<div class="exploit-logo exploit-logo-ph"><span class="material-icons-round">bolt</span></div>') +
+      '<div class="exploit-info">' +
+        '<div class="exploit-top"><span class="exploit-name">' + esc(e.title || '?') + '</span>' +
+          '<span class="badge ' + (updated ? 'g' : 'muted') + '" style="flex-shrink:0">' + esc(updated ? t('exploits.updated') : t('exploits.notUpdated')) + '</span></div>' +
+        '<div class="exploit-meta">' +
+          (e.version ? '<span class="exploit-ver">v' + esc(e.version) + '</span>' : '') +
+          (e.platform ? '<span class="exploit-plat">' + esc(e.platform) + '</span>' : '') +
+          (unc ? '<span class="exploit-unc">' + esc(String(unc)) + '% sUNC</span>' : '') +
+          (price ? '<span class="exploit-price">' + esc(price) + '</span>' : '') +
+        '</div>' +
+        (e.updatedDate ? '<div class="exploit-date">' + esc(e.updatedDate) + '</div>' : '') +
+      '</div>' +
+      '<div class="exploit-actions">' +
+        (e.websitelink ? '<a class="btn btn-ghost exploit-link" href="' + esc(e.websitelink) + '" target="_blank" rel="noopener" title="Website"><span class="material-icons-round" style="font-size:14px">language</span></a>' : '') +
+        (e.discordlink ? '<a class="btn btn-ghost exploit-link" href="' + esc(e.discordlink) + '" target="_blank" rel="noopener" title="Discord"><span class="material-icons-round" style="font-size:14px">forum</span></a>' : '') +
+        (e.purchaselink ? '<a class="btn btn-primary exploit-link" href="' + esc(e.purchaselink) + '" target="_blank" rel="noopener" title="Buy"><span class="material-icons-round" style="font-size:14px">shopping_cart</span></a>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
 }

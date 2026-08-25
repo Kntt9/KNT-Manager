@@ -627,6 +627,22 @@ pub async fn get_json_public(state: &AppState, url: &str) -> Result<Value, Strin
     Ok(serde_json::json!({ "ok": ok, "status": status, "data": data }))
 }
 
+// Fetches the WEAO exploit directory JSON. Only the allowed host is accepted.
+pub async fn get_weao_data(state: &AppState) -> Result<Value, String> {
+    let url = "https://weao.xyz/api/status/exploits";
+    let res = state
+        .http
+        .get(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let data: Value = res.json().await.map_err(|e| e.to_string())?;
+    Ok(data)
+}
+
 // Same as get_json_public but authenticated with the account's cookie —
 // some endpoints (e.g. the public server list) now require a logged-in
 // session and return empty/errors without it.

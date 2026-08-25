@@ -65,6 +65,9 @@
     <button class="nav-item" id="nav-tracking" onclick="goTo('tracking')">
       <span class="material-icons-round">track_changes</span><span data-i18n="nav.tracking">Tracking</span>
     </button>
+    <button class="nav-item" id="nav-exploits" onclick="goTo('exploits')">
+      <span class="material-icons-round">bolt</span><span data-i18n="nav.exploits">Exploits</span>
+    </button>
     <div class="nav-label" data-i18n="nav.secApp">App</div>
     <button class="nav-item" id="nav-settings" onclick="goTo('settings')">
       <span class="material-icons-round">settings</span><span data-i18n="nav.settings">Settings</span>
@@ -478,6 +481,45 @@
           <div class="sc tracking-accounts-sc">
             <div class="sc-head" data-i18n="tracking.accounts">Accounts</div>
             <div id="tracking-accounts" class="tracking-accounts"></div>
+          </div>
+        </div>
+      </div>
+      <!-- exploits page -->
+      <div class="page" id="page-exploits" style="overflow-y:auto">
+        <div class="ph">
+          <div class="ph-title" data-i18n="exploits.title">Exploits</div>
+          <div class="ph-sub" data-i18n="exploits.sub">Roblox exploit status &amp; directory (WEAO)</div>
+        </div>
+        <div class="sw">
+          <div class="sc">
+            <div class="sc-head" style="display:flex;align-items:center;justify-content:space-between;padding-right:10px">
+              <span style="display:flex;align-items:center;gap:8px"><span class="material-icons-round">bolt</span><span data-i18n="exploits.directory">Exploit directory</span></span>
+              <button class="btn btn-ghost" id="exploits-refresh" onclick="loadExploits()" style="padding:6px 10px;font-size:11.5px">
+                <span class="material-icons-round" id="exploits-refresh-ic" style="font-size:14px">refresh</span><span data-i18n="srv.refresh">Refresh</span>
+              </button>
+            </div>
+            <div class="sr" style="flex-wrap:wrap;gap:8px">
+              <div class="sr-left"><div class="sr-label" data-i18n="exploits.filters">Filters</div></div>
+              <select id="exploits-platform" class="srv-select" onchange="renderExploits()" style="width:130px">
+                <option value="">Todas as plataformas</option>
+                <option value="Windows">Windows</option>
+                <option value="Mac">Mac</option>
+                <option value="Android">Android</option>
+                <option value="iOS">iOS</option>
+              </select>
+              <select id="exploits-status" class="srv-select" onchange="renderExploits()" style="width:150px">
+                <option value="">Todos os status</option>
+                <option value="updated" data-i18n="exploits.updated">Atualizado</option>
+                <option value="notupdated" data-i18n="exploits.notUpdated">Não atualizado</option>
+              </select>
+              <label class="srv-hidefull" style="margin-left:auto">
+                <input type="checkbox" id="exploits-free" onchange="renderExploits()"/>
+                <span data-i18n="exploits.freeOnly">Só gratuitos</span>
+              </label>
+            </div>
+            <div id="exploits-list" class="exploits-list">
+              <div class="srv-skeleton" style="padding:18px 20px"><div class="skel-line" style="width:60%"></div><div class="skel-line" style="width:85%"></div><div class="skel-line" style="width:45%"></div></div>
+            </div>
           </div>
         </div>
       </div>

@@ -623,6 +623,11 @@ pub async fn roblox_get_json_auth(
 // Resolves a username to a "placeId:jobId" target string, which the launch
 // path already understands as "join this exact running server".
 #[tauri::command]
+pub async fn weao_get_exploits(state: State<'_, AppState>) -> Result<Value, String> {
+    crate::roblox_api::get_weao_data(&state).await
+}
+
+#[tauri::command]
 pub async fn roblox_follow_user(
     state: State<'_, AppState>,
     cookie: String,

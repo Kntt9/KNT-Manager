@@ -151,6 +151,7 @@ pub fn run() {
             commands::roblox_get_game_name,
             commands::roblox_get_json,
             commands::roblox_get_json_auth,
+            commands::weao_get_exploits,
             commands::roblox_follow_user,
             commands::altgen_generate,
             commands::roblox_launch,
