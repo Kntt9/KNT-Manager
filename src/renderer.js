@@ -3245,6 +3245,38 @@ function openLaunch(id) {
   const btn = document.getElementById('btn-launch');
   btn.disabled = false; btn.innerHTML = 'Start';
   openModal('m-launch');
+  // Auto-pick a free server for the account's game (when it has a numeric
+  // placeId) so the picker highlight works even on a plain Play click —
+  // it runs in parallel and only applies if the user hasn't confirmed yet.
+  if (/^\d+/.test(String(target).split(/[:,]/)[0])) _autoPickServer(id);
+}
+
+// Fetches one free server for the account's game and, before the user
+// confirms the launch, targets that specific server so the joined-server
+// highlight shows up even on a plain Play click.
+async function _autoPickServer(id) {
+  const acc = accounts.find(a => a.id === id);
+  const target = (acc && acc.gameTarget) || '';
+  const placeId = parseInt(String(target).split(/[:,]/)[0], 10);
+  if (!placeId) return;
+  try {
+    const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
+    const r = await fetcher('https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc');
+    const servers = (r && r.data && r.data.data) || [];
+    const free = servers.find(s => s.playing < (s.maxPlayers || 1)) || servers[0];
+    if (!free) return;
+    // Only apply if this account is still the one being launched and the
+    // user hasn't already chosen/confirmed a server (or the launch started).
+    if (launchAcc && launchAcc.id === id && !launchAcc._srvTarget && !_launchingId) {
+      launchAcc._srvTarget = placeId + ':' + free.id;
+      launchAcc._srvPlaceId = placeId;
+      const uid = document.querySelector('#launch-prev .prev-uid');
+      if (uid) {
+        const gameName = _gameNameCache[id] || extractTargetLabel(target);
+        uid.textContent = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(free.id).slice(0, 8);
+      }
+    }
+  } catch (e) { /* fall back to a normal launch */ }
 }
 // The Cancel button doubles as "abandon the launch in progress": a launch can
 // take ~30s (stagger, ticket retries, spawn retries), so closing the modal
