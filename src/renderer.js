@@ -3349,7 +3349,6 @@ function _srvSortFn() {
 function _srvHereCount(s) {
   if (!_srvCtx) return 0;
   return Object.keys(_srvJoined).filter(aid =>
-    aid !== _srvCtx.accountId &&
     _srvJoined[aid].placeId === _srvCtx.placeId &&
     _srvJoined[aid].jobId === s.id
   ).length;
@@ -3358,20 +3357,19 @@ function _srvHereCount(s) {
 function _srvHereLabel(s) {
   if (!_srvCtx) return '';
   return Object.keys(_srvJoined)
-    .filter(aid => aid !== _srvCtx.accountId && _srvJoined[aid].placeId === _srvCtx.placeId && _srvJoined[aid].jobId === s.id)
+    .filter(aid => _srvJoined[aid].placeId === _srvCtx.placeId && _srvJoined[aid].jobId === s.id)
     .map(aid => _srvJoined[aid].username)
     .join(', ');
 }
 
-// Servers where OTHER accounts are joined may not be in the API sample.
-// Inject them as synthetic top entries so the user always sees where
-// their other accounts are.
+// Servers where accounts are joined (this one or others) may not be in the
+// API sample. Inject them as synthetic top entries so the user always sees
+// where every account is, including their own.
 function _srvInjectJoined() {
   if (!_srvCtx) return;
   const known = new Set(_srvList.map(s => s.id));
   const injected = [];
   Object.keys(_srvJoined).forEach(aid => {
-    if (aid === _srvCtx.accountId) return;
     const j = _srvJoined[aid];
     if (!j || j.placeId !== _srvCtx.placeId) return;
     if (known.has(j.jobId)) return;
