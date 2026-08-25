@@ -3255,64 +3255,6 @@ function openLaunch(id) {
   const btn = document.getElementById('btn-launch');
   btn.disabled = false; btn.innerHTML = 'Start';
   openModal('m-launch');
-  // Auto-pick a free server for the account's game (when it has a numeric
-  // placeId) so the picker highlight works even on a plain Play click —
-  // it runs in parallel and only applies if the user hasn't confirmed yet.
-  if (/^\d+/.test(String(target).split(/[:,]/)[0])) _autoPickServer(id);
-}
-
-// Fetches one free server for the account's game and, before the user
-// confirms the launch, targets that specific server so the joined-server
-// highlight shows up even on a plain Play click.
-async function _autoPickServer(id) {
-  const acc = accounts.find(a => a.id === id);
-  const target = (acc && acc.gameTarget) || '';
-  const placeId = parseInt(String(target).split(/[:,]/)[0], 10);
-  if (!placeId) return;
-  // Try with the account cookie, then fall back to the anonymous endpoint,
-  // with one retry — a dead cookie or a transient empty page should not
-  // silently fall back to a random server.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const fetchers = [];
-    if (acc && acc.cookie) fetchers.push((u) => api.robloxGetAuth(u, acc.cookie));
-    fetchers.push((u) => api.robloxGet(u));
-    for (const fetcher of fetchers) {
-      try {
-        // Fetch a few pages (Asc = least occupied first) and pick the server
-        // with the FEWEST players — never a full/queued one when a free
-        // server exists.
-        let all = [];
-        let cursor = '';
-        for (let page = 0; page < 3; page++) {
-          const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-          const r = await fetcher(url);
-          const data = (r && r.data) || {};
-          all = all.concat((data.data) || []);
-          cursor = data.nextPageCursor || '';
-          if (!cursor || all.length >= 100) break;
-        }
-        if (!all.length) continue;
-        const free = all.filter(s => s.playing < (s.maxPlayers || 1));
-        const pool = free.length ? free : all;
-        const pick = pool.slice().sort((a, b) => (a.playing || 0) - (b.playing || 0))[0];
-        if (pick) {
-          // Only apply if this account is still the one being launched and the
-          // user hasn't already chosen/confirmed a server (or launch started).
-          if (launchAcc && launchAcc.id === id && !launchAcc._srvTarget && !_launchingId) {
-            launchAcc._srvTarget = placeId + ':' + pick.id;
-            launchAcc._srvPlaceId = placeId;
-            const uid = document.querySelector('#launch-prev .prev-uid');
-            if (uid) {
-              const gameName = _gameNameCache[id] || extractTargetLabel(target);
-              uid.textContent = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(pick.id).slice(0, 8);
-            }
-          }
-          return;
-        }
-      } catch (e) { /* try the next fetcher / retry */ }
-    }
-    if (attempt === 0) await new Promise(r => setTimeout(r, 400));
-  }
 }
 // The Cancel button doubles as "abandon the launch in progress": a launch can
 // take ~30s (stagger, ticket retries, spawn retries), so closing the modal
@@ -3540,6 +3482,7 @@ async function openServerList(placeId, ctx) {
     }
   }
   openModal('m-servers');
+  _srvStartPolling();
   await _fetchServers();
 }
 
@@ -3564,52 +3507,114 @@ function _srvSortOrder() {
   return ''; // ping — the API has no ping sort; the client re-sorts
 }
 
+// ── Central server data layer ─────────────────────────────────────────────
+// One cache per placeId so multiple accounts/groups using the same game
+// share the same fetch (no duplicate API calls). Entries expire after
+// SRV_TTL so the picker never shows stale servers for long.
+let _srvCache = {};    // placeId -> { at, servers }
+const SRV_TTL = 20000; // ms — how long a fetched list is considered fresh
+const SRV_POLL = 30000; // ms — auto-refresh while the picker is open
+
+// Fetches the public server list for a placeId, reusing a short-lived
+// cache. Always Asc (least occupied first) so free slots are found fast;
+// the visual sort is applied client-side when rendering.
+async function _srvFetchRaw(placeId, maxPages, forceFresh) {
+  const now = Date.now();
+  if (!forceFresh && _srvCache[placeId] && now - _srvCache[placeId].at < SRV_TTL) {
+    return _srvCache[placeId];
+  }
+  const acc = _srvCtx && _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
+  const fetchers = [];
+  if (acc && acc.cookie) fetchers.push((u) => api.robloxGetAuth(u, acc.cookie));
+  fetchers.push((u) => api.robloxGet(u));
+  let lastErr = null;
+  for (const fetcher of fetchers) {
+    try {
+      let allServers = [];
+      let cursor = '';
+      for (let page = 0; page < maxPages; page++) {
+        const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        const r = await fetcher(srvUrl);
+        const data = (r && r.data) || {};
+        const batch = (data.data) || [];
+        allServers = allServers.concat(batch);
+        cursor = data.nextPageCursor || '';
+        if (allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
+        if (!cursor) break;
+      }
+      // Deduplicate by job id (a server can appear across pages).
+      const seen = new Set();
+      allServers = allServers.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
+      _srvCache[placeId] = { at: Date.now(), servers: allServers };
+      return _srvCache[placeId];
+    } catch (e) { lastErr = e; }
+  }
+  if (lastErr) throw lastErr;
+  _srvCache[placeId] = { at: Date.now(), servers: [] };
+  return _srvCache[placeId];
+}
+
+// Re-validates a single server RIGHT BEFORE joining, with fresh data, so we
+// never enter a dead/closed server or one that just filled up.
+// Returns { ok:true, server } or { ok:false, reason:'gone'|'full' }.
+async function _srvValidateServer(placeId, jobId) {
+  try {
+    const fresh = await _srvFetchRaw(placeId, 10, true);
+    const server = fresh.servers.find(s => s.id === jobId);
+    if (!server) return { ok: false, reason: 'gone' };
+    if (server.playing >= (server.maxPlayers || 1)) return { ok: false, reason: 'full', server };
+    return { ok: true, server };
+  } catch (e) {
+    // API hiccup — don't block the user, allow the attempt.
+    return { ok: true, server: null };
+  }
+}
+
 async function _fetchServers() {
   const list = document.getElementById('srv-list');
   if (!_srvCtx) return;
   const placeId = _srvCtx.placeId;
   if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
-    const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
-    const fetcher = acc && acc.cookie
-      ? (url) => api.robloxGetAuth(url, acc.cookie)
-      : (url) => api.robloxGet(url);
-    // When hide-full is ON, ALWAYS fetch ascending (least occupied first)
-    // — the chosen sort only affects how the loaded list is re-ordered
-    // afterwards. Without Asc the API default returns only full servers.
-    const sortOrder = _srvHideFull ? 'Asc' : _srvSortOrder();
-    // Fetch up to 10 pages (500 servers) when the "hide full" filter is
-    // active, so we have a chance to find servers with free slots even
-    // when the first pages are full. Without the filter, 1 page is enough.
-    let allServers = [];
-    let cursor = '';
     const maxPages = _srvHideFull ? 10 : 1;
-    for (let page = 0; page < maxPages; page++) {
-      const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (sortOrder ? '&sortOrder=' + sortOrder : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-      const r = await fetcher(srvUrl);
-      const data = (r && r.data) || {};
-      const batch = (data.data) || [];
-      allServers = allServers.concat(batch);
-      cursor = data.nextPageCursor || '';
-      // Stop early if the filter is active and we already have free slots
-      if (_srvHideFull && allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
-      if (!cursor) break;
-    }
-    _srvList = allServers;
+    const data = await _srvFetchRaw(placeId, maxPages, false);
+    _srvList = data.servers.slice();
     _srvInjectJoined();
     if (list) _renderSrvList(list);
   } catch (e) {
     if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
   }
 }
-function launchToServer(index) {
+
+// Keeps the open picker list fresh while the user is looking at it.
+let _srvPollTimer = null;
+function _srvStartPolling() {
+  _srvStopPolling();
+  _srvPollTimer = setInterval(() => {
+    const modal = document.getElementById('m-servers');
+    if (modal && modal.classList.contains('open')) _fetchServers();
+  }, SRV_POLL);
+}
+function _srvStopPolling() {
+  if (_srvPollTimer) { clearInterval(_srvPollTimer); _srvPollTimer = null; }
+}
+async function launchToServer(index) {
   const s = _srvList[index];
   if (!s || !_srvCtx || !_srvCtx.accountId) return;
-  const target = _srvCtx.placeId + ':' + s.id;
   const id = _srvCtx.accountId;
-  closeModal('m-servers');
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
+  // Re-validate the server with FRESH data right before joining so we never
+  // enter a dead/closed server or one that just filled up.
+  const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
+    refreshServerList();
+    return;
+  }
+  const target = _srvCtx.placeId + ':' + s.id;
+  closeModal('m-servers');
   // Temporarily override the account's target for this single launch only.
   acc._srvTarget = target;
   acc._srvPlaceId = _srvCtx.placeId;
@@ -3637,6 +3642,14 @@ async function launchPkgToServer(index) {
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
   if (settings.multiInstance === false) {
     toast(t('settings.multiInstanceGroupBlocked'), 'err');
+    return;
+  }
+  // Fresh re-check before launching the whole group into this server.
+  const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
+    refreshServerList();
     return;
   }
   const target = _srvCtx.placeId + ':' + s.id;
@@ -3702,9 +3715,18 @@ async function distributePkg(pkgId) {
   const total = Math.min(members.length, freeServers.length);
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
   let ok = 0;
-  for (let i = 0; i < total; i++) {
+  let si = 0;
+  for (let i = 0; i < members.length && si < freeServers.length; i++) {
     const m = members[i];
-    const s = freeServers[i];
+    let s = null;
+    // Pick the next free server that is still valid (fresh re-check, so a
+    // server that closed between the fetch and the join is skipped).
+    while (si < freeServers.length) {
+      const cand = freeServers[si++];
+      const v = await _srvValidateServer(placeId, cand.id);
+      if (v.ok) { s = cand; break; }
+    }
+    if (!s) break;
     const target = placeId + ':' + s.id;
     logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
     try {
@@ -3717,9 +3739,9 @@ async function distributePkg(pkgId) {
         _flagCookieMaybeDead(m.id, res.error);
       }
     } catch (e) { /* keep going */ }
-    if (delay > 0 && ok < total) await new Promise(r => setTimeout(r, delay));
+    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
   }
-  toast(t('pkg.distributedN', { ok: ok, total: total, name: p.name }), ok === total ? 'ok' : 'err');
+  toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
   renderPackages();
 }
 
@@ -3735,7 +3757,7 @@ function joinRandomServer() {
   else launchToServer(pick.i);
 }
 
-function joinPastedServer() {
+async function joinPastedServer() {
   const el = document.getElementById('srv-paste');
   if (!el || !_srvCtx) return;
   const raw = el.value.trim();
@@ -3757,6 +3779,13 @@ function joinPastedServer() {
   if (!id) { toast(t('srv.pasteBad'), 'err'); return; }
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
+  // Fresh re-check before joining a pasted jobId.
+  const v = await _srvValidateServer(placeId, jobId);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
+    return;
+  }
   closeModal('m-servers');
   acc._srvTarget = placeId + ':' + jobId;
   acc._srvPlaceId = placeId;
@@ -3771,6 +3800,13 @@ async function launchPkgToPasted(placeId, jobId) {
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
   if (settings.multiInstance === false) {
     toast(t('settings.multiInstanceGroupBlocked'), 'err');
+    return;
+  }
+  // Fresh re-check before joining a pasted jobId (group-wide).
+  const v = await _srvValidateServer(placeId, jobId);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
     return;
   }
   const target = placeId + ':' + jobId;

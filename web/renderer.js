@@ -2776,50 +2776,6 @@ function openLaunch(id) {
   const btn = document.getElementById('btn-launch');
   btn.disabled = false; btn.innerHTML = 'Start';
   openModal('m-launch');
-  if (/^\d+/.test(String(target).split(/[:,]/)[0])) _autoPickServer(id);
-}
-
-async function _autoPickServer(id) {
-  const acc = accounts.find(a => a.id === id);
-  const target = (acc && acc.gameTarget) || '';
-  const placeId = parseInt(String(target).split(/[:,]/)[0], 10);
-  if (!placeId) return;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const fetchers = [];
-    if (acc && acc.cookie) fetchers.push((u) => api.robloxGetAuth(u, acc.cookie));
-    fetchers.push((u) => api.robloxGet(u));
-    for (const fetcher of fetchers) {
-      try {
-        let all = [];
-        let cursor = '';
-        for (let page = 0; page < 3; page++) {
-          const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-          const r = await fetcher(url);
-          const data = (r && r.data) || {};
-          all = all.concat((data.data) || []);
-          cursor = data.nextPageCursor || '';
-          if (!cursor || all.length >= 100) break;
-        }
-        if (!all.length) continue;
-        const free = all.filter(s => s.playing < (s.maxPlayers || 1));
-        const pool = free.length ? free : all;
-        const pick = pool.slice().sort((a, b) => (a.playing || 0) - (b.playing || 0))[0];
-        if (pick) {
-          if (launchAcc && launchAcc.id === id && !launchAcc._srvTarget && !_launchingId) {
-            launchAcc._srvTarget = placeId + ':' + pick.id;
-            launchAcc._srvPlaceId = placeId;
-            const uid = document.querySelector('#launch-prev .prev-uid');
-            if (uid) {
-              const gameName = _gameNameCache[id] || extractTargetLabel(target);
-              uid.textContent = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(pick.id).slice(0, 8);
-            }
-          }
-          return;
-        }
-      } catch (e) { /* try the next fetcher / retry */ }
-    }
-    if (attempt === 0) await new Promise(r => setTimeout(r, 400));
-  }
 }
 // The Cancel button doubles as "abandon the launch in progress": a launch can
 // take ~30s (stagger, ticket retries, spawn retries), so closing the modal
@@ -3031,6 +2987,7 @@ async function openServerList(placeId, ctx) {
     }
   }
   openModal('m-servers');
+  _srvStartPolling();
   await _fetchServers();
 }
 
@@ -3050,45 +3007,100 @@ function _srvSortOrder() {
   return '';
 }
 
+// ── Central server data layer ─────────────────────────────────────────────
+let _srvCache = {};    // placeId -> { at, servers }
+const SRV_TTL = 20000; // ms — how long a fetched list is considered fresh
+const SRV_POLL = 30000; // ms — auto-refresh while the picker is open
+
+async function _srvFetchRaw(placeId, maxPages, forceFresh) {
+  const now = Date.now();
+  if (!forceFresh && _srvCache[placeId] && now - _srvCache[placeId].at < SRV_TTL) {
+    return _srvCache[placeId];
+  }
+  const acc = _srvCtx && _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
+  const fetchers = [];
+  if (acc && acc.cookie) fetchers.push((u) => api.robloxGetAuth(u, acc.cookie));
+  fetchers.push((u) => api.robloxGet(u));
+  let lastErr = null;
+  for (const fetcher of fetchers) {
+    try {
+      let allServers = [];
+      let cursor = '';
+      for (let page = 0; page < maxPages; page++) {
+        const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        const r = await fetcher(srvUrl);
+        const data = (r && r.data) || {};
+        const batch = (data.data) || [];
+        allServers = allServers.concat(batch);
+        cursor = data.nextPageCursor || '';
+        if (allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
+        if (!cursor) break;
+      }
+      const seen = new Set();
+      allServers = allServers.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
+      _srvCache[placeId] = { at: Date.now(), servers: allServers };
+      return _srvCache[placeId];
+    } catch (e) { lastErr = e; }
+  }
+  if (lastErr) throw lastErr;
+  _srvCache[placeId] = { at: Date.now(), servers: [] };
+  return _srvCache[placeId];
+}
+
+async function _srvValidateServer(placeId, jobId) {
+  try {
+    const fresh = await _srvFetchRaw(placeId, 10, true);
+    const server = fresh.servers.find(s => s.id === jobId);
+    if (!server) return { ok: false, reason: 'gone' };
+    if (server.playing >= (server.maxPlayers || 1)) return { ok: false, reason: 'full', server };
+    return { ok: true, server };
+  } catch (e) {
+    return { ok: true, server: null };
+  }
+}
+
 async function _fetchServers() {
   const list = document.getElementById('srv-list');
   if (!_srvCtx) return;
   const placeId = _srvCtx.placeId;
   if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
-    const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
-    const fetcher = acc && acc.cookie
-      ? (url) => api.robloxGetAuth(url, acc.cookie)
-      : (url) => api.robloxGet(url);
-    const sortOrder = _srvHideFull ? 'Asc' : _srvSortOrder();
-    let allServers = [];
-    let cursor = '';
     const maxPages = _srvHideFull ? 10 : 1;
-    for (let page = 0; page < maxPages; page++) {
-      const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (sortOrder ? '&sortOrder=' + sortOrder : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-      const r = await fetcher(srvUrl);
-      const data = (r && r.data) || {};
-      const batch = (data.data) || [];
-      allServers = allServers.concat(batch);
-      cursor = data.nextPageCursor || '';
-      if (_srvHideFull && allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
-      if (!cursor) break;
-    }
-    _srvList = allServers;
+    const data = await _srvFetchRaw(placeId, maxPages, false);
+    _srvList = data.servers.slice();
     _srvInjectJoined();
     if (list) _renderSrvList(list);
   } catch (e) {
     if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
   }
 }
-function launchToServer(index) {
+
+let _srvPollTimer = null;
+function _srvStartPolling() {
+  _srvStopPolling();
+  _srvPollTimer = setInterval(() => {
+    const modal = document.getElementById('m-servers');
+    if (modal && modal.classList.contains('open')) _fetchServers();
+  }, SRV_POLL);
+}
+function _srvStopPolling() {
+  if (_srvPollTimer) { clearInterval(_srvPollTimer); _srvPollTimer = null; }
+}
+async function launchToServer(index) {
   const s = _srvList[index];
   if (!s || !_srvCtx || !_srvCtx.accountId) return;
-  const target = _srvCtx.placeId + ':' + s.id;
   const id = _srvCtx.accountId;
-  closeModal('m-servers');
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
+  const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
+    refreshServerList();
+    return;
+  }
+  const target = _srvCtx.placeId + ':' + s.id;
+  closeModal('m-servers');
   acc._srvTarget = target;
   acc._srvPlaceId = _srvCtx.placeId;
   openLaunch(id);
@@ -3113,6 +3125,14 @@ async function launchPkgToServer(index) {
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
   if (settings.multiInstance === false) {
     toast(t('settings.multiInstanceGroupBlocked'), 'err');
+    return;
+  }
+  // Fresh re-check before launching the whole group into this server.
+  const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
+    refreshServerList();
     return;
   }
   const target = _srvCtx.placeId + ':' + s.id;
@@ -3176,9 +3196,16 @@ async function distributePkg(pkgId) {
   const total = Math.min(members.length, freeServers.length);
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
   let ok = 0;
-  for (let i = 0; i < total; i++) {
+  let si = 0;
+  for (let i = 0; i < members.length && si < freeServers.length; i++) {
     const m = members[i];
-    const s = freeServers[i];
+    let s = null;
+    while (si < freeServers.length) {
+      const cand = freeServers[si++];
+      const v = await _srvValidateServer(placeId, cand.id);
+      if (v.ok) { s = cand; break; }
+    }
+    if (!s) break;
     const target = placeId + ':' + s.id;
     logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
     try {
@@ -3191,9 +3218,9 @@ async function distributePkg(pkgId) {
         _flagCookieMaybeDead(m.id, res.error);
       }
     } catch (e) { /* keep going */ }
-    if (delay > 0 && ok < total) await new Promise(r => setTimeout(r, delay));
+    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
   }
-  toast(t('pkg.distributedN', { ok: ok, total: total, name: p.name }), ok === total ? 'ok' : 'err');
+  toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
   renderPackages();
 }
 
@@ -3209,7 +3236,7 @@ function joinRandomServer() {
   else launchToServer(pick.i);
 }
 
-function joinPastedServer() {
+async function joinPastedServer() {
   const el = document.getElementById('srv-paste');
   if (!el || !_srvCtx) return;
   const raw = el.value.trim();
@@ -3230,6 +3257,13 @@ function joinPastedServer() {
   if (!id) { toast(t('srv.pasteBad'), 'err'); return; }
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
+  // Fresh re-check before joining a pasted jobId.
+  const v = await _srvValidateServer(placeId, jobId);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
+    return;
+  }
   closeModal('m-servers');
   acc._srvTarget = placeId + ':' + jobId;
   acc._srvPlaceId = placeId;
@@ -3244,6 +3278,13 @@ async function launchPkgToPasted(placeId, jobId) {
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
   if (settings.multiInstance === false) {
     toast(t('settings.multiInstanceGroupBlocked'), 'err');
+    return;
+  }
+  // Fresh re-check before joining a pasted jobId (group-wide).
+  const v = await _srvValidateServer(placeId, jobId);
+  if (!v.ok) {
+    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+    else toast(t('srv.fullNow'), 'err');
     return;
   }
   const target = placeId + ':' + jobId;

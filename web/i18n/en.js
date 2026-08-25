@@ -109,6 +109,8 @@ window.I18N.en = {
   'srv.copyFail': 'Could not copy server ID.',
   'srv.random': 'Random server',
   'srv.randomNone': 'No servers available to join randomly.',
+  'srv.gone': 'This server is no longer available. The list was refreshed.',
+  'srv.fullNow': 'Server is full right now. The list was refreshed.',
   'srv.unavailable': 'Unavailable',
   'srv.isHere': 'is here',
   'srv.pasteBad': 'Invalid format. Use placeId:jobId.',
