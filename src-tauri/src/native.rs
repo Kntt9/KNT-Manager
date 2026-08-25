@@ -1874,16 +1874,15 @@ async fn watch_tick(app: &AppHandle) {
         //
         // Deliberately NOT applied to an account whose tracked PID just died
         // for the normal Roblox path (would pin a closed account on Running).
-        // Custom launchers are an exception: their exe typically exits right
-        // after handing off to the real Roblox client, so the child
-        // RobloxPlayerBeta must be adopted for the account to keep tracking.
-        // The adoption is limited to the launch grace window (ready_at): a
-        // launcher account that was already established and whose PID dies
-        // later (user closed the game with X) must go to home/closed, never
-        // re-adopt a stranger's process — that inverted two accounts' states.
+        // Custom launchers are an exception: their exe may take a while to
+        // hand off to the real Roblox client (login, patching), so the child
+        // RobloxPlayerBeta must be adoptable for up to ~90s after launch.
+        // After that window an account is "established": a later PID death
+        // (user closed the game with X) goes to home/closed, never re-adopts
+        // a stranger's process — that inverted two accounts' states.
         // A manually-killed account also never adopts.
         let is_manual_kill = state.manual_kills.lock().unwrap().contains(&account_id);
-        let in_launch_grace = now < ready_at;
+        let in_launch_grace = now < ready_at + 75_000;
         if !orphans.is_empty() && !is_manual_kill && (pid.is_none() || (launcher_enabled && in_launch_grace)) {
             let adopted = orphans.remove(0);
             state
