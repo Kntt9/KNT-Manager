@@ -1854,7 +1854,20 @@ async fn watch_tick(app: &AppHandle) {
             // literally the configured launcher exe — never a blanket
             // "any PID is alive" (that would treat recycled PIDs as running
             // and break close-detection for the normal Roblox path).
-            Some(p) => alive_pids.contains(&p) || is_launcher_process(p),
+            //
+            // A live launcher exe only counts as "running" while a Roblox
+            // client is actually up (any_running). The launcher sitting
+            // alone in the tray (game closed with X) is the custom-launcher
+            // equivalent of the home screen — the account is not active.
+            Some(p) => {
+                if alive_pids.contains(&p) {
+                    true
+                } else if is_launcher_process(p) {
+                    any_running
+                } else {
+                    false
+                }
+            }
             None => any_running,
         };
         // Adopt an unclaimed PID only for an account that has never had one
@@ -1904,11 +1917,18 @@ async fn watch_tick(app: &AppHandle) {
         // a single slow tick used to treat every candidate as closed and
         // permanently lose the amber state.
         let home_now = home_pids(app, &state).await;
+        // A custom-launcher account whose launcher exe is still alive (in the
+        // tray) with no Roblox client up counts as "went home" too — the
+        // launcher's tray is the Fishtrap-equivalent of the Roblox home.
         for account_id in &candidates {
             let is_manual = state.manual_kills.lock().unwrap().contains(account_id);
+            let pid_here = state.account_pids.lock().unwrap().get(account_id).copied();
+            let launcher_tray = pid_here.is_some()
+                && is_launcher_process(pid_here.unwrap())
+                && !any_running;
             let went_home = match &home_now {
                 Some(h) if !h.is_empty() && !is_manual => true,
-                Some(_) => false,
+                Some(_) => launcher_tray && !is_manual,
                 None => continue, // probe failed — defer this account
             };
             if went_home {
