@@ -3306,14 +3306,26 @@ let _srvSort = 'recommended';
 
 function toggleSrvFilter(el) {
   _srvHideFull = !!el && el.checked;
-  const list = document.getElementById('srv-list');
-  if (list) _renderSrvList(list);
+  // Turning the filter ON re-fetches (needs more pages to find free
+  // slots); turning it OFF re-renders what we already have.
+  if (_srvHideFull) {
+    _fetchServers();
+  } else {
+    const list = document.getElementById('srv-list');
+    if (list) _renderSrvList(list);
+  }
 }
 
 function toggleSrvSort(el) {
   _srvSort = el ? el.value : 'recommended';
-  const list = document.getElementById('srv-list');
-  if (list) _renderSrvList(list);
+  // least/most/recommended are sorted server-side via sortOrder, so a
+  // re-fetch is needed; ping is re-sorted client-side only.
+  if (_srvSort === 'ping') {
+    const list = document.getElementById('srv-list');
+    if (list) _renderSrvList(list);
+  } else {
+    _fetchServers();
+  }
 }
 
 function _srvSortFn() {
@@ -3388,6 +3400,17 @@ async function refreshServerList() {
   }
 }
 
+function _srvSortOrder() {
+  // The API itself sorts servers by occupancy via sortOrder:
+  //   Asc  -> least occupied first (1/28, 2/28, ...)
+  //   Desc -> most occupied first (28/28, 27/28, ...)
+  // "recommended" maps to Asc too: showing free servers first is the
+  // useful default for someone who wants to join.
+  if (_srvSort === 'least' || _srvSort === 'recommended') return 'Asc';
+  if (_srvSort === 'most') return 'Desc';
+  return ''; // ping — the API has no ping sort; the client re-sorts
+}
+
 async function _fetchServers() {
   const list = document.getElementById('srv-list');
   if (!_srvCtx) return;
@@ -3398,6 +3421,7 @@ async function _fetchServers() {
     const fetcher = acc && acc.cookie
       ? (url) => api.robloxGetAuth(url, acc.cookie)
       : (url) => api.robloxGet(url);
+    const sortOrder = _srvSortOrder();
     // Fetch up to 5 pages (250 servers) when the "hide full" filter is
     // active, so we have a chance to find servers with free slots even
     // when the first page is full. Without the filter, 1 page is enough.
@@ -3405,7 +3429,7 @@ async function _fetchServers() {
     let cursor = '';
     const maxPages = _srvHideFull ? 5 : 1;
     for (let page = 0; page < maxPages; page++) {
-      const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (sortOrder ? '&sortOrder=' + sortOrder : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
       const r = await fetcher(srvUrl);
       const data = (r && r.data) || {};
       const batch = (data.data) || [];

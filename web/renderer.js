@@ -2828,14 +2828,22 @@ let _srvSort = 'recommended';
 
 function toggleSrvFilter(el) {
   _srvHideFull = !!el && el.checked;
-  const list = document.getElementById('srv-list');
-  if (list) _renderSrvList(list);
+  if (_srvHideFull) {
+    _fetchServers();
+  } else {
+    const list = document.getElementById('srv-list');
+    if (list) _renderSrvList(list);
+  }
 }
 
 function toggleSrvSort(el) {
   _srvSort = el ? el.value : 'recommended';
-  const list = document.getElementById('srv-list');
-  if (list) _renderSrvList(list);
+  if (_srvSort === 'ping') {
+    const list = document.getElementById('srv-list');
+    if (list) _renderSrvList(list);
+  } else {
+    _fetchServers();
+  }
 }
 
 function _srvSortFn() {
@@ -2909,6 +2917,12 @@ async function refreshServerList() {
   }
 }
 
+function _srvSortOrder() {
+  if (_srvSort === 'least' || _srvSort === 'recommended') return 'Asc';
+  if (_srvSort === 'most') return 'Desc';
+  return '';
+}
+
 async function _fetchServers() {
   const list = document.getElementById('srv-list');
   if (!_srvCtx) return;
@@ -2919,11 +2933,12 @@ async function _fetchServers() {
     const fetcher = acc && acc.cookie
       ? (url) => api.robloxGetAuth(url, acc.cookie)
       : (url) => api.robloxGet(url);
+    const sortOrder = _srvSortOrder();
     let allServers = [];
     let cursor = '';
     const maxPages = _srvHideFull ? 5 : 1;
     for (let page = 0; page < maxPages; page++) {
-      const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (sortOrder ? '&sortOrder=' + sortOrder : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
       const r = await fetcher(srvUrl);
       const data = (r && r.data) || {};
       const batch = (data.data) || [];
