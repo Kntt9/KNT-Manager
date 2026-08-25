@@ -3520,6 +3520,13 @@ function _extractPlaceId(str) {
   return '';
 }
 
+// True when a server has realistic headroom (2+ free slots for normal
+// games, 1 for tiny 2-slot games) — picking these avoids queueing.
+function _hasGoodSlots(s) {
+  const max = s.maxPlayers || 1;
+  return (max - (s.playing || 0)) >= (max > 2 ? 2 : 1);
+}
+
 // ── Central server data layer ─────────────────────────────────────────────
 // One cache per placeId so multiple accounts/groups using the same game
 // share the same fetch (no duplicate API calls). Entries expire after
@@ -3718,40 +3725,47 @@ async function distributePkg(pkgId) {
   const link = String(p.link || '').trim();
   const placeId = _extractPlaceId(link);
   if (!placeId) { toast(t('srv.errResolve'), 'err'); return; }
-  // Collect enough distinct free servers (one per account).
+  // Collect enough servers with REAL headroom (2+ free slots when the game
+  // allows) so accounts don't land in a queue; stop as soon as we have
+  // enough — a short fetch means a short gap before launching.
   const acc = members[0];
   const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
   const freeServers = [];
   let cursor = '';
-  for (let page = 0; page < 10 && freeServers.length < members.length; page++) {
+  for (let page = 0; page < 5 && freeServers.length < members.length; page++) {
     const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
     const r = await fetcher(url);
     const data = (r && r.data) || {};
     const batch = (data.data) || [];
     for (const s of batch) {
-      // Any free slot is enough — the pre-join validation below will
-      // catch servers that filled up between now and the actual launch.
-      if (s.playing < (s.maxPlayers || 1)) freeServers.push(s);
+      if (_hasGoodSlots(s)) freeServers.push(s);
       if (freeServers.length >= members.length) break;
     }
     cursor = data.nextPageCursor || '';
     if (!cursor) break;
   }
   if (!freeServers.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-  // Sort by fewest players first so each account gets the emptiest server
-  // available — maxPlayers varies per game (5, 7, 20, …), it's read from
-  // the API, never hardcoded.
+  // Sort by fewest players first so each account gets the emptiest server.
   freeServers.sort((a, b) => (a.playing || 0) - (b.playing || 0));
-  const total = Math.min(members.length, freeServers.length);
+  // ONE fresh re-check of every candidate (a single fast fetch, not one per
+  // candidate) so servers that died/filled between listing and launch are
+  // dropped instead of joined.
+  let valid = freeServers;
+  try {
+    const fresh = await _srvFetchRaw(placeId, 5, true, true);
+    if (fresh.servers.length) {
+      valid = freeServers.filter(s => {
+        const live = fresh.servers.find(x => x.id === s.id);
+        return live && _hasGoodSlots(live);
+      });
+    }
+  } catch (e) { /* keep the collected list if the re-check fails */ }
+  if (!valid.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
   let ok = 0;
-  let si = 0;
-  for (let i = 0; i < members.length && si < freeServers.length; i++) {
+  for (let i = 0; i < members.length && i < valid.length; i++) {
     const m = members[i];
-    let s = freeServers[si++];
-    // The list was fetched fresh seconds ago — no per-candidate re-fetch
-    // (that caused rate-limit false "gone" results and blocked everything).
-    if (!s) break;
+    const s = valid[i];
     const target = placeId + ':' + s.id;
     logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
     try {
@@ -4335,8 +4349,8 @@ async function launchPackage(id) {
       const fetcher = members[0] && members[0].cookie ? (u) => api.robloxGetAuth(u, members[0].cookie) : (u) => api.robloxGet(u);
       const r = await fetcher('https://games.roblox.com/v1/games/' + linkPlace + '/servers/Public?limit=50&sortOrder=Asc');
       const servers = (r && r.data && r.data.data) || [];
-      const free = servers.find(s => s.playing < (s.maxPlayers || 1)) || servers[0];
-      if (free) autoTarget = linkPlace + ':' + free.id;
+      const good = servers.find(s => _hasGoodSlots(s)) || servers.find(s => s.playing < (s.maxPlayers || 1));
+      if (good) autoTarget = linkPlace + ':' + good.id;
     } catch (e) { /* fall back to the plain link */ }
   }
   for (const m of members) {
