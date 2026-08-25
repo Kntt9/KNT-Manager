@@ -1949,7 +1949,17 @@ async fn watch_tick(app: &AppHandle) {
                 && !alive_pids.contains(&pid_here.unwrap());
             let went_home = match &home_now {
                 Some(h) if !h.is_empty() && !is_manual => true,
-                Some(_) => (launcher_tray || roblox_tray) && !is_manual,
+                Some(_) => {
+                    // The game process died (pid_here is dead). If any Roblox
+                    // client is still running, the account went to the home
+                    // tray (the shared launcher/home window). This is the
+                    // reliable check — the helper's home probe can lag.
+                    let game_dead_home_alive = !is_manual
+                        && pid_here.is_some()
+                        && !pid_is_alive(pid_here.unwrap())
+                        && (launcher_tray || any_running);
+                    (launcher_tray || roblox_tray || game_dead_home_alive) && !is_manual
+                }
                 None => continue, // probe failed — defer this account
             };
             if went_home {
