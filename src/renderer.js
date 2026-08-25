@@ -3319,7 +3319,13 @@ async function openServerList(placeId, ctx) {
       if (uni) _pkgPlaceCache[placeId] = uni;
     }
     if (!uni) throw new Error(t('srv.errResolve'));
-    const r2 = await api.robloxGet('https://games.roblox.com/v1/games/' + uni + '/servers/Public?limit=50');
+    // The server list endpoint requires a logged-in session — use the
+    // selected account's cookie when available.
+    const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
+    const srvUrl = 'https://games.roblox.com/v1/games/' + uni + '/servers/Public?limit=50';
+    const r2 = acc && acc.cookie
+      ? await api.robloxGetAuth(srvUrl, acc.cookie)
+      : await api.robloxGet(srvUrl);
     const servers = (r2 && r2.data && r2.data.data) || [];
     _srvList = servers;
     if (!servers.length) {

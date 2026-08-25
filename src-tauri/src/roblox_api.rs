@@ -627,6 +627,31 @@ pub async fn get_json_public(state: &AppState, url: &str) -> Result<Value, Strin
     Ok(serde_json::json!({ "ok": ok, "status": status, "data": data }))
 }
 
+// Same as get_json_public but authenticated with the account's cookie —
+// some endpoints (e.g. the public server list) now require a logged-in
+// session and return empty/errors without it.
+pub async fn get_json_auth(state: &AppState, url: &str, cookie: &str) -> Result<Value, String> {
+    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
+    let host = parsed.host_str().unwrap_or("");
+    if !(host == "roblox.com" || host.ends_with(".roblox.com")) {
+        return Err("host not allowed".into());
+    }
+    let res = state
+        .http
+        .get(url)
+        .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    let ok = res.status().is_success();
+    let data: Value = res.json().await.unwrap_or(Value::Null);
+    Ok(serde_json::json!({ "ok": ok, "status": status, "data": data }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

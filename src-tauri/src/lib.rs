@@ -150,6 +150,7 @@ pub fn run() {
             commands::roblox_set_account_priority,
             commands::roblox_get_game_name,
             commands::roblox_get_json,
+            commands::roblox_get_json_auth,
             commands::roblox_follow_user,
             commands::altgen_generate,
             commands::roblox_launch,

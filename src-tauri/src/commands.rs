@@ -611,6 +611,15 @@ pub async fn roblox_get_json(state: State<'_, AppState>, url: String) -> Result<
     crate::roblox_api::get_json_public(&state, &url).await
 }
 
+#[tauri::command]
+pub async fn roblox_get_json_auth(
+    state: State<'_, AppState>,
+    url: String,
+    cookie: String,
+) -> Result<Value, String> {
+    crate::roblox_api::get_json_auth(&state, &url, &cookie).await
+}
+
 // Resolves a username to a "placeId:jobId" target string, which the launch
 // path already understands as "join this exact running server".
 #[tauri::command]

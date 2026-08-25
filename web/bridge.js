@@ -573,6 +573,18 @@
       if (m) return { ok: true, status: 200, data: m };
       return { ok: false, status: 0, data: null };
     },
+    robloxGetAuth: async (url, cookie) => {
+      // Server list and similar endpoints need a logged-in session.
+      try {
+        const r = await fetch('/proxy?url=' + encodeURIComponent(url), { headers: { Cookie: '.ROBLOSECURITY=' + cookie }, signal: AbortSignal.timeout(9000) });
+        if (r.ok) { const data = await r.json(); return { ok: true, status: r.status, data }; }
+      } catch {}
+      try {
+        const r = await fetch(url, { headers: { Cookie: '.ROBLOSECURITY=' + cookie }, signal: AbortSignal.timeout(9000) });
+        if (r.ok) { const data = await r.json(); return { ok: true, status: r.status, data }; }
+      } catch {}
+      return { ok: false, status: 0, data: null };
+    },
     followUser: async (cookie, username) => {
       try {
         const r = await fetch('/api/follow-user', {
