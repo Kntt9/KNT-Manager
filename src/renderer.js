@@ -6074,8 +6074,15 @@ function renderExploits() {
   if (platform) items = items.filter(e => e.platform === platform);
   if (statusF === 'updated') items = items.filter(e => !!e.updateStatus);
   if (statusF === 'notupdated') items = items.filter(e => !e.updateStatus);
-  // Hierarchy: highest sUNC% first (quality ranking), then by name.
+  // Hierarchy: the most-used/stable executors are pinned on top (in order),
+  // then the rest ranked by highest sUNC% first, then by name.
+  const PRIORITY = ['Wave', 'Madium', 'Potassium', 'Volt', 'Real'];
   items = items.slice().sort((a, b) => {
+    const ia = PRIORITY.indexOf(a.title);
+    const ib = PRIORITY.indexOf(b.title);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
     const ua = a.suncPercentage != null ? a.suncPercentage : (a.uncStatus ? 99 : 0);
     const ub = b.suncPercentage != null ? b.suncPercentage : (b.uncStatus ? 99 : 0);
     return ub - ua || String(a.title).localeCompare(String(b.title));
