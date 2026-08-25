@@ -5432,6 +5432,11 @@ function renderExploits() {
   if (platform) items = items.filter(e => e.platform === platform);
   if (statusF === 'updated') items = items.filter(e => !!e.updateStatus);
   if (statusF === 'notupdated') items = items.filter(e => !e.updateStatus);
+  items = items.slice().sort((a, b) => {
+    const ua = a.suncPercentage != null ? a.suncPercentage : (a.uncStatus ? 99 : 0);
+    const ub = b.suncPercentage != null ? b.suncPercentage : (b.uncStatus ? 99 : 0);
+    return ub - ua || String(a.title).localeCompare(String(b.title));
+  });
   if (!items.length) {
     list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">bolt</span><div class="srv-state-title">' + esc(t('exploits.none')) + '</div><div class="srv-state-desc">' + esc(t('exploits.noneDesc')) + '</div></div>';
     return;
