@@ -87,6 +87,8 @@ window.I18N.pt = {
   'srv.players': 'jogadores',
   'srv.full': 'cheio',
   'srv.joinHere': 'Abrir aqui',
+  'srv.hideFull': 'Ocultar servidores cheios',
+  'srv.noFree': 'Nenhum servidor com vaga disponível.',
   'common.delete': 'Excluir',
   'common.add': 'Adicionar',
   'common.done': 'Concluir',

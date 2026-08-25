@@ -87,6 +87,8 @@ window.I18N.en = {
   'srv.players': 'players',
   'srv.full': 'full',
   'srv.joinHere': 'Join here',
+  'srv.hideFull': 'Hide full servers',
+  'srv.noFree': 'No servers with free slots.',
   'common.delete': 'Delete',
   'common.add': 'Add',
   'common.done': 'Done',

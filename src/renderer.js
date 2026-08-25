@@ -3301,6 +3301,42 @@ async function doLaunch() {
 // ── Server list (pick a specific server to join) ────────────────────────
 let _srvCtx = null;   // { placeId, accountId }
 let _srvList = [];
+let _srvHideFull = false;   // "hide full servers" filter
+
+function toggleSrvFilter(el) {
+  _srvHideFull = !!el && el.checked;
+  const list = document.getElementById('srv-list');
+  if (list) _renderSrvList(list);
+}
+
+function _renderSrvList(list) {
+  const servers = _srvList;
+  if (!servers.length) {
+    list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)" data-i18n="srv.none">No public servers available right now.</div>';
+    return;
+  }
+  // Sort: least populated first so free spots are easy to find
+  const sorted = servers.map((s, i) => ({ s, i }))
+    .sort((a, b) => (a.s.playing / (a.s.maxPlayers || 1)) - (b.s.playing / (b.s.maxPlayers || 1)))
+    .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
+  if (!sorted.length) {
+    list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)" data-i18n="srv.noFree">No servers with free slots.</div>';
+    return;
+  }
+  list.innerHTML = sorted.map(x => {
+    const s = x.s;
+    const max = s.maxPlayers || 1;
+    const full = s.playing >= max;
+    const act = _srvCtx.accountId
+      ? '<button class="btn btn-primary" style="height:28px;padding:0 12px;font-size:11.5px;flex-shrink:0" onclick="launchToServer(' + x.i + ')">' + esc(t('srv.joinHere')) + '</button>'
+      : '';
+    return '<div class="srv-item" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid ' + (full ? 'rgba(var(--red-rgb),.4)' : 'var(--bd)') + ';border-radius:10px;margin-bottom:6px;background:var(--s1)">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-size:12px;font-weight:600;color:var(--t1)">' + esc(t('srv.server')) + ' <span style="color:var(--t3);font-weight:400;font-family:var(--mono);font-size:10.5px">#' + esc(String(s.id).slice(0, 8)) + '</span></div>' +
+        '<div style="font-size:11px;color:' + (full ? 'var(--red)' : 'var(--t2)') + ';margin-top:1px">' + s.playing + '/' + max + ' ' + esc(t('srv.players')) + ' · ' + esc(s.region || '?') + ' · ' + (s.ping != null ? s.ping + 'ms' : '?') + (full ? ' · <b>' + esc(t('srv.full')) + '</b>' : '') + '</div>' +
+      '</div>' + act + '</div>';
+  }).join('');
+}
 
 async function openServerList(placeId, ctx) {
   _srvCtx = ctx || { placeId };
@@ -3325,18 +3361,7 @@ async function openServerList(placeId, ctx) {
       if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)" data-i18n="srv.none">No public servers available right now.</div>';
       return;
     }
-    if (list) list.innerHTML = servers.map((s, i) => {
-      const max = s.maxPlayers || 1;
-      const full = s.playing >= max;
-      const act = _srvCtx.accountId
-        ? '<button class="btn btn-primary" style="height:28px;padding:0 12px;font-size:11.5px;flex-shrink:0" onclick="launchToServer(' + i + ')">' + esc(t('srv.joinHere')) + '</button>'
-        : '';
-      return '<div class="srv-item" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid ' + (full ? 'rgba(var(--red-rgb),.4)' : 'var(--bd)') + ';border-radius:10px;margin-bottom:6px;background:var(--s1)">' +
-        '<div style="flex:1;min-width:0">' +
-          '<div style="font-size:12px;font-weight:600;color:var(--t1)">' + esc(t('srv.server')) + ' ' + (i + 1) + ' <span style="color:var(--t3);font-weight:400;font-family:var(--mono);font-size:10.5px">#' + esc(String(s.id).slice(0, 8)) + '</span></div>' +
-          '<div style="font-size:11px;color:' + (full ? 'var(--red)' : 'var(--t2)') + ';margin-top:1px">' + s.playing + '/' + max + ' ' + esc(t('srv.players')) + ' · ' + esc(s.region || '?') + ' · ' + (s.ping != null ? s.ping + 'ms' : '?') + (full ? ' · <b>' + esc(t('srv.full')) + '</b>' : '') + '</div>' +
-        '</div>' + act + '</div>';
-    }).join('');
+    if (list) _renderSrvList(list);
   } catch (e) {
     if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--red)">' + esc(t('srv.errList')) + ': ' + esc(e.message || String(e)) + '</div>';
   }
