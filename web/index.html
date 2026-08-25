@@ -1240,17 +1240,35 @@
 </div>
 <!-- server list modal -->
 <div class="overlay" id="m-servers" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-servers')">
-  <div class="modal" onclick="event.stopPropagation()" style="width:430px">
-    <div class="modal-title" style="display:flex;align-items:center;gap:9px"><span class="material-icons-round" style="font-size:19px;color:var(--ac)">dns</span><span data-i18n="srv.title">Servers</span></div>
-    <div class="modal-sub" id="srv-sub" style="margin-bottom:0">—</div>
-    <div id="srv-list" style="max-height:300px;overflow-y:auto;margin-top:12px"></div>
-    <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:11.5px;color:var(--t2);cursor:pointer">
-      <input type="checkbox" onchange="toggleSrvFilter(this)" style="accent-color:var(--ac)"/>
-      <span data-i18n="srv.hideFull">Hide full servers</span>
-    </label>
-    <div class="modal-actions" style="margin-top:14px">
-      <button class="btn btn-ghost" onclick="closeModal('m-servers')" data-i18n="common.close">Close</button>
+  <div class="modal srv-modal" onclick="event.stopPropagation()">
+    <div class="srv-head">
+      <div style="min-width:0">
+        <div class="srv-title"><span class="material-icons-round">dns</span><span data-i18n="srv.title">Servers</span></div>
+        <div class="srv-sub" id="srv-sub">—</div>
+      </div>
+      <button class="srv-close" onclick="closeModal('m-servers')" aria-label="Close"><span class="material-icons-round">close</span></button>
     </div>
+    <div class="srv-toolbar">
+      <div class="srv-sort">
+        <span class="srv-sort-label" data-i18n="srv.sortBy">Sort by</span>
+        <select class="srv-select" id="srv-sort" onchange="toggleSrvSort(this)">
+          <option value="recommended" data-i18n="srv.sortRecommended">Recommended for you</option>
+          <option value="least" data-i18n="srv.sortLeast">Fewest players</option>
+          <option value="most" data-i18n="srv.sortMost">Most players</option>
+          <option value="ping" data-i18n="srv.sortPing">Lowest ping</option>
+        </select>
+      </div>
+      <div class="srv-toolbar-right">
+        <label class="srv-hidefull">
+          <input type="checkbox" onchange="toggleSrvFilter(this)"/>
+          <span data-i18n="srv.hideFull">Hide full servers</span>
+        </label>
+        <button class="srv-refresh" id="srv-refresh" onclick="refreshServerList()" title="Refresh" aria-label="Refresh">
+          <span class="material-icons-round" id="srv-refresh-ic">refresh</span>
+        </button>
+      </div>
+    </div>
+    <div class="srv-scroll" id="srv-list"></div>
   </div>
 </div>
 <!-- backup modal -->

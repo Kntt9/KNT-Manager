@@ -2824,6 +2824,7 @@ async function doLaunch() {
 let _srvCtx = null;
 let _srvList = [];
 let _srvHideFull = false;
+let _srvSort = 'recommended';
 
 function toggleSrvFilter(el) {
   _srvHideFull = !!el && el.checked;
@@ -2831,46 +2832,89 @@ function toggleSrvFilter(el) {
   if (list) _renderSrvList(list);
 }
 
+function toggleSrvSort(el) {
+  _srvSort = el ? el.value : 'recommended';
+  const list = document.getElementById('srv-list');
+  if (list) _renderSrvList(list);
+}
+
+function _srvSortFn() {
+  const fns = {
+    recommended: (a, b) => (a.s.playing / (a.s.maxPlayers || 1)) - (b.s.playing / (b.s.maxPlayers || 1)),
+    least: (a, b) => a.s.playing - b.s.playing,
+    most: (a, b) => b.s.playing - a.s.playing,
+    ping: (a, b) => (a.s.ping != null ? a.s.ping : 99999) - (b.s.ping != null ? b.s.ping : 99999),
+  };
+  return fns[_srvSort] || fns.recommended;
+}
+
 function _renderSrvList(list) {
   const servers = _srvList;
   if (!servers.length) {
-    list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)" data-i18n="srv.none">No public servers available right now.</div>';
+    list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">dns</span><div class="srv-state-title" data-i18n="srv.noneTitle">No servers found</div><div class="srv-state-desc" data-i18n="srv.noneDesc">This game has no public servers right now.</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.refresh">Refresh</span></button></div>';
     return;
   }
   const sorted = servers.map((s, i) => ({ s, i }))
-    .sort((a, b) => (a.s.playing / (a.s.maxPlayers || 1)) - (b.s.playing / (b.s.maxPlayers || 1)))
+    .sort(_srvSortFn())
     .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
   if (!sorted.length) {
-    list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)" data-i18n="srv.noFree">No servers with free slots.</div>';
+    list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">filter_alt_off</span><div class="srv-state-title" data-i18n="srv.noFreeTitle">No servers with free slots</div><div class="srv-state-desc" data-i18n="srv.noFreeDesc">Try turning off the &quot;hide full servers&quot; filter.</div></div>';
     return;
   }
-  list.innerHTML = sorted.map(x => {
+  list.innerHTML = sorted.map((x, idx) => {
     const s = x.s;
     const max = s.maxPlayers || 1;
+    const playing = Math.min(s.playing, max);
     const full = s.playing >= max;
+    const pct = Math.round((playing / max) * 100);
+    const ping = s.ping != null ? s.ping + ' ms' : '—';
+    const status = full ? t('srv.full') : t('srv.available');
+    const statusCls = full ? 'srv-status-full' : 'srv-status-ok';
     const act = _srvCtx.accountId
-      ? '<button class="btn btn-primary" style="height:28px;padding:0 12px;font-size:11.5px;flex-shrink:0" onclick="launchToServer(' + x.i + ')">' + esc(t('srv.joinHere')) + '</button>'
+      ? (full
+        ? '<button class="btn srv-enter" disabled><span data-i18n="srv.full">Full</span></button>'
+        : '<button class="btn btn-primary srv-enter" onclick="launchToServer(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>')
       : '';
-    return '<div class="srv-item" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid ' + (full ? 'rgba(var(--red-rgb),.4)' : 'var(--bd)') + ';border-radius:10px;margin-bottom:6px;background:var(--s1)">' +
-      '<div style="flex:1;min-width:0">' +
-        '<div style="font-size:12px;font-weight:600;color:var(--t1)">' + esc(t('srv.server')) + ' <span style="color:var(--t3);font-weight:400;font-family:var(--mono);font-size:10.5px">#' + esc(String(s.id).slice(0, 8)) + '</span></div>' +
-        '<div style="font-size:11px;color:' + (full ? 'var(--red)' : 'var(--t2)') + ';margin-top:1px">' + s.playing + '/' + max + ' ' + esc(t('srv.players')) + ' · ' + esc(s.region || '?') + ' · ' + (s.ping != null ? s.ping + 'ms' : '?') + (full ? ' · <b>' + esc(t('srv.full')) + '</b>' : '') + '</div>' +
-      '</div>' + act + '</div>';
+    return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
+      '<div class="srv-item-left">' +
+        '<div class="srv-item-top">' +
+          '<span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
+          '<span class="srv-item-ping"><span class="material-icons-round">speed</span>' + ping + '</span>' +
+        '</div>' +
+        '<div class="srv-item-players"><b>' + playing + '</b><span class="srv-item-max"> / ' + max + ' ' + esc(t('srv.players')) + '</span></div>' +
+        '<div class="srv-bar"><div class="srv-bar-fill' + (full ? ' srv-bar-full' : '') + '" style="width:' + pct + '%"></div></div>' +
+        '<div class="srv-item-bottom"><span class="srv-status ' + statusCls + '"><span class="srv-dot"></span>' + esc(status) + '</span>' + (s.region ? '<span class="srv-region">' + esc(s.region) + '</span>' : '') + '</div>' +
+      '</div>' +
+      (act ? '<div class="srv-item-act">' + act + '</div>' : '') +
+    '</div>';
   }).join('');
 }
 
 async function openServerList(placeId, ctx) {
   _srvCtx = ctx || { placeId };
   _srvList = [];
-  const list = document.getElementById('srv-list');
   const sub = document.getElementById('srv-sub');
-  if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)"><div class="spin" style="margin:0 auto 8px;width:16px;height:16px"></div><span data-i18n="srv.loading">Looking for servers…</span></div>';
   if (sub) sub.textContent = t('srv.game') + ' ' + placeId;
   openModal('m-servers');
+  await _fetchServers();
+}
+
+async function refreshServerList() {
+  const ic = document.getElementById('srv-refresh-ic');
+  if (ic) ic.classList.add('spinning');
   try {
-    // The server-list endpoint takes the PLACE ID directly — converting to
-    // universeId first made it reject with "The place is invalid" and the
-    // picker never showed anything.
+    await _fetchServers();
+  } finally {
+    if (ic) ic.classList.remove('spinning');
+  }
+}
+
+async function _fetchServers() {
+  const list = document.getElementById('srv-list');
+  if (!_srvCtx) return;
+  const placeId = _srvCtx.placeId;
+  if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
+  try {
     const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
     const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50';
     const r2 = acc && acc.cookie
@@ -2878,13 +2922,9 @@ async function openServerList(placeId, ctx) {
       : await api.robloxGet(srvUrl);
     const servers = (r2 && r2.data && r2.data.data) || [];
     _srvList = servers;
-    if (!servers.length) {
-      if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)" data-i18n="srv.none">No public servers available right now.</div>';
-      return;
-    }
     if (list) _renderSrvList(list);
   } catch (e) {
-    if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--red)">' + esc(t('srv.errList')) + ': ' + esc(e.message || String(e)) + '</div>';
+    if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
   }
 }
 function launchToServer(index) {
