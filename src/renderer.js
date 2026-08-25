@@ -6031,6 +6031,16 @@ async function installUpdate() {
 
 // ── Exploits page (WEAO directory) ────────────────────────────────────────
 let _exploits = null;
+let _exploitsTab = 'all';
+
+function exploitsTab(tab) {
+  _exploitsTab = tab;
+  document.querySelectorAll('#exploits-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('etab-' + tab);
+  if (btn) btn.classList.add('active');
+  positionTabSlider(document.getElementById('exploits-tabs'));
+  renderExploits();
+}
 
 async function loadExploits() {
   const list = document.getElementById('exploits-list');
@@ -6053,12 +6063,13 @@ function renderExploits() {
   if (!list) return;
   const platform = (document.getElementById('exploits-platform') || {}).value || '';
   const statusF = (document.getElementById('exploits-status') || {}).value || '';
-  const freeOnly = (document.getElementById('exploits-free') || {}).checked || false;
   let items = _exploits || [];
+  if (_exploitsTab === 'free') items = items.filter(e => !!e.free);
+  if (_exploitsTab === 'paid') items = items.filter(e => !e.free);
+  if (_exploitsTab === 'external') items = items.filter(e => e.extype === 'wexternal');
   if (platform) items = items.filter(e => e.platform === platform);
   if (statusF === 'updated') items = items.filter(e => !!e.updateStatus);
   if (statusF === 'notupdated') items = items.filter(e => !e.updateStatus);
-  if (freeOnly) items = items.filter(e => !!e.free);
   if (!items.length) {
     list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">bolt</span><div class="srv-state-title">' + esc(t('exploits.none')) + '</div><div class="srv-state-desc">' + esc(t('exploits.noneDesc')) + '</div></div>';
     return;
@@ -6069,10 +6080,11 @@ function renderExploits() {
     const unc = e.suncPercentage != null ? e.suncPercentage : (e.uncStatus ? 'UNC' : '');
     const price = e.cost || (e.free ? t('exploits.free') : '');
     return '<div class="exploit-item" style="animation-delay:' + (i * 25) + 'ms">' +
+      '<span class="exploit-dot" style="background:' + (updated ? '#22c55e' : '#ef4444') + '" title="' + esc(updated ? t('exploits.updated') : t('exploits.notUpdated')) + '"></span>' +
       (logo ? '<img class="exploit-logo" src="' + esc(logo) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'"/>' : '<div class="exploit-logo exploit-logo-ph"><span class="material-icons-round">bolt</span></div>') +
       '<div class="exploit-info">' +
         '<div class="exploit-top"><span class="exploit-name">' + esc(e.title || '?') + '</span>' +
-          '<span class="badge ' + (updated ? 'g' : 'muted') + '" style="flex-shrink:0">' + esc(updated ? t('exploits.updated') : t('exploits.notUpdated')) + '</span></div>' +
+          '<span class="badge ' + (updated ? 'g' : 'r') + '" style="flex-shrink:0">' + esc(updated ? t('exploits.updated') : t('exploits.notUpdated')) + '</span></div>' +
         '<div class="exploit-meta">' +
           (e.version ? '<span class="exploit-ver">v' + esc(e.version) + '</span>' : '') +
           (e.platform ? '<span class="exploit-plat">' + esc(e.platform) + '</span>' : '') +
