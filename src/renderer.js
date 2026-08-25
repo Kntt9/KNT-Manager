@@ -3407,7 +3407,7 @@ function _srvInjectJoined() {
     // Server not in the fresh API sample: it may have closed/emptied since
     // the account joined. Keep the marker but flag it as unavailable so the
     // user never tries to join a dead server.
-    injected.push({ id: j.jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _dead: true, _joinedBy: [aid] });
+    injected.push({ id: j.jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _joinedBy: [aid] });
     known.add(j.jobId);
   });
   if (injected.length) _srvList = injected.concat(_srvList);
@@ -3431,13 +3431,14 @@ function _renderSrvList(list) {
       // Synthetic: server where another account is joined but not in the API sample
       if (s._synthetic) {
         const joinedBy = (s._joinedBy || []).map(aid => _srvJoined[aid] ? _srvJoined[aid].username : aid).join(', ');
-        return '<div class="srv-item srv-item-synthetic' + (s._dead ? ' srv-item-dead' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
-          '<div class="srv-item-left" style="display:flex;align-items:center;gap:10px">' +
+        return '<div class="srv-item srv-item-synthetic" style="animation-delay:' + (idx * 35) + 'ms">' +
+          '<div class="srv-item-left" style="display:flex;align-items:center;gap:10px;flex:1">' +
             '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' +
-            '<span class="srv-item-id" style="flex:1">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
-            (s._dead ? '<span class="srv-dead-tag">' + esc(t('srv.unavailable')) + '</span>' : '') +
+            '<span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
           '</div>' +
-          (s._dead ? '' : ((_srvCtx.accountId || _srvCtx.packageId) ? '<div class="srv-item-act"><button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '')) +
+          '<div class="srv-item-right">' +
+            '<button class="btn btn-ghost srv-copy" onclick="copyServerId(' + x.i + ')" title="' + esc(t('srv.copy')) + '"><span class="material-icons-round">content_copy</span></button>' +
+            ((_srvCtx.accountId || _srvCtx.packageId) ? '<button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
         '</div>';
       }
       const max = s.maxPlayers || 1;
@@ -3640,14 +3641,17 @@ async function launchToServer(index) {
   const id = _srvCtx.accountId;
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
-  // Re-validate the server with FRESH data right before joining so we never
-  // enter a dead/closed server or one that just filled up.
-  const v = await _srvValidateServer(_srvCtx.placeId, s.id);
-  if (!v.ok) {
-    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-    else toast(t('srv.fullNow'), 'err');
-    refreshServerList();
-    return;
+  // Synthetic cards (a highlighted server where another account IS joined)
+  // are known-live — the account sitting there proves the server exists —
+  // so skip the fresh re-check and let the user try to join it.
+  if (!s._synthetic) {
+    const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+    if (!v.ok) {
+      if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+      else toast(t('srv.fullNow'), 'err');
+      refreshServerList();
+      return;
+    }
   }
   const target = _srvCtx.placeId + ':' + s.id;
   closeModal('m-servers');
