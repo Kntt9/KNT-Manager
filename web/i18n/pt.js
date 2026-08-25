@@ -107,6 +107,7 @@ window.I18N.pt = {
   'srv.copyFail': 'Não foi possível copiar o ID.',
   'srv.random': 'Servidor aleatório',
   'srv.randomNone': 'Nenhum servidor disponível para entrar aleatoriamente.',
+  'srv.unavailable': 'Indisponível',
   'srv.isHere': 'está aqui',
   'srv.pasteBad': 'Formato inválido. Use placeId:jobId.',
   'common.delete': 'Excluir',

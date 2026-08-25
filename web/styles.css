@@ -697,6 +697,9 @@ input[type="range"]:disabled{opacity:.4;cursor:not-allowed}
 .srv-here .material-icons-round{font-size:10px}
 .srv-item-synthetic{border-color:var(--ac3);background:linear-gradient(135deg,color-mix(in srgb,var(--ac2) 80%,transparent),var(--s1))}
 .srv-item-synthetic:hover{transform:translateY(-1px);box-shadow:var(--shadow-2)}
+.srv-item-dead{opacity:.55;border-color:var(--bd)}
+.srv-item-dead:hover{transform:none;box-shadow:none}
+.srv-dead-tag{font-size:10px;font-weight:700;color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent);border-radius:5px;padding:2px 7px;white-space:nowrap;flex-shrink:0}
 .srv-paste{display:flex;align-items:center;gap:8px;padding:10px 20px 14px;border-top:1px solid var(--bd)}
 .srv-paste input{flex:1;min-width:0;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t1);font-size:12px;height:30px;padding:0 10px;font-family:var(--mono);outline:none;transition:border-color 150ms var(--smooth)}
 .srv-paste input:focus{border-color:var(--ac3)}

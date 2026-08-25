@@ -2958,7 +2958,7 @@ function _srvInjectJoined() {
     const j = _srvJoined[aid];
     if (!j || String(j.placeId) !== pid) return;
     if (known.has(j.jobId)) return;
-    injected.push({ id: j.jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _joinedBy: [aid] });
+    injected.push({ id: j.jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _dead: true, _joinedBy: [aid] });
     known.add(j.jobId);
   });
   if (injected.length) _srvList = injected.concat(_srvList);
@@ -2981,14 +2981,15 @@ function _renderSrvList(list) {
     const s = x.s;
     if (s._synthetic) {
       const joinedBy = (s._joinedBy || []).map(aid => _srvJoined[aid] ? _srvJoined[aid].username : aid).join(', ');
-      return '<div class="srv-item srv-item-synthetic" style="animation-delay:' + (idx * 35) + 'ms">' +
+      return '<div class="srv-item srv-item-synthetic' + (s._dead ? ' srv-item-dead' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
         '<div class="srv-item-left" style="display:flex;align-items:center;gap:10px">' +
           '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' +
           '<span class="srv-item-id" style="flex:1">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
+          (s._dead ? '<span class="srv-dead-tag">' + esc(t('srv.unavailable')) + '</span>' : '') +
         '</div>' +
-        ((_srvCtx.accountId || _srvCtx.packageId) ? '<div class="srv-item-act"><button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
-        '</div>';
-      }
+        (s._dead ? '' : ((_srvCtx.accountId || _srvCtx.packageId) ? '<div class="srv-item-act"><button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '')) +
+      '</div>';
+    }
     const max = s.maxPlayers || 1;
     const playing = Math.min(s.playing, max);
     const full = s.playing >= max;
