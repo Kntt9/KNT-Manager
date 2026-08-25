@@ -1140,6 +1140,11 @@
       </div>
     </div>
     <div class="srv-scroll" id="srv-list"></div>
+    <div class="srv-paste">
+      <span class="material-icons-round" style="font-size:14px;color:var(--t3)">link</span>
+      <input type="text" id="srv-paste" placeholder="placeId:jobId" spellcheck="false" onkeydown="if(event.key==='Enter')joinPastedServer()"/>
+      <button class="btn btn-primary srv-enter" onclick="joinPastedServer()"><span class="material-icons-round" style="font-size:14px">play_arrow</span><span data-i18n="srv.enter">Enter</span></button>
+    </div>
   </div>
 </div>
 <!-- backup modal -->

@@ -3363,6 +3363,24 @@ function _srvHereLabel(s) {
     .join(', ');
 }
 
+// Servers where OTHER accounts are joined may not be in the API sample.
+// Inject them as synthetic top entries so the user always sees where
+// their other accounts are.
+function _srvInjectJoined() {
+  if (!_srvCtx) return;
+  const known = new Set(_srvList.map(s => s.id));
+  const injected = [];
+  Object.keys(_srvJoined).forEach(aid => {
+    if (aid === _srvCtx.accountId) return;
+    const j = _srvJoined[aid];
+    if (!j || j.placeId !== _srvCtx.placeId) return;
+    if (known.has(j.jobId)) return;
+    injected.push({ id: j.jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _joinedBy: [aid] });
+    known.add(j.jobId);
+  });
+  if (injected.length) _srvList = injected.concat(_srvList);
+}
+
 function _renderSrvList(list) {
   const servers = _srvList;
   if (!servers.length) {
@@ -3377,8 +3395,19 @@ function _renderSrvList(list) {
     return;
   }
   list.innerHTML = sorted.map((x, idx) => {
-    const s = x.s;
-    const max = s.maxPlayers || 1;
+      const s = x.s;
+      // Synthetic: server where another account is joined but not in the API sample
+      if (s._synthetic) {
+        const joinedBy = (s._joinedBy || []).map(aid => _srvJoined[aid] ? _srvJoined[aid].username : aid).join(', ');
+        return '<div class="srv-item srv-item-synthetic" style="animation-delay:' + (idx * 35) + 'ms">' +
+          '<div class="srv-item-left" style="display:flex;align-items:center;gap:10px">' +
+            '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' +
+            '<span class="srv-item-id" style="flex:1">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
+          '</div>' +
+          (_srvCtx.accountId ? '<div class="srv-item-act"><button class="btn btn-primary srv-enter" onclick="launchToServer(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
+        '</div>';
+      }
+      const max = s.maxPlayers || 1;
     const playing = Math.min(s.playing, max);
     const full = s.playing >= max;
     const pct = Math.round((playing / max) * 100);
@@ -3447,7 +3476,10 @@ async function _fetchServers() {
     const fetcher = acc && acc.cookie
       ? (url) => api.robloxGetAuth(url, acc.cookie)
       : (url) => api.robloxGet(url);
-    const sortOrder = _srvSortOrder();
+    // When hide-full is ON, ALWAYS fetch ascending (least occupied first)
+    // — the chosen sort only affects how the loaded list is re-ordered
+    // afterwards. Without Asc the API default returns only full servers.
+    const sortOrder = _srvHideFull ? 'Asc' : _srvSortOrder();
     // Fetch up to 10 pages (500 servers) when the "hide full" filter is
     // active, so we have a chance to find servers with free slots even
     // when the first pages are full. Without the filter, 1 page is enough.
@@ -3466,6 +3498,7 @@ async function _fetchServers() {
       if (!cursor) break;
     }
     _srvList = allServers;
+    _srvInjectJoined();
     if (list) _renderSrvList(list);
   } catch (e) {
     if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
@@ -3497,6 +3530,30 @@ function joinRandomServer() {
   if (!pool.length) { toast(t('srv.randomNone'), 'err'); return; }
   const pick = pool[Math.floor(Math.random() * pool.length)];
   launchToServer(pick.i);
+}
+
+function joinPastedServer() {
+  const el = document.getElementById('srv-paste');
+  if (!el || !_srvCtx) return;
+  const raw = el.value.trim();
+  if (!raw) return;
+  let placeId = _srvCtx.placeId;
+  let jobId = raw;
+  if (raw.includes(':')) {
+    const parts = raw.split(':');
+    if (/^\d+$/.test(parts[0])) placeId = parts[0];
+    jobId = parts.slice(1).join(':');
+  }
+  if (!/^\d+$/.test(String(placeId)) || !jobId) { toast(t('srv.pasteBad'), 'err'); return; }
+  const id = _srvCtx.accountId;
+  if (!id) { toast(t('srv.pasteBad'), 'err'); return; }
+  const acc = accounts.find(a => a.id === id);
+  if (!acc) return;
+  closeModal('m-servers');
+  acc._srvTarget = placeId + ':' + jobId;
+  _srvJoined[id] = { placeId: placeId, jobId: jobId, serverId: String(jobId).slice(0, 8), username: acc.username || id };
+  openLaunch(id);
+  logEntry('info', 'launch', 'Joining pasted server for ' + (acc.username || id), { accountId: id, target: placeId + ':' + jobId });
 }
 
 async function copyServerId(index) {
