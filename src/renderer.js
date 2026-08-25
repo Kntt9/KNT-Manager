@@ -3367,7 +3367,7 @@ function _renderSrvList(list) {
     return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
       '<div class="srv-item-left">' +
         '<div class="srv-item-top">' +
-          '<span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
+          '<span class="srv-item-id-wrap"><span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span><button class="srv-copy" onclick="copyServerId(' + x.i + ')" title="' + esc(t('srv.copyId')) + '" aria-label="' + esc(t('srv.copyId')) + '"><span class="material-icons-round">content_copy</span></button></span>' +
           '<span class="srv-item-ping"><span class="material-icons-round">speed</span>' + ping + '</span>' +
         '</div>' +
         '<div class="srv-item-players"><b>' + playing + '</b><span class="srv-item-max"> / ' + max + ' ' + esc(t('srv.players')) + '</span></div>' +
@@ -3455,6 +3455,18 @@ function launchToServer(index) {
   acc._srvTarget = target;
   openLaunch(id);
   logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
+}
+
+async function copyServerId(index) {
+  const s = _srvList[index];
+  if (!s || !_srvCtx) return;
+  const target = _srvCtx.placeId + ':' + s.id;
+  try {
+    await navigator.clipboard.writeText(target);
+    toast(t('srv.copied'), 'ok');
+  } catch (e) {
+    toast(t('srv.copyFail'), 'err');
+  }
 }
 
 // ── Packages ──────────────────────────────────────────────────────────────
