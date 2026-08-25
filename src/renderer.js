@@ -3507,6 +3507,19 @@ function _srvSortOrder() {
   return ''; // ping — the API has no ping sort; the client re-sorts
 }
 
+// Extracts a numeric placeId from any common format: a pure id, a
+// "placeId:jobId" pair, or a roblox.com/games/<id> URL. Returns '' when
+// nothing numeric is found.
+function _extractPlaceId(str) {
+  const s = String(str || '').trim();
+  if (!s) return '';
+  const m = s.match(/^\d+/);
+  if (m) return m[0];
+  const u = s.match(/roblox\.com\/games\/(\d+)/);
+  if (u) return u[1];
+  return '';
+}
+
 // ── Central server data layer ─────────────────────────────────────────────
 // One cache per placeId so multiple accounts/groups using the same game
 // share the same fetch (no duplicate API calls). Entries expire after
@@ -3548,6 +3561,7 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh, full) {
       const seen = new Set();
       allServers = allServers.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
       _srvCache[placeId] = { at: Date.now(), servers: allServers };
+      _srvCacheSweep();
       return _srvCache[placeId];
     } catch (e) { lastErr = e; }
   }
@@ -3562,6 +3576,9 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh, full) {
 async function _srvValidateServer(placeId, jobId) {
   try {
     const fresh = await _srvFetchRaw(placeId, 10, true, true);
+    // An empty fresh list means the API hiccuped (rate limit, transient
+    // failure) — never trust it enough to declare a server dead.
+    if (!fresh.servers.length) return { ok: true, server: null };
     const server = fresh.servers.find(s => s.id === jobId);
     if (!server) return { ok: false, reason: 'gone' };
     if (server.playing >= (server.maxPlayers || 1)) return { ok: false, reason: 'full', server };
@@ -3569,6 +3586,16 @@ async function _srvValidateServer(placeId, jobId) {
   } catch (e) {
     // API hiccup — don't block the user, allow the attempt.
     return { ok: true, server: null };
+  }
+}
+
+// Keeps the cache bounded: drops expired entries once it grows past a
+// sane size (placeIds accumulate as the user opens different games).
+function _srvCacheSweep() {
+  const keys = Object.keys(_srvCache);
+  if (keys.length > 12) {
+    const now = Date.now();
+    keys.forEach(k => { if (now - _srvCache[k].at > SRV_TTL) delete _srvCache[k]; });
   }
 }
 
@@ -3630,8 +3657,8 @@ function openPkgServerList(pkgId) {
   const p = packages.find(x => x.id === pkgId);
   if (!p) return;
   const link = String(p.link || '').trim();
-  const placeId = link.split(/[:,]/)[0];
-  if (!/^\d+$/.test(placeId)) { toast(t('srv.errResolve'), 'err'); return; }
+  const placeId = _extractPlaceId(link);
+  if (!placeId) { toast(t('srv.errResolve'), 'err'); return; }
   openServerList(parseInt(placeId, 10), { packageId: pkgId, placeId: parseInt(placeId, 10) });
 }
 
@@ -3689,8 +3716,8 @@ async function distributePkg(pkgId) {
     return;
   }
   const link = String(p.link || '').trim();
-  const placeId = link.split(/[:,]/)[0];
-  if (!/^\d+$/.test(placeId)) { toast(t('srv.errResolve'), 'err'); return; }
+  const placeId = _extractPlaceId(link);
+  if (!placeId) { toast(t('srv.errResolve'), 'err'); return; }
   // Collect enough distinct free servers (one per account).
   const acc = members[0];
   const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
@@ -3983,7 +4010,7 @@ function renderPackages() {
     const avatarsHtml = shown.map(m => `<div class="pkg-avatar${_launchedIds.has(m.id) ? ' online' : ''}${_homeIds.has(m.id) ? ' home' : ''}" id="pkg-av-${p.id}-${m.id}" data-acc-id="${m.id}" data-uid="${m.userId || ''}" data-uname="${esc(m.username || '')}" data-nick="${esc(m.nickname || '')}">${esc((m.username || '?')[0].toUpperCase())}<span class="pkg-avatar-dot"></span></div>`).join('')
       + (extra > 0 ? `<div class="pkg-avatar more">+${extra}</div>` : '');
     const pct = st.total ? Math.round((st.running + st.home) / st.total * 100) : 0;
-    const pkgPlace = /^\d+/.test(String(p.link || '').split(/[:,]/)[0]) ? String(p.link).split(/[:,]/)[0] : '';
+    const pkgPlace = _extractPlaceId(p.link);
     const membersHtml = members.map(m => {
       const cls = _homeIds.has(m.id) ? 'home' : (_launchedIds.has(m.id) ? 'running' : (_cookieStatus[m.id] === 'dead' ? 'dead' : 'idle'));
       const lbl = _homeIds.has(m.id) ? t('accounts.home') : (_launchedIds.has(m.id) ? t('accounts.launched') : (_cookieStatus[m.id] === 'dead' ? t('accounts.expired') : t('accounts.notLaunched')));
@@ -4215,6 +4242,9 @@ function setPackageLink(id, value) {
   p.link = value.trim();
   api.savePackages(packages);
   loadPkgCover(id, p.link);
+  // Re-render so the server-picker (🖥️) and distribute (↗️) buttons show
+  // up as soon as a numeric placeId is present.
+  renderPackages();
 }
 
 // ── Game cover images ─────────────────────────────────────────────────────
@@ -4299,8 +4329,8 @@ async function launchPackage(id) {
   // every account lands in the same instance and the joined-server
   // highlight gets registered for all of them.
   let autoTarget = null;
-  const linkPlace = link.split(/[:,]/)[0];
-  if (/^\d+$/.test(linkPlace) && !link.includes(':')) {
+  const linkPlace = _extractPlaceId(link);
+  if (linkPlace && !link.includes(':')) {
     try {
       const fetcher = members[0] && members[0].cookie ? (u) => api.robloxGetAuth(u, members[0].cookie) : (u) => api.robloxGet(u);
       const r = await fetcher('https://games.roblox.com/v1/games/' + linkPlace + '/servers/Public?limit=50&sortOrder=Asc');
