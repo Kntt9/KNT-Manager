@@ -3395,12 +3395,27 @@ async function _fetchServers() {
   if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
     const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
-    const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50';
-    const r2 = acc && acc.cookie
-      ? await api.robloxGetAuth(srvUrl, acc.cookie)
-      : await api.robloxGet(srvUrl);
-    const servers = (r2 && r2.data && r2.data.data) || [];
-    _srvList = servers;
+    const fetcher = acc && acc.cookie
+      ? (url) => api.robloxGetAuth(url, acc.cookie)
+      : (url) => api.robloxGet(url);
+    // Fetch up to 5 pages (250 servers) when the "hide full" filter is
+    // active, so we have a chance to find servers with free slots even
+    // when the first page is full. Without the filter, 1 page is enough.
+    let allServers = [];
+    let cursor = '';
+    const maxPages = _srvHideFull ? 5 : 1;
+    for (let page = 0; page < maxPages; page++) {
+      const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      const r = await fetcher(srvUrl);
+      const data = (r && r.data) || {};
+      const batch = (data.data) || [];
+      allServers = allServers.concat(batch);
+      cursor = data.nextPageCursor || '';
+      // Stop early if the filter is active and we already have free slots
+      if (_srvHideFull && allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
+      if (!cursor) break;
+    }
+    _srvList = allServers;
     if (list) _renderSrvList(list);
   } catch (e) {
     if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
