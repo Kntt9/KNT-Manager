@@ -2871,16 +2871,18 @@ function _srvSortFn() {
 
 function _srvHereCount(s) {
   if (!_srvCtx) return 0;
+  const pid = String(_srvCtx.placeId);
   return Object.keys(_srvJoined).filter(aid =>
-    _srvJoined[aid].placeId === _srvCtx.placeId &&
+    String(_srvJoined[aid].placeId) === pid &&
     _srvJoined[aid].jobId === s.id
   ).length;
 }
 
 function _srvHereLabel(s) {
   if (!_srvCtx) return '';
+  const pid = String(_srvCtx.placeId);
   return Object.keys(_srvJoined)
-    .filter(aid => _srvJoined[aid].placeId === _srvCtx.placeId && _srvJoined[aid].jobId === s.id)
+    .filter(aid => String(_srvJoined[aid].placeId) === pid && _srvJoined[aid].jobId === s.id)
     .map(aid => _srvJoined[aid].username)
     .join(', ');
 }
@@ -2890,11 +2892,12 @@ function _srvHereLabel(s) {
 // where every account is, including their own.
 function _srvInjectJoined() {
   if (!_srvCtx) return;
+  const pid = String(_srvCtx.placeId);
   const known = new Set(_srvList.map(s => s.id));
   const injected = [];
   Object.keys(_srvJoined).forEach(aid => {
     const j = _srvJoined[aid];
-    if (!j || j.placeId !== _srvCtx.placeId) return;
+    if (!j || String(j.placeId) !== pid) return;
     if (known.has(j.jobId)) return;
     injected.push({ id: j.jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _joinedBy: [aid] });
     known.add(j.jobId);
