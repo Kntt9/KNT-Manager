@@ -108,6 +108,8 @@ window.I18N.en = {
   'srv.copyId': 'Copy server ID',
   'srv.copied': 'Server ID copied!',
   'srv.copyFail': 'Could not copy server ID.',
+  'srv.random': 'Random server',
+  'srv.randomNone': 'No servers available to join randomly.',
   'common.delete': 'Delete',
   'common.add': 'Add',
   'common.done': 'Done',

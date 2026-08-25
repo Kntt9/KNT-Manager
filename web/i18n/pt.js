@@ -104,6 +104,8 @@ window.I18N.pt = {
   'srv.copyId': 'Copiar ID do servidor',
   'srv.copied': 'ID do servidor copiado!',
   'srv.copyFail': 'Não foi possível copiar o ID.',
+  'srv.random': 'Servidor aleatório',
+  'srv.randomNone': 'Nenhum servidor disponível para entrar aleatoriamente.',
   'common.delete': 'Excluir',
   'common.add': 'Adicionar',
   'common.done': 'Concluir',

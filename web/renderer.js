@@ -2825,6 +2825,11 @@ let _srvCtx = null;
 let _srvList = [];
 let _srvHideFull = false;
 let _srvSort = 'recommended';
+let _srvJoined = {};
+
+function _srvClearJoined(accountId) {
+  delete _srvJoined[accountId];
+}
 
 function toggleSrvFilter(el) {
   _srvHideFull = !!el && el.checked;
@@ -2856,14 +2861,31 @@ function _srvSortFn() {
   return fns[_srvSort] || fns.recommended;
 }
 
+function _srvHereCount(s) {
+  if (!_srvCtx) return 0;
+  return Object.keys(_srvJoined).filter(aid =>
+    aid !== _srvCtx.accountId &&
+    _srvJoined[aid].placeId === _srvCtx.placeId &&
+    _srvJoined[aid].jobId === s.id
+  ).length;
+}
+
+function _srvHereLabel(s) {
+  if (!_srvCtx) return '';
+  return Object.keys(_srvJoined)
+    .filter(aid => aid !== _srvCtx.accountId && _srvJoined[aid].placeId === _srvCtx.placeId && _srvJoined[aid].jobId === s.id)
+    .map(aid => _srvJoined[aid].username)
+    .join(', ');
+}
+
 function _renderSrvList(list) {
   const servers = _srvList;
   if (!servers.length) {
     list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">dns</span><div class="srv-state-title" data-i18n="srv.noneTitle">No servers found</div><div class="srv-state-desc" data-i18n="srv.noneDesc">This game has no public servers right now.</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.refresh">Refresh</span></button></div>';
     return;
   }
-  const sorted = servers.map((s, i) => ({ s, i }))
-    .sort(_srvSortFn())
+  const sorted = servers.map((s, i) => ({ s, i, here: _srvHereCount(s) }))
+    .sort((a, b) => (b.here - a.here) || _srvSortFn()(a, b))
     .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
   if (!sorted.length) {
     list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">filter_alt_off</span><div class="srv-state-title" data-i18n="srv.noFreeTitle">No servers with free slots</div><div class="srv-state-desc" data-i18n="srv.noFreeDesc">Try turning off the &quot;hide full servers&quot; filter.</div></div>';
@@ -2878,13 +2900,16 @@ function _renderSrvList(list) {
     const ping = s.ping != null ? s.ping + ' ms' : '—';
     const status = full ? t('srv.full') : t('srv.available');
     const statusCls = full ? 'srv-status-full' : 'srv-status-ok';
+    const srvHere = _srvHereLabel(s);
     const act = _srvCtx.accountId
       ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" onclick="launchToServer(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
       : '';
     return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
       '<div class="srv-item-left">' +
         '<div class="srv-item-top">' +
-          '<span class="srv-item-id-wrap"><span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span><button class="srv-copy" onclick="copyServerId(' + x.i + ')" title="' + esc(t('srv.copyId')) + '" aria-label="' + esc(t('srv.copyId')) + '"><span class="material-icons-round">content_copy</span></button></span>' +
+          '<span class="srv-item-id-wrap"><span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
+            (srvHere ? '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(srvHere) + '</span>' : '') +
+            '<button class="srv-copy" onclick="copyServerId(' + x.i + ')" title="' + esc(t('srv.copyId')) + '" aria-label="' + esc(t('srv.copyId')) + '"><span class="material-icons-round">content_copy</span></button></span>' +
           '<span class="srv-item-ping"><span class="material-icons-round">speed</span>' + ping + '</span>' +
         '</div>' +
         '<div class="srv-item-players"><b>' + playing + '</b><span class="srv-item-max"> / ' + max + ' ' + esc(t('srv.players')) + '</span></div>' +
@@ -2934,7 +2959,7 @@ async function _fetchServers() {
     const sortOrder = _srvSortOrder();
     let allServers = [];
     let cursor = '';
-    const maxPages = _srvHideFull ? 5 : 1;
+    const maxPages = _srvHideFull ? 10 : 1;
     for (let page = 0; page < maxPages; page++) {
       const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50' + (sortOrder ? '&sortOrder=' + sortOrder : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
       const r = await fetcher(srvUrl);
@@ -2960,8 +2985,20 @@ function launchToServer(index) {
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
   acc._srvTarget = target;
+  _srvJoined[id] = { placeId: _srvCtx.placeId, jobId: s.id, serverId: String(s.id).slice(0, 8), username: acc.username || id };
   openLaunch(id);
   logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
+}
+
+function joinRandomServer() {
+  if (!_srvCtx || !_srvCtx.accountId) return;
+  if (!_srvList.length) { toast(t('srv.randomNone'), 'err'); return; }
+  const pool = _srvList
+    .map((s, i) => ({ s, i }))
+    .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
+  if (!pool.length) { toast(t('srv.randomNone'), 'err'); return; }
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  launchToServer(pick.i);
 }
 
 async function copyServerId(index) {

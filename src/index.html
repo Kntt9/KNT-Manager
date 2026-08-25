@@ -1131,6 +1131,9 @@
           <input type="checkbox" onchange="toggleSrvFilter(this)"/>
           <span data-i18n="srv.hideFull">Hide full servers</span>
         </label>
+        <button class="srv-refresh" onclick="joinRandomServer()" title="Random server" aria-label="Random server">
+          <span class="material-icons-round">casino</span>
+        </button>
         <button class="srv-refresh" id="srv-refresh" onclick="refreshServerList()" title="Refresh" aria-label="Refresh">
           <span class="material-icons-round" id="srv-refresh-ic">refresh</span>
         </button>
