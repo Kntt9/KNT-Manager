@@ -647,6 +647,7 @@
               </div>
             </div>
             <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.lockChannel">Lock channel</div><div class="sr-desc" data-i18n="settings.lockChannelDesc">Always launches the channel above, and refuses to launch a locally installed build that isn't on it. Off just runs whatever's newest on disk.</div></div><label class="toggle"><input type="checkbox" id="set-lockchannel" onchange="toggleLockChannel()"/><span class="toggle-trk"></span></label></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.launcher">Roblox launcher</div><div class="sr-desc" data-i18n="settings.launcherDesc">Use a custom launcher executable (e.g. Fishtrap) instead of the official RobloxPlayerBeta. The launcher receives the same roblox-player URI. Leave empty for the default.</div></div><div style="display:flex;gap:6px;align-items:center;flex:1"><input type="text" id="set-launcher-path" class="sr-input" data-i18n-ph="settings.launcherPh" placeholder="C:\Fishtrap\Fishtrap.exe" style="flex:1;width:auto;font-family:'JetBrains Mono',monospace;font-size:11.5px" onchange="saveLauncherPath()"/><button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 10px;flex-shrink:0" onclick="pickLauncherPath()" title="Browse"><span class="material-icons-round" style="font-size:14px">folder_open</span></button></div></div>
           </div>
         </div>
         <div class="sw" id="stab-panel-privacy" style="display:none">
@@ -1234,6 +1235,17 @@
     <div class="trash-list" id="cat-list"></div>
     <div class="modal-actions">
       <button class="btn btn-primary" onclick="closeModal('m-categories')" data-i18n="common.done">Done</button>
+    </div>
+  </div>
+</div>
+<!-- server list modal -->
+<div class="overlay" id="m-servers" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-servers')">
+  <div class="modal" onclick="event.stopPropagation()" style="width:430px">
+    <div class="modal-title" style="display:flex;align-items:center;gap:9px"><span class="material-icons-round" style="font-size:19px;color:var(--ac)">dns</span><span data-i18n="srv.title">Servers</span></div>
+    <div class="modal-sub" id="srv-sub" style="margin-bottom:0">—</div>
+    <div id="srv-list" style="max-height:300px;overflow-y:auto;margin-top:12px"></div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn btn-ghost" onclick="closeModal('m-servers')" data-i18n="common.close">Close</button>
     </div>
   </div>
 </div>

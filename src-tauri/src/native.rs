@@ -1548,23 +1548,34 @@ const MIN_PLAUSIBLE_EXE_BYTES: u64 = 5_000_000;
 // force-launched; returning None falls through to the existing
 // roblox-player: URI fallback, which hands off to Roblox's own updater to
 // fetch/launch the real LIVE client instead.
-async fn spawn_roblox_direct(roblox_uri: &str, live_version: Option<&str>) -> Option<u32> {
-    let (root, dir, exe) = get_latest_roblox_install()?;
-    // Bootstrapper forks (Bloxstrap etc.) only touch their version folder's
-    // mtime/name on their OWN update cadence, not on every Roblox content
-    // update -- so this folder-name compare can go permanently stale for
-    // them even on a fully current install. That made lock-channel users on
-    // a bootstrapper fail this check on every single launch, fall through to
-    // the roblox-player: URI updater every time, and effectively "redownload"
-    // Roblox on every launch. Only vanilla installs keep this signal honest.
-    if root == "Roblox" {
-        if let Some(live) = live_version {
-            let installed = dir.file_name()?.to_str()?;
-            if installed != live {
-                return None;
+async fn spawn_roblox_direct(
+    roblox_uri: &str,
+    live_version: Option<&str>,
+    launcher_path: Option<&str>,
+) -> Option<u32> {
+    // Custom launcher (e.g. Fishtrap, Bloxstrap) takes precedence over the
+    // official install when configured — same URI handed to a different exe.
+    let exe = if let Some(p) = launcher_path {
+        std::path::PathBuf::from(p)
+    } else {
+        let (root, dir, exe) = get_latest_roblox_install()?;
+        // Bootstrapper forks (Bloxstrap etc.) only touch their version folder's
+        // mtime/name on their OWN update cadence, not on every Roblox content
+        // update -- so this folder-name compare can go permanently stale for
+        // them even on a fully current install. That made lock-channel users on
+        // a bootstrapper fail this check on every single launch, fall through to
+        // the roblox-player: URI updater every time, and effectively "redownload"
+        // Roblox on every launch. Only vanilla installs keep this signal honest.
+        if root == "Roblox" {
+            if let Some(live) = live_version {
+                let installed = dir.file_name()?.to_str()?;
+                if installed != live {
+                    return None;
+                }
             }
         }
-    }
+        exe
+    };
     let meta = std::fs::metadata(&exe).ok()?;
     if meta.len() < MIN_PLAUSIBLE_EXE_BYTES {
         return None;
@@ -2242,6 +2253,14 @@ pub async fn do_launch(
     // catching Roblox mid self-update with a truncated exe (or, now, a
     // non-LIVE install), so retry a few times before giving up to that
     // fallback, which hands off to Roblox's own updater.
+    // Custom launcher path (e.g. Fishtrap) — when set, that exe receives the
+    // same roblox-player URI instead of the official RobloxPlayerBeta.
+    let launcher_path = launch_settings
+        .get("launcherPath")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string());
+
     let mut spawned_pid: Option<u32> = None;
     for attempt in 0..3 {
         if attempt > 0 {
@@ -2252,7 +2271,7 @@ pub async fn do_launch(
                 return cancelled_result();
             }
         }
-        spawned_pid = spawn_roblox_direct(&roblox_uri, live_version.as_deref()).await;
+        spawned_pid = spawn_roblox_direct(&roblox_uri, live_version.as_deref(), launcher_path.as_deref()).await;
         if spawned_pid.is_some() {
             break;
         }

@@ -1090,6 +1090,8 @@ function applySettings() {
   const lockChannel = document.getElementById('set-lockchannel');
   if (lockChannel) lockChannel.checked = !!settings.lockChannel;
   robloxChannelUpdateUI(settings.robloxChannel || '');
+  const lpEl = document.getElementById('set-launcher-path');
+  if (lpEl) lpEl.value = settings.launcherPath || '';
   // Automatic backup controls
   const ab = settings.autoBackup || {};
   const abToggle = document.getElementById('set-autobackup');
@@ -1791,6 +1793,9 @@ function render() {
         <button class="btn btn-launch" onclick="openLaunch('${a.id}')">
           ${esc(t('launch.start'))}
         </button>
+        ${/^\d+/.test(String(a.gameTarget || '').split(/[:,]/)[0]) ? `<button class="btn btn-edit" onclick="openServerList(${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)}, { accountId: '${a.id}', placeId: ${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)} })" title="${esc(t('srv.title'))}" aria-label="Server list">
+          <span class="material-icons-round">dns</span>
+        </button>` : ''}
         <button class="btn btn-edit" onclick="openEdit('${a.id}')" aria-label="Edit account">
           <span class="material-icons-round">edit</span>
         </button>
@@ -3262,7 +3267,10 @@ async function doLaunch() {
   logEntry('info', 'launch', `Launching Roblox for ${launchAcc.username || launchAcc.id}...`, { accountId: launchAcc.id, username: launchAcc.username, userId: launchAcc.userId, target: launchAcc.gameTarget || 'Roblox home' });
   let res;
   try {
-    res = await api.launchRoblox(launchAcc.id, launchAcc.cookie, launchAcc.gameTarget || null);
+    // _srvTarget is a one-shot override set by "join this specific server".
+    const target = launchAcc._srvTarget || launchAcc.gameTarget || null;
+    launchAcc._srvTarget = null;
+    res = await api.launchRoblox(launchAcc.id, launchAcc.cookie, target);
   } catch (e) {
     // Should never reject in practice (the backend command always resolves
     // with {success:false,...} on failure), but if it ever does, the button
@@ -3288,6 +3296,64 @@ async function doLaunch() {
   logEntry('ok', 'launch', `Roblox launched successfully as ${launchAcc.username || launchAcc.id}`, { accountId: launchAcc.id, username: launchAcc.username, userId: launchAcc.userId });
   markLaunched(launchAcc.id);
   setTimeout(() => { closeModal('m-launch'); toast(t('acct.launchedAs', { u: launchAcc.username }), 'ok'); }, 700);
+}
+
+// ── Server list (pick a specific server to join) ────────────────────────
+let _srvCtx = null;   // { placeId, accountId }
+let _srvList = [];
+
+async function openServerList(placeId, ctx) {
+  _srvCtx = ctx || { placeId };
+  _srvList = [];
+  const list = document.getElementById('srv-list');
+  const sub = document.getElementById('srv-sub');
+  if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)"><div class="spin" style="margin:0 auto 8px;width:16px;height:16px"></div><span data-i18n="srv.loading">Looking for servers…</span></div>';
+  if (sub) sub.textContent = t('srv.game') + ' ' + placeId;
+  openModal('m-servers');
+  try {
+    // placeId -> universeId (cached, same as package covers)
+    let uni = _pkgPlaceCache[placeId];
+    if (!uni) {
+      const r = await api.robloxGet('https://apis.roblox.com/universes/v1/places/' + placeId + '/universe');
+      uni = r && r.data ? r.data.universeId : null;
+      if (uni) _pkgPlaceCache[placeId] = uni;
+    }
+    if (!uni) throw new Error(t('srv.errResolve'));
+    const r2 = await api.robloxGet('https://games.roblox.com/v1/games/' + uni + '/servers/Public?limit=50');
+    const servers = (r2 && r2.data && r2.data.data) || [];
+    _srvList = servers;
+    if (!servers.length) {
+      if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--t3)" data-i18n="srv.none">No public servers available right now.</div>';
+      return;
+    }
+    if (list) list.innerHTML = servers.map((s, i) => {
+      const max = s.maxPlayers || 1;
+      const full = s.playing >= max;
+      const act = _srvCtx.accountId
+        ? '<button class="btn btn-primary" style="height:28px;padding:0 12px;font-size:11.5px;flex-shrink:0" onclick="launchToServer(' + i + ')">' + esc(t('srv.joinHere')) + '</button>'
+        : '';
+      return '<div class="srv-item" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid ' + (full ? 'rgba(var(--red-rgb),.4)' : 'var(--bd)') + ';border-radius:10px;margin-bottom:6px;background:var(--s1)">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--t1)">' + esc(t('srv.server')) + ' ' + (i + 1) + ' <span style="color:var(--t3);font-weight:400;font-family:var(--mono);font-size:10.5px">#' + esc(String(s.id).slice(0, 8)) + '</span></div>' +
+          '<div style="font-size:11px;color:' + (full ? 'var(--red)' : 'var(--t2)') + ';margin-top:1px">' + s.playing + '/' + max + ' ' + esc(t('srv.players')) + ' · ' + esc(s.region || '?') + ' · ' + (s.ping != null ? s.ping + 'ms' : '?') + (full ? ' · <b>' + esc(t('srv.full')) + '</b>' : '') + '</div>' +
+        '</div>' + act + '</div>';
+    }).join('');
+  } catch (e) {
+    if (list) list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--red)">' + esc(t('srv.errList')) + ': ' + esc(e.message || String(e)) + '</div>';
+  }
+}
+function launchToServer(index) {
+  const s = _srvList[index];
+  if (!s || !_srvCtx || !_srvCtx.accountId) return;
+  const target = _srvCtx.placeId + ':' + s.id;
+  const id = _srvCtx.accountId;
+  closeModal('m-servers');
+  const acc = accounts.find(a => a.id === id);
+  if (!acc) return;
+  // Temporarily override the account's target for this single launch only.
+  acc._srvTarget = target;
+  openLaunch(id);
+  logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
 }
 
 // ── Packages ──────────────────────────────────────────────────────────────
@@ -4465,6 +4531,28 @@ function robloxChannelUpdateUI(channel) {
   if (label) label.textContent = ROBLOX_CHANNEL_LABELS[channel] || 'Production (LIVE)';
   document.querySelectorAll('#cdd-channel-menu .cdd-option').forEach(o =>
     o.classList.toggle('selected', o.dataset.value === channel));
+}
+
+// ── Custom launcher (e.g. Fishtrap) ──────────────────────────────────────
+function saveLauncherPath() {
+  const el = document.getElementById('set-launcher-path');
+  const v = el ? el.value.trim() : '';
+  settings.launcherPath = v;
+  api.saveSettings({ launcherPath: v }).catch(() => {});
+  logEntry('info', 'settings', v ? 'Custom launcher set: ' + v : 'Custom launcher cleared');
+}
+async function pickLauncherPath() {
+  try {
+    const pick = window.__TAURI__ && window.__TAURI__.dialog
+      ? await window.__TAURI__.dialog.open({ title: 'Select Roblox launcher', filters: [{ name: 'Executable', extensions: ['exe'] }], multiple: false })
+      : null;
+    const path = typeof pick === 'string' && pick ? pick : null;
+    if (path) {
+      const el = document.getElementById('set-launcher-path');
+      if (el) el.value = path;
+      saveLauncherPath();
+    }
+  } catch (e) { logEntry('err', 'settings', 'Launcher picker failed: ' + (e?.message || e)); }
 }
 
 function setRobloxChannel(channel) {
