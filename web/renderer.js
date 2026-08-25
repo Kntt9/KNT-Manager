@@ -1242,6 +1242,7 @@ function refreshPkgAvatarStatus() {
     const trimBtn = card.querySelector('.pkg-trim-btn');
     if (trimBtn) trimBtn.disabled = !st.running;
     const pct = st.total ? Math.round((st.running + st.home) / st.total * 100) : 0;
+    const pkgPlace = /^\d+/.test(String(p.link || '').split(/[:,]/)[0]) ? String(p.link).split(/[:,]/)[0] : '';
     const fill = card.querySelector('.pkg-progress-fill');
     if (fill) fill.style.width = pct + '%';
     const txt = card.querySelector('.pkg-status-text');
@@ -2951,9 +2952,9 @@ function _renderSrvList(list) {
           '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' +
           '<span class="srv-item-id" style="flex:1">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
         '</div>' +
-        (_srvCtx.accountId ? '<div class="srv-item-act"><button class="btn btn-primary srv-enter" onclick="launchToServer(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
-      '</div>';
-    }
+        ((_srvCtx.accountId || _srvCtx.packageId) ? '<div class="srv-item-act"><button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
+        '</div>';
+      }
     const max = s.maxPlayers || 1;
     const playing = Math.min(s.playing, max);
     const full = s.playing >= max;
@@ -2962,8 +2963,8 @@ function _renderSrvList(list) {
     const status = full ? t('srv.full') : t('srv.available');
     const statusCls = full ? 'srv-status-full' : 'srv-status-ok';
     const srvHere = _srvHereLabel(s);
-    const act = _srvCtx.accountId
-      ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" onclick="launchToServer(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
+    const act = (_srvCtx.accountId || _srvCtx.packageId)
+      ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
       : '';
     return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
       '<div class="srv-item-left">' +
@@ -2986,7 +2987,14 @@ async function openServerList(placeId, ctx) {
   _srvCtx = ctx || { placeId };
   _srvList = [];
   const sub = document.getElementById('srv-sub');
-  if (sub) sub.textContent = t('srv.game') + ' ' + placeId;
+  if (sub) {
+    if (ctx && ctx.packageId) {
+      const p = packages.find(x => x.id === ctx.packageId);
+      sub.textContent = (p ? p.name + ' · ' : '') + t('srv.game') + ' ' + placeId;
+    } else {
+      sub.textContent = t('srv.game') + ' ' + placeId;
+    }
+  }
   openModal('m-servers');
   await _fetchServers();
 }
@@ -3052,15 +3060,55 @@ function launchToServer(index) {
   logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
 }
 
+function openPkgServerList(pkgId) {
+  const p = packages.find(x => x.id === pkgId);
+  if (!p) return;
+  const link = String(p.link || '').trim();
+  const placeId = link.split(/[:,]/)[0];
+  if (!/^\d+$/.test(placeId)) { toast(t('srv.errResolve'), 'err'); return; }
+  openServerList(parseInt(placeId, 10), { packageId: pkgId, placeId: parseInt(placeId, 10) });
+}
+
+async function launchPkgToServer(index) {
+  const s = _srvList[index];
+  if (!s || !_srvCtx || !_srvCtx.packageId) return;
+  const p = packages.find(x => x.id === _srvCtx.packageId);
+  if (!p) return;
+  const members = pkgMembers(p);
+  if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  const target = _srvCtx.placeId + ':' + s.id;
+  const placeIdStr = String(_srvCtx.placeId);
+  closeModal('m-servers');
+  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+  let ok = 0;
+  for (const m of members) {
+    logEntry('info', 'launch', `Launching ${m.username || m.id} into server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+    try {
+      const res = await api.launchRoblox(m.id, m.cookie, target);
+      if (res && res.success) {
+        ok++;
+        markLaunched(m.id);
+        _srvJoined[m.id] = { placeId: placeIdStr, jobId: s.id, serverId: String(s.id).slice(0, 8), username: m.username || m.id };
+      } else if (res && res.error) {
+        _flagCookieMaybeDead(m.id, res.error);
+      }
+    } catch (e) { /* keep going */ }
+    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
+  }
+  toast(t('pkg.launchedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
+  renderPackages();
+}
+
 function joinRandomServer() {
-  if (!_srvCtx || !_srvCtx.accountId) return;
+  if (!_srvCtx || (!_srvCtx.accountId && !_srvCtx.packageId)) return;
   if (!_srvList.length) { toast(t('srv.randomNone'), 'err'); return; }
   const pool = _srvList
     .map((s, i) => ({ s, i }))
     .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
   if (!pool.length) { toast(t('srv.randomNone'), 'err'); return; }
   const pick = pool[Math.floor(Math.random() * pool.length)];
-  launchToServer(pick.i);
+  if (_srvCtx.packageId) launchPkgToServer(pick.i);
+  else launchToServer(pick.i);
 }
 
 function joinPastedServer() {
@@ -3076,6 +3124,10 @@ function joinPastedServer() {
     jobId = parts.slice(1).join(':');
   }
   if (!/^\d+$/.test(String(placeId)) || !jobId) { toast(t('srv.pasteBad'), 'err'); return; }
+  if (_srvCtx.packageId) {
+    launchPkgToPasted(placeId, jobId);
+    return;
+  }
   const id = _srvCtx.accountId;
   if (!id) { toast(t('srv.pasteBad'), 'err'); return; }
   const acc = accounts.find(a => a.id === id);
@@ -3085,6 +3137,34 @@ function joinPastedServer() {
   acc._srvPlaceId = placeId;
   openLaunch(id);
   logEntry('info', 'launch', 'Joining pasted server for ' + (acc.username || id), { accountId: id, target: placeId + ':' + jobId });
+}
+
+async function launchPkgToPasted(placeId, jobId) {
+  const p = packages.find(x => x.id === _srvCtx.packageId);
+  if (!p) return;
+  const members = pkgMembers(p);
+  if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  const target = placeId + ':' + jobId;
+  const placeIdStr = String(placeId);
+  closeModal('m-servers');
+  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+  let ok = 0;
+  for (const m of members) {
+    logEntry('info', 'launch', `Launching ${m.username || m.id} into pasted server #${String(jobId).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+    try {
+      const res = await api.launchRoblox(m.id, m.cookie, target);
+      if (res && res.success) {
+        ok++;
+        markLaunched(m.id);
+        _srvJoined[m.id] = { placeId: placeIdStr, jobId: jobId, serverId: String(jobId).slice(0, 8), username: m.username || m.id };
+      } else if (res && res.error) {
+        _flagCookieMaybeDead(m.id, res.error);
+      }
+    } catch (e) { /* keep going */ }
+    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
+  }
+  toast(t('pkg.launchedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
+  renderPackages();
 }
 
 async function copyServerId(index) {
@@ -3206,6 +3286,7 @@ function renderPackages() {
     const avatarsHtml = shown.map(m => `<div class="pkg-avatar${_launchedIds.has(m.id) ? ' online' : ''}${_homeIds.has(m.id) ? ' home' : ''}" id="pkg-av-${p.id}-${m.id}" data-acc-id="${m.id}" data-uid="${m.userId || ''}" data-uname="${esc(m.username || '')}" data-nick="${esc(m.nickname || '')}">${esc((m.username || '?')[0].toUpperCase())}<span class="pkg-avatar-dot"></span></div>`).join('')
       + (extra > 0 ? `<div class="pkg-avatar more">+${extra}</div>` : '');
     const pct = st.total ? Math.round((st.running + st.home) / st.total * 100) : 0;
+    const pkgPlace = /^\d+/.test(String(p.link || '').split(/[:,]/)[0]) ? String(p.link).split(/[:,]/)[0] : '';
     const membersHtml = members.map(m => {
       const cls = _homeIds.has(m.id) ? 'home' : (_launchedIds.has(m.id) ? 'running' : (_cookieStatus[m.id] === 'dead' ? 'dead' : 'idle'));
       const lbl = _homeIds.has(m.id) ? t('accounts.home') : (_launchedIds.has(m.id) ? t('accounts.launched') : (_cookieStatus[m.id] === 'dead' ? t('accounts.expired') : t('accounts.notLaunched')));
@@ -3253,6 +3334,7 @@ function renderPackages() {
             value="${esc(p.link || '')}" onchange="setPackageLink('${p.id}', this.value)"
             onkeydown="if(event.key==='Enter'){this.blur();}"/>
         </div>
+        ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn" onclick="openPkgServerList('${p.id}')" title="${esc(t('srv.title'))}" aria-label="${esc(t('srv.title'))}"><span class="material-icons-round">dns</span></button>` : ''}
         <button class="btn btn-launch pkg-launch-btn" onclick="launchPackage('${p.id}')" ${members.length ? '' : 'disabled'}>
           ${esc(t('groups.startAll'))}
         </button>
