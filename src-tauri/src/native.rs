@@ -746,6 +746,10 @@ pub async fn sync_running_instances(app: &AppHandle, state: &AppState) -> Result
         if claimed_by(&survivors, id) || had_pid.contains(id.as_str()) {
             continue;
         }
+        // A manually-killed account must never re-adopt a process.
+        if state.manual_kills.lock().unwrap().contains(id) {
+            continue;
+        }
         if let Some(pid) = orphans.pop() {
             claimed.insert(pid);
             survivors.push((id.clone(), pid));
@@ -1811,6 +1815,15 @@ async fn watch_tick(app: &AppHandle) {
     let now = now_ms();
     let mut closed: Vec<String> = Vec::new();
     let mut candidates: Vec<String> = Vec::new();
+    // Custom launcher configured? Its exe often exits right after handing
+    // off to the real Roblox client, so accounts launched through it need
+    // orphan-adoption to keep tracking the child RobloxPlayerBeta.
+    let launcher_enabled = crate::settings::load_settings()
+        .get("launcherPath")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .is_some();
     let claimed: std::collections::HashSet<u32> = {
         let watched = state.watched_accounts.lock().unwrap();
         let pids = state.account_pids.lock().unwrap();
@@ -1859,12 +1872,15 @@ async fn watch_tick(app: &AppHandle) {
         // account gets a real PID, and this is the secondary net for the rare
         // case where Roblox took longer to start than that poll's window.
         //
-        // Deliberately NOT applied to an account whose tracked PID just died:
-        // handing it whichever stranger happens to be alive (a client the
-        // user opened outside MultiRoblox, or one left over from a previous
-        // session) is what used to pin a closed account on Running forever
-        // and stop the count from ever coming down.
-        if !orphans.is_empty() && pid.is_none() {
+        // Deliberately NOT applied to an account whose tracked PID just died
+        // for the normal Roblox path (would pin a closed account on Running).
+        // Custom launchers are an exception: their exe typically exits after
+        // handing off to the real Roblox client, so the child RobloxPlayerBeta
+        // must be adopted for the account to keep tracking. EXCEPT when the
+        // user manually killed it (manual_kills) — a killed account must
+        // never re-adopt a process, or it would stay green forever.
+        let is_manual_kill = state.manual_kills.lock().unwrap().contains(&account_id);
+        if !orphans.is_empty() && !is_manual_kill && (pid.is_none() || launcher_enabled) {
             let adopted = orphans.remove(0);
             state
                 .account_pids
