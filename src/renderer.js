@@ -3263,24 +3263,36 @@ async function _autoPickServer(id) {
   const target = (acc && acc.gameTarget) || '';
   const placeId = parseInt(String(target).split(/[:,]/)[0], 10);
   if (!placeId) return;
-  try {
-    const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
-    const r = await fetcher('https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc');
-    const servers = (r && r.data && r.data.data) || [];
-    const free = servers.find(s => s.playing < (s.maxPlayers || 1)) || servers[0];
-    if (!free) return;
-    // Only apply if this account is still the one being launched and the
-    // user hasn't already chosen/confirmed a server (or the launch started).
-    if (launchAcc && launchAcc.id === id && !launchAcc._srvTarget && !_launchingId) {
-      launchAcc._srvTarget = placeId + ':' + free.id;
-      launchAcc._srvPlaceId = placeId;
-      const uid = document.querySelector('#launch-prev .prev-uid');
-      if (uid) {
-        const gameName = _gameNameCache[id] || extractTargetLabel(target);
-        uid.textContent = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(free.id).slice(0, 8);
-      }
+  // Try with the account cookie, then fall back to the anonymous endpoint,
+  // with one retry — a dead cookie or a transient empty page should not
+  // silently fall back to a random server.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const fetchers = [];
+    if (acc && acc.cookie) fetchers.push((u) => api.robloxGetAuth(u, acc.cookie));
+    fetchers.push((u) => api.robloxGet(u));
+    for (const fetcher of fetchers) {
+      try {
+        const r = await fetcher('https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc');
+        const servers = (r && r.data && r.data.data) || [];
+        const free = servers.find(s => s.playing < (s.maxPlayers || 1)) || servers[0];
+        if (free) {
+          // Only apply if this account is still the one being launched and the
+          // user hasn't already chosen/confirmed a server (or launch started).
+          if (launchAcc && launchAcc.id === id && !launchAcc._srvTarget && !_launchingId) {
+            launchAcc._srvTarget = placeId + ':' + free.id;
+            launchAcc._srvPlaceId = placeId;
+            const uid = document.querySelector('#launch-prev .prev-uid');
+            if (uid) {
+              const gameName = _gameNameCache[id] || extractTargetLabel(target);
+              uid.textContent = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(free.id).slice(0, 8);
+            }
+          }
+          return;
+        }
+      } catch (e) { /* try the next fetcher / retry */ }
     }
-  } catch (e) { /* fall back to a normal launch */ }
+    if (attempt === 0) await new Promise(r => setTimeout(r, 400));
+  }
 }
 // The Cancel button doubles as "abandon the launch in progress": a launch can
 // take ~30s (stagger, ticket retries, spawn retries), so closing the modal
