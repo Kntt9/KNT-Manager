@@ -412,6 +412,7 @@ window.I18N.pt = {
   'settings.notDetected': 'Não detectado',
   'settings.multiInstance': 'Multi-Instância',
   'settings.multiInstanceLabel': 'Várias instâncias do Roblox',
+  'settings.multiInstanceGroupBlocked': 'Multi-instância desativada. Ative-a nas Configurações para iniciar grupos.',
   'settings.multiInstanceBlocked': 'Multi-instância desativada. Feche a conta atual antes de abrir outra.',
   'settings.multiInstanceDesc': 'Segura o mutex de instância única para que vários clientes rodem ao mesmo tempo. Desativar libera o mutex e o Roblox volta a permitir apenas um cliente.',
   'settings.antiAfk': 'Anti-AFK',

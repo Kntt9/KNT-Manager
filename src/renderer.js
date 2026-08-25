@@ -3593,8 +3593,8 @@ async function launchPkgToServer(index) {
   if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
-  if (settings.multiInstance === false && _launchedIds.size > 0) {
-    toast(t('settings.multiInstanceBlocked'), 'err');
+  if (settings.multiInstance === false) {
+    toast(t('settings.multiInstanceGroupBlocked'), 'err');
     return;
   }
   const target = _srvCtx.placeId + ':' + s.id;
@@ -3627,8 +3627,8 @@ async function distributePkg(pkgId) {
   if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
-  if (settings.multiInstance === false && _launchedIds.size > 0) {
-    toast(t('settings.multiInstanceBlocked'), 'err');
+  if (settings.multiInstance === false) {
+    toast(t('settings.multiInstanceGroupBlocked'), 'err');
     return;
   }
   const link = String(p.link || '').trim();
@@ -3727,8 +3727,8 @@ async function launchPkgToPasted(placeId, jobId) {
   if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
-  if (settings.multiInstance === false && _launchedIds.size > 0) {
-    toast(t('settings.multiInstanceBlocked'), 'err');
+  if (settings.multiInstance === false) {
+    toast(t('settings.multiInstanceGroupBlocked'), 'err');
     return;
   }
   const target = placeId + ':' + jobId;
@@ -4195,8 +4195,8 @@ async function launchPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
-  if (settings.multiInstance === false && _launchedIds.size > 0) {
-    toast(t('settings.multiInstanceBlocked'), 'err');
+  if (settings.multiInstance === false) {
+    toast(t('settings.multiInstanceGroupBlocked'), 'err');
     return;
   }
 
