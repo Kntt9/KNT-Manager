@@ -3490,7 +3490,7 @@ async function refreshServerList() {
   const ic = document.getElementById('srv-refresh-ic');
   if (ic) ic.classList.add('spinning');
   try {
-    await _fetchServers();
+    await _fetchServers(true); // force fresh — never reuse the cache
   } finally {
     if (ic) ic.classList.remove('spinning');
   }
@@ -3516,9 +3516,11 @@ const SRV_TTL = 20000; // ms — how long a fetched list is considered fresh
 const SRV_POLL = 30000; // ms — auto-refresh while the picker is open
 
 // Fetches the public server list for a placeId, reusing a short-lived
-// cache. Always Asc (least occupied first) so free slots are found fast;
-// the visual sort is applied client-side when rendering.
-async function _srvFetchRaw(placeId, maxPages, forceFresh) {
+// cache unless forceFresh. Always Asc (least occupied first) so free slots
+// are found fast; the visual sort is applied client-side when rendering.
+// When `full` is true, ALL requested pages are fetched (no early stop) —
+// used for validation, where the target jobId may live on a later page.
+async function _srvFetchRaw(placeId, maxPages, forceFresh, full) {
   const now = Date.now();
   if (!forceFresh && _srvCache[placeId] && now - _srvCache[placeId].at < SRV_TTL) {
     return _srvCache[placeId];
@@ -3539,7 +3541,7 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh) {
         const batch = (data.data) || [];
         allServers = allServers.concat(batch);
         cursor = data.nextPageCursor || '';
-        if (allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
+        if (!full && allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
         if (!cursor) break;
       }
       // Deduplicate by job id (a server can appear across pages).
@@ -3559,7 +3561,7 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh) {
 // Returns { ok:true, server } or { ok:false, reason:'gone'|'full' }.
 async function _srvValidateServer(placeId, jobId) {
   try {
-    const fresh = await _srvFetchRaw(placeId, 10, true);
+    const fresh = await _srvFetchRaw(placeId, 10, true, true);
     const server = fresh.servers.find(s => s.id === jobId);
     if (!server) return { ok: false, reason: 'gone' };
     if (server.playing >= (server.maxPlayers || 1)) return { ok: false, reason: 'full', server };
@@ -3570,14 +3572,14 @@ async function _srvValidateServer(placeId, jobId) {
   }
 }
 
-async function _fetchServers() {
+async function _fetchServers(force) {
   const list = document.getElementById('srv-list');
   if (!_srvCtx) return;
   const placeId = _srvCtx.placeId;
   if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
     const maxPages = _srvHideFull ? 10 : 1;
-    const data = await _srvFetchRaw(placeId, maxPages, false);
+    const data = await _srvFetchRaw(placeId, maxPages, !!force, false);
     _srvList = data.servers.slice();
     _srvInjectJoined();
     if (list) _renderSrvList(list);
@@ -3700,18 +3702,19 @@ async function distributePkg(pkgId) {
     const data = (r && r.data) || {};
     const batch = (data.data) || [];
     for (const s of batch) {
-      if (s.playing < (s.maxPlayers || 1)) freeServers.push(s);
+      // Require at least 2 free slots so the server doesn't fill up in the
+      // seconds between listing and joining.
+      if ((s.maxPlayers || 1) - s.playing >= 2) freeServers.push(s);
       if (freeServers.length >= members.length) break;
     }
     cursor = data.nextPageCursor || '';
     if (!cursor) break;
   }
   if (!freeServers.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-  // Shuffle so the same account doesn't always get the same server slot.
-  for (let i = freeServers.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [freeServers[i], freeServers[j]] = [freeServers[j], freeServers[i]];
-  }
+  // Sort by fewest players first so each account gets the emptiest server
+  // available — maxPlayers varies per game (5, 7, 20, …), it's read from
+  // the API, never hardcoded.
+  freeServers.sort((a, b) => (a.playing || 0) - (b.playing || 0));
   const total = Math.min(members.length, freeServers.length);
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
   let ok = 0;

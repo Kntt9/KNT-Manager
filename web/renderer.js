@@ -2995,7 +2995,7 @@ async function refreshServerList() {
   const ic = document.getElementById('srv-refresh-ic');
   if (ic) ic.classList.add('spinning');
   try {
-    await _fetchServers();
+    await _fetchServers(true); // force fresh — never reuse the cache
   } finally {
     if (ic) ic.classList.remove('spinning');
   }
@@ -3182,17 +3182,19 @@ async function distributePkg(pkgId) {
     const data = (r && r.data) || {};
     const batch = (data.data) || [];
     for (const s of batch) {
-      if (s.playing < (s.maxPlayers || 1)) freeServers.push(s);
+      // Require at least 2 free slots so the server doesn't fill up in the
+      // seconds between listing and joining.
+      if ((s.maxPlayers || 1) - s.playing >= 2) freeServers.push(s);
       if (freeServers.length >= members.length) break;
     }
     cursor = data.nextPageCursor || '';
     if (!cursor) break;
   }
   if (!freeServers.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-  for (let i = freeServers.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [freeServers[i], freeServers[j]] = [freeServers[j], freeServers[i]];
-  }
+  // Sort by fewest players first so each account gets the emptiest server
+  // available — maxPlayers varies per game (5, 7, 20, …), it's read from
+  // the API, never hardcoded.
+  freeServers.sort((a, b) => (a.playing || 0) - (b.playing || 0));
   const total = Math.min(members.length, freeServers.length);
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
   let ok = 0;
