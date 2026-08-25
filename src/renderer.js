@@ -3702,9 +3702,9 @@ async function distributePkg(pkgId) {
     const data = (r && r.data) || {};
     const batch = (data.data) || [];
     for (const s of batch) {
-      // Require at least 2 free slots so the server doesn't fill up in the
-      // seconds between listing and joining.
-      if ((s.maxPlayers || 1) - s.playing >= 2) freeServers.push(s);
+      // Any free slot is enough — the pre-join validation below will
+      // catch servers that filled up between now and the actual launch.
+      if (s.playing < (s.maxPlayers || 1)) freeServers.push(s);
       if (freeServers.length >= members.length) break;
     }
     cursor = data.nextPageCursor || '';
@@ -3721,14 +3721,9 @@ async function distributePkg(pkgId) {
   let si = 0;
   for (let i = 0; i < members.length && si < freeServers.length; i++) {
     const m = members[i];
-    let s = null;
-    // Pick the next free server that is still valid (fresh re-check, so a
-    // server that closed between the fetch and the join is skipped).
-    while (si < freeServers.length) {
-      const cand = freeServers[si++];
-      const v = await _srvValidateServer(placeId, cand.id);
-      if (v.ok) { s = cand; break; }
-    }
+    let s = freeServers[si++];
+    // The list was fetched fresh seconds ago — no per-candidate re-fetch
+    // (that caused rate-limit false "gone" results and blocked everything).
     if (!s) break;
     const target = placeId + ':' + s.id;
     logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
