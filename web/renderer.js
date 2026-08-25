@@ -2879,9 +2879,7 @@ function _renderSrvList(list) {
     const status = full ? t('srv.full') : t('srv.available');
     const statusCls = full ? 'srv-status-full' : 'srv-status-ok';
     const act = _srvCtx.accountId
-      ? (full
-        ? '<button class="btn srv-enter" disabled><span data-i18n="srv.full">Full</span></button>'
-        : '<button class="btn btn-primary srv-enter" onclick="launchToServer(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>')
+      ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" onclick="launchToServer(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
       : '';
     return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
       '<div class="srv-item-left">' +
