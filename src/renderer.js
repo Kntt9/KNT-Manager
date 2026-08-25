@@ -1790,8 +1790,8 @@ function render() {
       </div>
       <div class="card-game ${a.gameTarget ? 'visible' : ''}" id="gt-${a.id}" title="${esc(a.gameTarget || '')}">${a.gameTarget ? esc(truncate(_gameNameCache[a.id] || extractTargetLabel(a.gameTarget), 22)) : ''}</div>
       <div class="card-row">
-        <button class="btn btn-launch" onclick="openLaunch('${a.id}')">
-          ${esc(t('launch.start'))}
+        <button class="btn btn-launch" onclick="openLaunch('${a.id}')" title="${esc(t('launch.start'))}" aria-label="${esc(t('launch.start'))}">
+          <span class="material-icons-round" style="font-size:15px">play_arrow</span>
         </button>
         ${/^\d+/.test(String(a.gameTarget || '').split(/[:,]/)[0]) ? `<button class="btn btn-edit" onclick="openServerList(${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)}, { accountId: '${a.id}', placeId: ${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)} })" title="${esc(t('srv.title'))}" aria-label="Server list">
           <span class="material-icons-round">dns</span>
