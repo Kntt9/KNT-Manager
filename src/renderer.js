@@ -3295,6 +3295,12 @@ async function doLaunch() {
   if (!launchAcc) return;
   const btn = document.getElementById('btn-launch');
   if (btn.disabled) return;
+  // When multi-instance is off, refuse to launch a second account.
+  if (settings.multiInstance === false && _launchedIds.size > 0) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
+    closeModal('m-launch');
+    return;
+  }
   _launchingId = launchAcc.id;
   btn.disabled = true; btn.innerHTML = '<div class="spin"></div>Launching';
   setStatus('launch-status', 'load', '<div class="spin"></div>' + esc(t('launch.gettingTicket')));
@@ -3587,6 +3593,10 @@ async function launchPkgToServer(index) {
   if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  if (settings.multiInstance === false && _launchedIds.size > 0) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
+    return;
+  }
   const target = _srvCtx.placeId + ':' + s.id;
   const placeIdStr = String(_srvCtx.placeId);
   closeModal('m-servers');
@@ -3617,6 +3627,10 @@ async function distributePkg(pkgId) {
   if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  if (settings.multiInstance === false && _launchedIds.size > 0) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
+    return;
+  }
   const link = String(p.link || '').trim();
   const placeId = link.split(/[:,]/)[0];
   if (!/^\d+$/.test(placeId)) { toast(t('srv.errResolve'), 'err'); return; }
@@ -3713,6 +3727,10 @@ async function launchPkgToPasted(placeId, jobId) {
   if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  if (settings.multiInstance === false && _launchedIds.size > 0) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
+    return;
+  }
   const target = placeId + ':' + jobId;
   const placeIdStr = String(placeId);
   closeModal('m-servers');
@@ -4177,6 +4195,10 @@ async function launchPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  if (settings.multiInstance === false && _launchedIds.size > 0) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
+    return;
+  }
 
   const card = document.querySelector('.pkg-card[data-id="' + id + '"]');
   const btn = card ? card.querySelector('.pkg-launch-btn') : null;

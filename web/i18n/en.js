@@ -410,6 +410,7 @@ window.I18N.en = {
   'settings.notDetected': 'Not detected',
   'settings.multiInstance': 'Multi-Instance',
   'settings.multiInstanceLabel': 'Multiple Roblox instances',
+  'settings.multiInstanceBlocked': 'Multi-instance is off. Close the current account before opening another.',
   'settings.multiInstanceDesc': 'Holds the singleton mutex so multiple clients run at once. Turning this off releases it and lets Roblox go back to allowing only one client.',
   'settings.antiAfk': 'Anti-AFK',
   'settings.antiAfkLabel': 'Keep instances active',
