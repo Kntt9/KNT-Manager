@@ -3437,8 +3437,8 @@ function _renderSrvList(list) {
             '<span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
           '</div>' +
           '<div class="srv-item-right">' +
-            '<button class="btn btn-ghost srv-copy" onclick="copyServerId(' + x.i + ')" title="' + esc(t('srv.copy')) + '"><span class="material-icons-round">content_copy</span></button>' +
-            ((_srvCtx.accountId || _srvCtx.packageId) ? '<button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
+            '<button class="btn btn-ghost srv-copy" onclick="copyServerId(\'' + s.id + '\')" title="' + esc(t('srv.copy')) + '"><span class="material-icons-round">content_copy</span></button>' +
+            ((_srvCtx.accountId || _srvCtx.packageId) ? '<button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
         '</div>';
       }
       const max = s.maxPlayers || 1;
@@ -3450,7 +3450,7 @@ function _renderSrvList(list) {
     const statusCls = full ? 'srv-status-full' : 'srv-status-ok';
     const srvHere = _srvHereLabel(s);
     const act = (_srvCtx.accountId || _srvCtx.packageId)
-          ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(' + x.i + ')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
+          ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
           : '';
     return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
       '<div class="srv-item-left">' +
@@ -3458,7 +3458,7 @@ function _renderSrvList(list) {
           '<span class="srv-item-id-wrap"><span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
             // Highlight servers where other accounts are joined
             (srvHere ? '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(srvHere) + '</span>' : '') +
-            '<button class="srv-copy" onclick="copyServerId(' + x.i + ')" title="' + esc(t('srv.copyId')) + '" aria-label="' + esc(t('srv.copyId')) + '"><span class="material-icons-round">content_copy</span></button></span>' +
+            '<button class="srv-copy" onclick="copyServerId(\'' + s.id + '\')" title="' + esc(t('srv.copyId')) + '" aria-label="' + esc(t('srv.copyId')) + '"><span class="material-icons-round">content_copy</span></button></span>' +
           '<span class="srv-item-ping"><span class="material-icons-round">speed</span>' + ping + '</span>' +
         '</div>' +
         '<div class="srv-item-players"><b>' + playing + '</b><span class="srv-item-max"> / ' + max + ' ' + esc(t('srv.players')) + '</span></div>' +
@@ -3645,8 +3645,8 @@ function _srvStartPolling() {
 function _srvStopPolling() {
   if (_srvPollTimer) { clearInterval(_srvPollTimer); _srvPollTimer = null; }
 }
-async function launchToServer(index) {
-  const s = _srvList[index];
+async function launchToServer(jobId) {
+  const s = _srvList.find(x => x.id === jobId);
   if (!s || !_srvCtx || !_srvCtx.accountId) return;
   const id = _srvCtx.accountId;
   const acc = accounts.find(a => a.id === id);
@@ -3683,8 +3683,8 @@ function openPkgServerList(pkgId) {
   openServerList(parseInt(placeId, 10), { packageId: pkgId, placeId: parseInt(placeId, 10) });
 }
 
-async function launchPkgToServer(index) {
-  const s = _srvList[index];
+async function launchPkgToServer(jobId) {
+  const s = _srvList.find(x => x.id === jobId);
   if (!s || !_srvCtx || !_srvCtx.packageId) return;
   const p = packages.find(x => x.id === _srvCtx.packageId);
   if (!p) return;
@@ -3820,8 +3820,8 @@ function joinRandomServer() {
     .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
   if (!pool.length) { toast(t('srv.randomNone'), 'err'); return; }
   const pick = pool[Math.floor(Math.random() * pool.length)];
-  if (_srvCtx.packageId) launchPkgToServer(pick.i);
-  else launchToServer(pick.i);
+  if (_srvCtx.packageId) launchPkgToServer(pick.s.id);
+  else launchToServer(pick.s.id);
 }
 
 async function joinPastedServer() {
@@ -3899,8 +3899,8 @@ async function launchPkgToPasted(placeId, jobId) {
   renderPackages();
 }
 
-async function copyServerId(index) {
-  const s = _srvList[index];
+async function copyServerId(jobId) {
+  const s = _srvList.find(x => x.id === jobId);
   if (!s || !_srvCtx) return;
   const target = _srvCtx.placeId + ':' + s.id;
   try {
