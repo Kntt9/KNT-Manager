@@ -3545,8 +3545,14 @@ async function joinRandomServer() {
         }
         if (pool.length) {
           const pick = pool[Math.floor(Math.random() * pool.length)];
-          if (_srvCtx.packageId) launchPkgToServer(pick.id);
-          else launchToServer(pick.id);
+          // Await the launch so the spinner stays visible until the
+          // confirmation window opens (or the error is shown), instead of
+          // disappearing mid-flight and making the user wait for the window.
+          // Own try/catch so a launch error stops here (never re-picks).
+          try {
+            if (_srvCtx.packageId) await launchPkgToServer(pick.id);
+            else await launchToServer(pick.id);
+          } catch (e) { /* launch failed — stop, do not retry */ }
           return;
         }
       } catch (e) { /* retry below */ }
