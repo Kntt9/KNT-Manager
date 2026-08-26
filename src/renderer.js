@@ -3793,7 +3793,10 @@ async function launchToServer(jobId) {
   // the account sitting there proves the server exists — so skip the fresh
   // re-check. Empty highlights (account left; kept as "recently used") are
   // re-validated so nobody tries to join a server that is already gone.
-  if (!s._synthetic || !(s._joinedBy || []).length) {
+  // Any server an account is CURRENTLY on (runtime presence) is provably
+  // live, so skip the re-check there too — the launch modal opens instantly
+  // instead of waiting on a fresh API fetch (which can lag a couple seconds).
+  if (!(_srvPresence[s.id] || []).length) {
     const v = await _srvValidateServer(_srvCtx.placeId, s.id);
     if (!v.ok) {
       if (v.reason === 'gone') toast(t('srv.gone'), 'err');
@@ -3834,12 +3837,16 @@ async function launchPkgToServer(jobId) {
     return;
   }
   // Fresh re-check before launching the whole group into this server.
-  const v = await _srvValidateServer(_srvCtx.placeId, s.id);
-  if (!v.ok) {
-    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-    else toast(t('srv.fullNow'), 'err');
-    refreshServerList();
-    return;
+  // Skip when an account is already on it (runtime presence = provably live),
+  // so the group doesn't wait on a (possibly lagging) API fetch.
+  if (!(_srvPresence[s.id] || []).length) {
+    const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+    if (!v.ok) {
+      if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+      else toast(t('srv.fullNow'), 'err');
+      refreshServerList();
+      return;
+    }
   }
   const target = _srvCtx.placeId + ':' + s.id;
   const placeIdStr = String(_srvCtx.placeId);
