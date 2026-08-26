@@ -4049,10 +4049,11 @@ async function joinRandomServer() {
   if (!_srvCtx || (!_srvCtx.accountId && !_srvCtx.packageId)) return;
   // Visual-only: spinner + disable while fetching, so the API delay doesn't
   // look like a hang and a double-click can't fire two launches.
+  // Replace the casino icon with a visible spinner circle (more noticeable
+  // than mere icon rotation), then restore it when done.
   const btn = document.getElementById('srv-random');
   const ic = document.getElementById('srv-random-ic');
-  if (btn) btn.disabled = true;
-  if (ic) ic.classList.add('spinning');
+  if (btn) { btn.disabled = true; btn._srvPrevHtml = btn.innerHTML; btn.innerHTML = '<div class="spin"></div>'; }
   try {
     const placeId = _srvCtx.placeId;
     const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
@@ -4085,8 +4086,7 @@ async function joinRandomServer() {
     }
     toast(t('srv.randomNone'), 'err');
   } finally {
-    if (btn) btn.disabled = false;
-    if (ic) ic.classList.remove('spinning');
+    if (btn) { btn.disabled = false; if (btn._srvPrevHtml != null) { btn.innerHTML = btn._srvPrevHtml; btn._srvPrevHtml = null; } }
   }
 }
 
