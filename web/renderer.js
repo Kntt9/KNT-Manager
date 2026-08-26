@@ -3046,7 +3046,7 @@ function _renderSrvList(list) {
               '</div>' +
               '<div class="srv-item-right">' +
                           '<button class="btn btn-ghost srv-copy" onclick="copyServerId(\'' + s.id + '\')" title="' + esc(t('srv.copy')) + '"><span class="material-icons-round">content_copy</span></button>' +
-                          ((_srvCtx.accountId || _srvCtx.packageId) ? '<button class="btn btn-primary srv-enter" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
+                          ((_srvCtx.accountId || _srvCtx.packageId) ? '<button class="btn btn-primary srv-enter" data-srv-job="' + s.id + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
                       '</div>';
           }
     const max = s.maxPlayers || 1;
@@ -3058,7 +3058,7 @@ function _renderSrvList(list) {
     const statusCls = full ? 'srv-status-full' : 'srv-status-ok';
     const srvHere = _srvHereLabel(s);
     const act = (_srvCtx.accountId || _srvCtx.packageId)
-      ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
+      ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" data-srv-job="' + s.id + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
       : '';
     return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
       '<div class="srv-item-left">' +
@@ -3095,11 +3095,21 @@ async function openServerList(placeId, ctx) {
 }
 
 async function refreshServerList() {
+  const btn = document.getElementById('srv-refresh');
   const ic = document.getElementById('srv-refresh-ic');
+  if (btn) btn.disabled = true;
   if (ic) ic.classList.add('spinning');
   try {
-    await _fetchServers(true); // force fresh — never reuse the cache
+    // Bounded retry rides out a transient API drop before showing an error,
+    // so a single failed force-refresh doesn't look like a hang.
+    let ok = false;
+    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+      ok = await _fetchServers(true); // force fresh — never reuse the cache
+      if (!ok && attempt === 0) await new Promise(r => setTimeout(r, 1200));
+    }
+    if (!ok) toast(t('srv.refreshFail'), 'err');
   } finally {
+    if (btn) btn.disabled = false;
     if (ic) ic.classList.remove('spinning');
   }
 }
@@ -3247,7 +3257,7 @@ function _srvCacheSweep() {
 
 async function _fetchServers(force) {
   const list = document.getElementById('srv-list');
-  if (!_srvCtx) return;
+  if (!_srvCtx) return false;
   const placeId = _srvCtx.placeId;
   if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
@@ -3256,8 +3266,10 @@ async function _fetchServers(force) {
     _srvList = data.servers.slice();
     _srvInjectJoined();
     if (list) _renderSrvList(list);
+    return true;
   } catch (e) {
     if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
+    return false;
   }
 }
 
@@ -3272,33 +3284,61 @@ function _srvStartPolling() {
 function _srvStopPolling() {
   if (_srvPollTimer) { clearInterval(_srvPollTimer); _srvPollTimer = null; }
 }
+// Finds the picker's "Enter" button for a given server so we can show a
+// spinner and disable it while the fresh API re-check runs (avoids the
+// feeling of a hang and double-clicks). The button is re-rendered often, so
+// it's located by its data attribute at call time.
+function _srvEnterBtn(jobId) {
+  const q = String(jobId).replace(/"/g, '\\"');
+  return document.querySelector('.srv-enter[data-srv-job="' + q + '"]');
+}
+function _srvEnterSpinner(jobId, on) {
+  const btn = _srvEnterBtn(jobId);
+  if (!btn) return;
+  if (on) {
+    btn._srvPrevHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spin"></div>';
+  } else {
+    btn.disabled = false;
+    if (btn._srvPrevHtml != null) { btn.innerHTML = btn._srvPrevHtml; btn._srvPrevHtml = null; }
+  }
+}
+
 async function launchToServer(jobId) {
   const s = _srvList.find(x => x.id === jobId) || { id: jobId };
   if (!s.id || !_srvCtx || !_srvCtx.accountId) return;
   const id = _srvCtx.accountId;
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
-  // Synthetic cards where an account IS currently joined are known-live —
-  // the account sitting there proves the server exists — so skip the fresh
-  // re-check. Empty highlights (account left; kept as "recently used") are
-  // re-validated so nobody tries to join a server that is already gone.
-  // Any server an account is CURRENTLY on (runtime presence) is provably
-  // live, so skip the re-check there too — the launch modal opens instantly.
-  if (!(_srvPresence[s.id] || []).length) {
-    const v = await _srvValidateServer(_srvCtx.placeId, s.id);
-    if (!v.ok) {
-      if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-      else toast(t('srv.fullNow'), 'err');
-      refreshServerList();
-      return;
+  // Visual-only: spinner + disable the clicked Enter button while the fresh
+  // re-check runs, so the API delay doesn't look like a hang.
+  _srvEnterSpinner(jobId, true);
+  try {
+    // Synthetic cards where an account IS currently joined are known-live —
+    // the account sitting there proves the server exists — so skip the fresh
+    // re-check. Empty highlights (account left; kept as "recently used") are
+    // re-validated so nobody tries to join a server that is already gone.
+    // Any server an account is CURRENTLY on (runtime presence) is provably
+    // live, so skip the re-check there too — the launch modal opens instantly.
+    if (!(_srvPresence[s.id] || []).length) {
+      const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+      if (!v.ok) {
+        if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+        else toast(t('srv.fullNow'), 'err');
+        refreshServerList();
+        return;
+      }
     }
+    const target = _srvCtx.placeId + ':' + s.id;
+    closeModal('m-servers');
+    acc._srvTarget = target;
+    acc._srvPlaceId = _srvCtx.placeId;
+    openLaunch(id);
+    logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
+  } finally {
+    _srvEnterSpinner(jobId, false);
   }
-  const target = _srvCtx.placeId + ':' + s.id;
-  closeModal('m-servers');
-  acc._srvTarget = target;
-  acc._srvPlaceId = _srvCtx.placeId;
-  openLaunch(id);
-  logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
 }
 
 function openPkgServerList(pkgId) {
@@ -3321,39 +3361,46 @@ async function launchPkgToServer(jobId) {
     toast(t('settings.multiInstanceGroupBlocked'), 'err');
     return;
   }
-  // Fresh re-check before launching the whole group into this server.
-  // Skip when an account is already on it (runtime presence = provably live),
-  // so the group doesn't wait on a (possibly lagging) API fetch.
-  if (!(_srvPresence[s.id] || []).length) {
-    const v = await _srvValidateServer(_srvCtx.placeId, s.id);
-    if (!v.ok) {
-      if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-      else toast(t('srv.fullNow'), 'err');
-      refreshServerList();
-      return;
-    }
-  }
-  const target = _srvCtx.placeId + ':' + s.id;
-  const placeIdStr = String(_srvCtx.placeId);
-  closeModal('m-servers');
-  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
-  let ok = 0;
-  for (const m of members) {
-    logEntry('info', 'launch', `Launching ${m.username || m.id} into server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
-    try {
-      const res = await api.launchRoblox(m.id, m.cookie, target);
-      if (res && res.success) {
-        ok++;
-        markLaunched(m.id);
-        _srvAddJoined(m.id, placeIdStr, s.id);
-      } else if (res && res.error) {
-        _flagCookieMaybeDead(m.id, res.error);
+  // Visual-only: spinner + disable the clicked Enter button while the fresh
+  // re-check runs, so the API delay doesn't look like a hang.
+  _srvEnterSpinner(jobId, true);
+  try {
+    // Fresh re-check before launching the whole group into this server.
+    // Skip when an account is already on it (runtime presence = provably live),
+    // so the group doesn't wait on a (possibly lagging) API fetch.
+    if (!(_srvPresence[s.id] || []).length) {
+      const v = await _srvValidateServer(_srvCtx.placeId, s.id);
+      if (!v.ok) {
+        if (v.reason === 'gone') toast(t('srv.gone'), 'err');
+        else toast(t('srv.fullNow'), 'err');
+        refreshServerList();
+        return;
       }
-    } catch (e) { /* keep going */ }
-    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
+    }
+    const target = _srvCtx.placeId + ':' + s.id;
+    const placeIdStr = String(_srvCtx.placeId);
+    closeModal('m-servers');
+    const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+    let ok = 0;
+    for (const m of members) {
+      logEntry('info', 'launch', `Launching ${m.username || m.id} into server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+      try {
+        const res = await api.launchRoblox(m.id, m.cookie, target);
+        if (res && res.success) {
+          ok++;
+          markLaunched(m.id);
+          _srvAddJoined(m.id, placeIdStr, s.id);
+        } else if (res && res.error) {
+          _flagCookieMaybeDead(m.id, res.error);
+        }
+      } catch (e) { /* keep going */ }
+      if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
+    }
+    toast(t('pkg.launchedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
+    renderPackages();
+  } finally {
+    _srvEnterSpinner(jobId, false);
   }
-  toast(t('pkg.launchedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
-  renderPackages();
 }
 
 // Launches each account of a group into a DIFFERENT free server, so no two
@@ -3470,34 +3517,45 @@ async function distributePkg(pkgId) {
 
 async function joinRandomServer() {
   if (!_srvCtx || (!_srvCtx.accountId && !_srvCtx.packageId)) return;
-  const placeId = _srvCtx.placeId;
-  const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
-  const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
-  const isFree = (s) =>
-    s.playing < (s.maxPlayers || 1) &&   // has a free slot (not full)
-    !(_srvPresence[s.id] || []).length;  // no own account already inside
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const pool = [];
-      let cursor = '';
-      for (let page = 0; page < 3; page++) {
-        const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-        const r = await fetcher(url);
-        const data = (r && r.data) || {};
-        for (const s of (data.data) || []) if (isFree(s)) pool.push(s);
-        cursor = data.nextPageCursor || '';
-        if (pool.length >= 5 || !cursor) break;
-      }
-      if (pool.length) {
-        const pick = pool[Math.floor(Math.random() * pool.length)];
-        if (_srvCtx.packageId) launchPkgToServer(pick.id);
-        else launchToServer(pick.id);
-        return;
-      }
-    } catch (e) { /* retry below */ }
-    if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
+  // Visual-only: spinner + disable while fetching, so the API delay doesn't
+  // look like a hang and a double-click can't fire two launches.
+  const btn = document.getElementById('srv-random');
+  const ic = document.getElementById('srv-random-ic');
+  if (btn) btn.disabled = true;
+  if (ic) ic.classList.add('spinning');
+  try {
+    const placeId = _srvCtx.placeId;
+    const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
+    const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
+    const isFree = (s) =>
+      s.playing < (s.maxPlayers || 1) &&   // has a free slot (not full)
+      !(_srvPresence[s.id] || []).length;  // no own account already inside
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const pool = [];
+        let cursor = '';
+        for (let page = 0; page < 3; page++) {
+          const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+          const r = await fetcher(url);
+          const data = (r && r.data) || {};
+          for (const s of (data.data) || []) if (isFree(s)) pool.push(s);
+          cursor = data.nextPageCursor || '';
+          if (pool.length >= 5 || !cursor) break;
+        }
+        if (pool.length) {
+          const pick = pool[Math.floor(Math.random() * pool.length)];
+          if (_srvCtx.packageId) launchPkgToServer(pick.id);
+          else launchToServer(pick.id);
+          return;
+        }
+      } catch (e) { /* retry below */ }
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
+    }
+    toast(t('srv.randomNone'), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (ic) ic.classList.remove('spinning');
   }
-  toast(t('srv.randomNone'), 'err');
 }
 
 async function joinPastedServer() {

@@ -103,6 +103,7 @@ window.I18N.en = {
   'srv.noneTitle': 'No servers found',
   'srv.noneDesc': 'This game has no public servers right now.',
   'srv.errTitle': 'Could not load servers',
+  'srv.refreshFail': 'Failed to update servers. Please try again.',
   'srv.retry': 'Try again',
   'srv.noFreeTitle': 'No servers with free slots',
   'srv.noFreeDesc': 'Try turning off the "hide full servers" filter.',

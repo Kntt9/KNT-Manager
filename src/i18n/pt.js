@@ -101,6 +101,7 @@ window.I18N.pt = {
   'srv.noneTitle': 'Nenhum servidor encontrado',
   'srv.noneDesc': 'Este jogo não possui servidores públicos no momento.',
   'srv.errTitle': 'Não foi possível carregar os servidores',
+  'srv.refreshFail': 'Falha ao atualizar servidores. Tente novamente.',
   'srv.retry': 'Tentar novamente',
   'srv.noFreeTitle': 'Nenhum servidor com vaga',
   'srv.noFreeDesc': 'Tente desativar o filtro "ocultar servidores cheios".',
