@@ -311,6 +311,19 @@ async function continueInit() {
   accounts = loaded.filter(a => !a.trashed);
   trashedAccounts = loaded.filter(a => a.trashed);
   [settings, packages] = await Promise.all([api.loadSettings(), api.loadPackages()]);
+  // Hydrate persisted server highlights (settings.srvHighlights) so featured
+  // servers survive an app restart. Malformed/legacy entries are dropped.
+  _srvHighlighted = {};
+  const _srvH = settings.srvHighlights;
+  if (_srvH && typeof _srvH === 'object' && !Array.isArray(_srvH)) {
+    for (const k of Object.keys(_srvH)) {
+      const j = _srvH[k];
+      if (j && typeof j === 'object' && typeof j.jobId === 'string' &&
+          /^\d+$/.test(String(j.placeId))) {
+        _srvHighlighted[k] = { placeId: j.placeId, jobId: j.jobId, lastSeen: j.lastSeen || 0 };
+      }
+    }
+  }
   categories = Array.isArray(settings.categories) ? settings.categories : [];
   categories.forEach(c => { if (!c.color) c.color = catColor(c.id); }); // backfill color for categories saved before colors existed
   // Restore interface language (persisted setting, with localStorage fallback).
@@ -384,7 +397,7 @@ async function continueInit() {
   api.onRobloxClosed(id => {
     _launchedIds.delete(id);
     _homeIds.delete(id);
-    _srvClearJoined(id);
+    _srvAccountLeft(id);
     delete _launchedAt[id];
     const closedAcct = accounts.find(a => a.id === id);
     logEntry('info', 'close', `Roblox closed for ${closedAcct ? closedAcct.username : id}`, { accountId: id, username: closedAcct?.username || null, userId: closedAcct?.userId || null });
@@ -409,7 +422,7 @@ async function continueInit() {
   api.onRobloxHome(id => {
     _homeIds.add(id);
     _launchedIds.delete(id);
-    _srvClearJoined(id);
+    _srvAccountLeft(id);
     delete _launchedAt[id];
     pushActivity('home', 'amber', t('act.home', { u: esc(_acctLabel(id)) }));
     const card = document.querySelector(`.card[data-id="${id}"]`);
@@ -2805,16 +2818,11 @@ async function doLaunch() {
   setStatus('launch-status', 'load', '<div class="spin"></div>' + esc(t('launch.gettingTicket')));
   logEntry('info', 'launch', `Launching Roblox for ${launchAcc.username || launchAcc.id}...`, { accountId: launchAcc.id, username: launchAcc.username, userId: launchAcc.userId, target: launchAcc.gameTarget || 'Roblox home' });
   let res;
+  let target = null;
   try {
     // _srvTarget is a one-shot override set by "join this specific server".
-    const target = launchAcc._srvTarget || launchAcc.gameTarget || null;
+    target = launchAcc._srvTarget || launchAcc.gameTarget || null;
     launchAcc._srvTarget = null;
-    if (target && target.includes(':')) {
-      const [pid, ...rest] = target.split(':');
-      _srvJoined[launchAcc.id] = { placeId: pid, jobId: rest.join(':'), serverId: String(rest.join(':')).slice(0, 8), username: launchAcc.username || launchAcc.id };
-    } else {
-      _srvClearJoined(launchAcc.id);
-    }
     res = await api.launchRoblox(launchAcc.id, launchAcc.cookie, target);
   } catch (e) {
     // Should never reject in practice (the backend command always resolves
@@ -2840,6 +2848,17 @@ async function doLaunch() {
   setStatus('launch-status', 'ok', '<span class="material-icons-round">check_circle</span>' + esc(t('acct.launchedAs', { u: launchAcc.username })));
   logEntry('ok', 'launch', `Roblox launched successfully as ${launchAcc.username || launchAcc.id}`, { accountId: launchAcc.id, username: launchAcc.username, userId: launchAcc.userId });
   markLaunched(launchAcc.id);
+  // If this launch targeted a specific server (placeId:jobId), remember it
+  // so every account's server picker can highlight where this account is.
+  // Anything else (plain place id, a URL, or a home launch) means the
+  // account isn't on a tracked specific server, so drop it from any
+  // previous highlight.
+  if (target && /^\d+[,:][0-9a-fA-F-]{20,}$/.test(target)) {
+    const [pid, ...rest] = target.split(/[:,]/);
+    _srvAddJoined(launchAcc.id, pid, rest.join(':'));
+  } else {
+    _srvAccountLeft(launchAcc.id);
+  }
   setTimeout(() => { closeModal('m-launch'); toast(t('acct.launchedAs', { u: launchAcc.username }), 'ok'); }, 700);
 }
 
@@ -2848,10 +2867,86 @@ let _srvCtx = null;
 let _srvList = [];
 let _srvHideFull = false;
 let _srvSort = 'recommended';
-let _srvJoined = {};
+// Persisted recent-server highlights (settings.srvHighlights). Keyed by job
+// id so several servers can be highlighted at once and a server is never
+// duplicated. Contains only server metadata — never accounts (account
+// presence is runtime-only, see _srvPresence).
+let _srvHighlighted = {};   // jobId -> { placeId, jobId, lastSeen }
+// Runtime account presence on tracked servers. Not persisted — rebuilt on
+// startup as accounts launch and join servers. This is what drives the
+// "ST1 is here" labels in the server picker.
+let _srvPresence = {};      // jobId -> [accountId, ...]
 
-function _srvClearJoined(accountId) {
-  delete _srvJoined[accountId];
+// Roblox job ids are UUIDs; anything else (URL fragments etc.) is not a
+// joinable server and must never pollute the highlight store.
+const _SRV_JOB_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function _srvPersist() {
+  try {
+    if (api && api.saveSettings) api.saveSettings({ srvHighlights: _srvHighlighted }).catch(() => {});
+  } catch (e) { /* persistence must never break the flow */ }
+}
+
+// Registers that `accountId` is now in server `jobId` of game `placeId`.
+// Idempotent: the same account joining the same server again only refreshes
+// lastSeen. Multiple accounts on the same server share one entry.
+function _srvAddJoined(accountId, placeId, jobId) {
+  if (!accountId || !placeId || !jobId) return;
+  const pid = String(placeId);
+  const jid = String(jobId);
+  if (!/^\d+$/.test(pid) || !_SRV_JOB_RE.test(jid)) return;
+  // Update runtime presence (in-memory only — not persisted).
+  if (!_srvPresence[jid]) _srvPresence[jid] = [];
+  if (!_srvPresence[jid].includes(accountId)) _srvPresence[jid].push(accountId);
+  // Update persisted highlight metadata (never accounts).
+  _srvHighlighted[jid] = { placeId: pid, jobId: jid, lastSeen: Date.now() };
+  _srvPersist();
+}
+
+// The account left its game(s) (closed / went home / launched without a
+// specific server). It is removed from every highlight, but the highlighted
+// server records themselves are KEPT — they stay visible as recently-used
+// until a fresh API sample confirms they no longer exist (_srvPruneHighlighted).
+function _srvAccountLeft(accountId) {
+  // Collect highlight keys where this account was present.
+  const touched = Object.keys(_srvPresence).filter(key => _srvPresence[key].includes(accountId));
+  if (!touched.length) return;
+  // Remove account from runtime presence.
+  for (const key of touched) {
+    const arr = _srvPresence[key];
+    const idx = arr.indexOf(accountId);
+    if (idx !== -1) {
+      arr.splice(idx, 1);
+      if (!arr.length) delete _srvPresence[key];
+    }
+  }
+  // Touch lastSeen on corresponding highlights (server was recently active).
+  let changed = false;
+  for (const key of touched) {
+    if (_srvHighlighted[key]) { _srvHighlighted[key].lastSeen = Date.now(); changed = true; }
+  }
+  if (changed) _srvPersist();
+}
+
+// Called after a successful fresh API sample: highlighted servers for this
+// placeId that (a) nobody is on anymore and (b) are not in the sample have
+// almost certainly ceased to exist — drop them. Servers with accounts on
+// them are always kept (the account's presence is the evidence they are
+// alive). An empty sample (API hiccup / rate limit) never prunes anything.
+function _srvPruneHighlighted(placeId, sample) {
+  const pid = String(placeId);
+  const inSample = new Set((sample || []).map(s => s.id));
+  let changed = false;
+  for (const key of Object.keys(_srvHighlighted)) {
+    const j = _srvHighlighted[key];
+    if (!j || String(j.placeId) !== pid) continue;
+    // If any account is currently on this server (runtime presence), keep it.
+    if ((_srvPresence[key] || []).length > 0) continue;
+    if (inSample.has(key)) continue;
+    delete _srvHighlighted[key];
+    changed = true;
+  }
+  if (changed) _srvPersist();
 }
 
 function toggleSrvFilter(el) {
@@ -2887,19 +2982,19 @@ function _srvSortFn() {
 function _srvHereCount(s) {
   if (!_srvCtx) return 0;
   const pid = String(_srvCtx.placeId);
-  return Object.keys(_srvJoined).filter(aid =>
-    String(_srvJoined[aid].placeId) === pid &&
-    _srvJoined[aid].jobId === s.id
-  ).length;
+  const j = _srvHighlighted[s.id];
+  return (j && String(j.placeId) === pid) ? (_srvPresence[s.id] || []).length : 0;
 }
 
 function _srvHereLabel(s) {
   if (!_srvCtx) return '';
   const pid = String(_srvCtx.placeId);
-  return Object.keys(_srvJoined)
-    .filter(aid => String(_srvJoined[aid].placeId) === pid && _srvJoined[aid].jobId === s.id)
-    .map(aid => _srvJoined[aid].username)
-    .join(', ');
+  const j = _srvHighlighted[s.id];
+  if (!j || String(j.placeId) !== pid) return '';
+  return (_srvPresence[s.id] || []).map(aid => {
+    const a = accounts.find(x => x.id === aid);
+    return a ? (a.nickname || a.username || aid) : aid;
+  }).join(', ');
 }
 
 // Servers where accounts are joined (this one or others) may not be in the
@@ -2910,12 +3005,16 @@ function _srvInjectJoined() {
   const pid = String(_srvCtx.placeId);
   const known = new Set(_srvList.map(s => s.id));
   const injected = [];
-  Object.keys(_srvJoined).forEach(aid => {
-    const j = _srvJoined[aid];
+  Object.keys(_srvHighlighted).forEach(jobId => {
+    const j = _srvHighlighted[jobId];
     if (!j || String(j.placeId) !== pid) return;
-    if (known.has(j.jobId)) return;
-    injected.push({ id: j.jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _joinedBy: [aid] });
-    known.add(j.jobId);
+    if (known.has(jobId)) return;
+    // Server not in the fresh API sample: it may have closed/emptied since
+    // the account joined. Keep the marker so the user still sees it; it is
+    // re-validated right before joining and pruned once the API confirms
+    // it is gone (see _srvPruneHighlighted).
+    injected.push({ id: jobId, playing: 0, maxPlayers: 0, ping: null, region: '?', _synthetic: true, _joinedBy: (_srvPresence[jobId] || []).slice() });
+    known.add(jobId);
   });
   if (injected.length) _srvList = injected.concat(_srvList);
 }
@@ -2936,10 +3035,10 @@ function _renderSrvList(list) {
   list.innerHTML = sorted.map((x, idx) => {
     const s = x.s;
     if (s._synthetic) {
-            const joinedBy = (s._joinedBy || []).map(aid => _srvJoined[aid] ? _srvJoined[aid].username : aid).join(', ');
+            const joinedBy = (s._joinedBy || []).map(aid => { const a = accounts.find(x => x.id === aid); return a ? (a.nickname || a.username || aid) : aid; }).join(', ');
             return '<div class="srv-item srv-item-synthetic" style="animation-delay:' + (idx * 35) + 'ms">' +
               '<div class="srv-item-left" style="display:flex;align-items:center;gap:10px;flex:1">' +
-                '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' +
+                (joinedBy ? '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' : '') +
                 '<span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
               '</div>' +
               '<div class="srv-item-right">' +
@@ -3042,6 +3141,12 @@ function _srvStabilityScore(s) {
 let _srvCache = {};    // placeId -> { at, servers }
 const SRV_TTL = 20000; // ms — how long a fetched list is considered fresh
 const SRV_POLL = 30000; // ms — auto-refresh while the picker is open
+// Server pre-join validation is bounded-retry: the public server list is
+// eventually consistent (a live server can be momentarily absent), so a
+// single miss is not proof of death. Two fresh queries with a short pause
+// ride out the common consistency window without loops or excess requests.
+const SRV_VALIDATE_ATTEMPTS = 2;    // fresh queries before declaring a server gone
+const SRV_VALIDATE_RETRY_MS = 2000; // pause between validation queries
 
 async function _srvFetchRaw(placeId, maxPages, forceFresh) {
   const now = Date.now();
@@ -3071,6 +3176,10 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh) {
       allServers = allServers.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
       _srvCache[placeId] = { at: Date.now(), servers: allServers };
       _srvCacheSweep();
+      // A fresh, non-empty sample is the API's current truth: highlighted
+      // servers for this game that nobody is on anymore and that are not in
+      // the sample have ceased to exist — drop them (no extra requests).
+      if (allServers.length) _srvPruneHighlighted(placeId, allServers);
       return _srvCache[placeId];
     } catch (e) { lastErr = e; }
   }
@@ -3080,16 +3189,49 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh) {
 }
 
 async function _srvValidateServer(placeId, jobId) {
-  try {
-    const fresh = await _srvFetchRaw(placeId, 10, true, true);
-    if (!fresh.servers.length) return { ok: true, server: null };
-    const server = fresh.servers.find(s => s.id === jobId);
-    if (!server) return { ok: false, reason: 'gone' };
-    if (server.playing >= (server.maxPlayers || 1)) return { ok: false, reason: 'full', server };
-    return { ok: true, server };
-  } catch (e) {
-    return { ok: true, server: null };
+  // A highlighted server was used very recently (often another account is
+  // still on it) — strong evidence it exists, so it gets the benefit of the
+  // doubt if the API keeps failing to list it.
+  const knownLive = (() => {
+    const j = _srvHighlighted[String(jobId)];
+    return !!(j && String(j.placeId) === String(placeId));
+  })();
+  for (let attempt = 0; attempt < SRV_VALIDATE_ATTEMPTS; attempt++) {
+    try {
+      const fresh = await _srvFetchRaw(placeId, 10, true, true);
+      // An empty fresh list means the API hiccuped (rate limit, transient
+      // failure) — never trust it enough to declare a server dead.
+      if (!fresh.servers.length) return { ok: true, server: null };
+      const server = fresh.servers.find(s => s.id === jobId);
+      if (server) {
+        if (server.playing >= (server.maxPlayers || 1)) return { ok: false, reason: 'full', server };
+        return { ok: true, server };
+      }
+      // Not found in a non-empty sample: the server may be gone OR the API
+      // index may be lagging behind the live game. One short, bounded retry
+      // rides out the common consistency window without loops or excess
+      // requests (each attempt is one fresh fetch; games usually end after
+      // 1-2 pages).
+      if (attempt < SRV_VALIDATE_ATTEMPTS - 1) {
+        logEntry('info', 'launch', `Server #${String(jobId).slice(0, 8)} not in API sample (attempt ${attempt + 1}/${SRV_VALIDATE_ATTEMPTS}, sample=${fresh.servers.length}) — retrying in ${SRV_VALIDATE_RETRY_MS}ms`, { placeId: String(placeId), jobId });
+        await new Promise(r => setTimeout(r, SRV_VALIDATE_RETRY_MS));
+        continue;
+      }
+      // Out of attempts. A highlighted server has evidence of life (it was
+      // used very recently), so let the attempt go — Roblox fails fast if
+      // the server is really gone. Unknown servers are declared gone.
+      if (knownLive) {
+        logEntry('info', 'launch', `Server #${String(jobId).slice(0, 8)} still missing after ${SRV_VALIDATE_ATTEMPTS} fresh samples — highlighted server, allowing attempt`, { placeId: String(placeId), jobId });
+        return { ok: true, server: null };
+      }
+      logEntry('warn', 'launch', `Server #${String(jobId).slice(0, 8)} confirmed gone after ${SRV_VALIDATE_ATTEMPTS} fresh samples`, { placeId: String(placeId), jobId });
+      return { ok: false, reason: 'gone' };
+    } catch (e) {
+      // API hiccup — don't block the user, allow the attempt.
+      return { ok: true, server: null };
+    }
   }
+  return { ok: true, server: null }; // defensive, unreachable
 }
 
 function _srvCacheSweep() {
@@ -3133,7 +3275,11 @@ async function launchToServer(jobId) {
   const id = _srvCtx.accountId;
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
-  if (!s._synthetic) {
+  // Synthetic cards where an account IS currently joined are known-live —
+  // the account sitting there proves the server exists — so skip the fresh
+  // re-check. Empty highlights (account left; kept as "recently used") are
+  // re-validated so nobody tries to join a server that is already gone.
+  if (!s._synthetic || !(s._joinedBy || []).length) {
     const v = await _srvValidateServer(_srvCtx.placeId, s.id);
     if (!v.ok) {
       if (v.reason === 'gone') toast(t('srv.gone'), 'err');
@@ -3190,7 +3336,7 @@ async function launchPkgToServer(jobId) {
       if (res && res.success) {
         ok++;
         markLaunched(m.id);
-        _srvJoined[m.id] = { placeId: placeIdStr, jobId: s.id, serverId: String(s.id).slice(0, 8), username: m.username || m.id };
+        _srvAddJoined(m.id, placeIdStr, s.id);
       } else if (res && res.error) {
         _flagCookieMaybeDead(m.id, res.error);
       }
@@ -3246,23 +3392,51 @@ async function distributePkg(pkgId) {
     try {
       const fresh = await _srvFetchRaw(placeId, 5, true, true);
       if (fresh.servers.length) {
-        valid = freeServers.filter(s => {
-          const live = fresh.servers.find(x => x.id === s.id);
-          return live && _hasGoodSlots(live);
-        });
+        // Keep the LIVE re-checked server objects (freshest player counts) so
+        // the capacity used for balancing matches the API as of the re-check.
+        valid = freeServers
+          .map(s => {
+            const live = fresh.servers.find(x => x.id === s.id);
+            return live && _hasGoodSlots(live) ? live : null;
+          })
+          .filter(Boolean);
         valid.sort((a, b) => _srvStabilityScore(a) - _srvStabilityScore(b));
       }
     } catch (e) { /* keep the collected list if the re-check fails */ }
     if (!valid.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
     const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
     let ok = 0;
-    let si = 0;
+    // Assignment state: how many accounts we have aimed at each server, and
+    // each server's real headroom (from the fresh re-check above).
+    const aimed = {};      // serverId -> accounts aimed here
+    const capacity = {};   // serverId -> free slots
+    for (const s of valid) capacity[s.id] = Math.max(0, (s.maxPlayers || 1) - (s.playing || 0));
+    const hasRoom = (s) => (aimed[s.id] || 0) < (capacity[s.id] || 0);
+    // Next candidate: first a server no other account was aimed at yet (each
+    // account gets its own server); when those run out, reuse the least-aimed
+    // server that still has room, spreading accounts evenly. Ties resolve to
+    // the stability order `valid` is already sorted in.
+    function nextServer() {
+      for (const s of valid) {
+        if (!(aimed[s.id] || 0) && hasRoom(s)) return s;
+      }
+      let best = null;
+      for (const s of valid) {
+        if (!hasRoom(s)) continue;
+        if (!best) { best = s; continue; }
+        if ((aimed[s.id] || 0) < (aimed[best.id] || 0)) best = s;
+      }
+      return best;
+    }
     for (let i = 0; i < members.length; i++) {
-      if (si >= valid.length) break;
       const m = members[i];
-      for (let attempt = 0; attempt < 2 && si < valid.length; attempt++) {
-        const s = valid[si++];
+      // Try up to 2 servers for this account (the first may have been shut
+      // down by Roblox between the fetch and the launch, or filled up).
+      let launched = false;
+      for (let attempt = 0; attempt < 2 && !launched; attempt++) {
+        const s = nextServer();
         if (!s) break;
+        aimed[s.id] = (aimed[s.id] || 0) + 1;
         const target = placeId + ':' + s.id;
         logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
         try {
@@ -3270,13 +3444,14 @@ async function distributePkg(pkgId) {
           if (res && res.success) {
             ok++;
             markLaunched(m.id);
-            _srvJoined[m.id] = { placeId: String(placeId), jobId: s.id, serverId: String(s.id).slice(0, 8), username: m.username || m.id };
-            break;
+            _srvAddJoined(m.id, String(placeId), s.id);
+            launched = true; // launched ok, move to next account
           } else if (res && res.error) {
             _flagCookieMaybeDead(m.id, res.error);
           }
         } catch (e) { /* keep going */ }
-        if (attempt === 0) await new Promise(r => setTimeout(r, Math.min(delay || 1000, 3000)));
+        // Brief pause before retrying with the next candidate server.
+        if (!launched && attempt === 0) await new Promise(r => setTimeout(r, Math.min(delay || 1000, 3000)));
       }
       if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
     }
@@ -3359,7 +3534,7 @@ async function launchPkgToPasted(placeId, jobId) {
       if (res && res.success) {
         ok++;
         markLaunched(m.id);
-        _srvJoined[m.id] = { placeId: placeIdStr, jobId: jobId, serverId: String(jobId).slice(0, 8), username: m.username || m.id };
+        _srvAddJoined(m.id, placeIdStr, jobId);
       } else if (res && res.error) {
         _flagCookieMaybeDead(m.id, res.error);
       }
@@ -3824,7 +3999,7 @@ async function launchPackage(id) {
       markLaunched(m.id);
       if (autoTarget) {
         const [pid, ...rest] = autoTarget.split(':');
-        _srvJoined[m.id] = { placeId: pid, jobId: rest.join(':'), serverId: String(rest.join(':')).slice(0, 8), username: m.username || m.id };
+        _srvAddJoined(m.id, pid, rest.join(':'));
       }
       if (chip) { chip.className = 'pkg-chip ok'; chip.innerHTML = '<span class="material-icons-round">check_circle</span>' + esc(m.nickname || m.username || ''); }
     } else if (chip) {

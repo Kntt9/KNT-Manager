@@ -1849,6 +1849,15 @@ async fn watch_tick(app: &AppHandle) {
         .iter()
         .map(|(k, v)| (k.clone(), *v))
         .collect();
+    // Fetch home PIDs once per tick so the running check can exclude hidden
+    // tray processes — a "home" (game closed with X, launcher still in tray)
+    // must NOT count as "running" or the account never accumulates misses
+    // and never reaches the home-detection path (the amber badge).
+    let home_now = if !watched_snapshot.is_empty() {
+        home_pids(app, &state).await
+    } else {
+        None
+    };
     for (account_id, ready_at) in watched_snapshot {
         if now < ready_at {
             continue;
@@ -1871,8 +1880,15 @@ async fn watch_tick(app: &AppHandle) {
             // client is actually up (any_running). The launcher sitting
             // alone in the tray (game closed with X) is the custom-launcher
             // equivalent of the home screen — the account is not active.
+            // A PID that the helper identifies as a "home" (tray) process
+            // (its windows are hidden, not visible) is NOT running — the
+            // game itself closed, leaving only the tray launcher. Marking it
+            // as "not running" lets the tick accumulate misses and reach the
+            // home-detection path, which emits the amber badge on the card.
             Some(p) => {
-                if alive_pids.contains(&p) {
+                if home_now.as_ref().map_or(false, |h| h.contains(&p)) {
+                    false
+                } else if alive_pids.contains(&p) {
                     true
                 } else if is_launcher_process(p) {
                     any_running
@@ -1928,7 +1944,6 @@ async fn watch_tick(app: &AppHandle) {
         // decision to the next tick instead of guessing. Guessing was the bug:
         // a single slow tick used to treat every candidate as closed and
         // permanently lose the amber state.
-        let home_now = home_pids(app, &state).await;
         // A custom-launcher account whose launcher exe is still alive (in the
         // tray) with no Roblox client up counts as "went home" too — the
         // launcher's tray is the Fishtrap-equivalent of the Roblox home.
