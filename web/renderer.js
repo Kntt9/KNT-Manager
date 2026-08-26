@@ -3028,6 +3028,16 @@ function _hasGoodSlots(s) {
   return (max - (s.playing || 0)) >= (max > 2 ? 2 : 1);
 }
 
+// Stability score for distribution: servers with 1-3 players are the
+// sweet spot — not empty (Roblox kills idle servers) and not nearly full
+// (queue). A lower score = better pick.
+function _srvStabilityScore(s) {
+  const p = s.playing || 0;
+  if (p >= 1 && p <= 3) return p;    // 1→3: stable, in order
+  if (p === 0) return 100;            // empty → likely shut down soon
+  return 50 + p;                       // fuller → later
+}
+
 // ── Central server data layer ─────────────────────────────────────────────
 let _srvCache = {};    // placeId -> { at, servers }
 const SRV_TTL = 20000; // ms — how long a fetched list is considered fresh
@@ -3225,41 +3235,51 @@ async function distributePkg(pkgId) {
     if (!cursor) break;
   }
   if (!freeServers.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-  // Sort by fewest players first so each account gets the emptiest server.
-  freeServers.sort((a, b) => (a.playing || 0) - (b.playing || 0));
-  // ONE fresh re-check of every candidate (a single fast fetch, not one per
-  // candidate) so servers that died/filled between listing and launch are
-  // dropped instead of joined.
-  let valid = freeServers;
-  try {
-    const fresh = await _srvFetchRaw(placeId, 5, true, true);
-    if (fresh.servers.length) {
-      valid = freeServers.filter(s => {
-        const live = fresh.servers.find(x => x.id === s.id);
-        return live && _hasGoodSlots(live);
-      });
-    }
-  } catch (e) { /* keep the collected list if the re-check fails */ }
-  if (!valid.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
-  let ok = 0;
-  for (let i = 0; i < members.length && i < valid.length; i++) {
-    const m = members[i];
-    const s = valid[i];
-    const target = placeId + ':' + s.id;
-    logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+    // Sort by stability: servers with 1-3 players first (stable, not idle),
+    // then fuller servers, then truly empty ones last (Roblox kills idle
+    // servers, so sending accounts there risks 'experiência terminou').
+    freeServers.sort((a, b) => _srvStabilityScore(a) - _srvStabilityScore(b));
+    // ONE fresh re-check of every candidate (a single fast fetch, not one per
+    // candidate) so servers that died/filled between listing and launch are
+    // dropped instead of joined.
+    let valid = freeServers;
     try {
-      const res = await api.launchRoblox(m.id, m.cookie, target);
-      if (res && res.success) {
-        ok++;
-        markLaunched(m.id);
-        _srvJoined[m.id] = { placeId: String(placeId), jobId: s.id, serverId: String(s.id).slice(0, 8), username: m.username || m.id };
-      } else if (res && res.error) {
-        _flagCookieMaybeDead(m.id, res.error);
+      const fresh = await _srvFetchRaw(placeId, 5, true, true);
+      if (fresh.servers.length) {
+        valid = freeServers.filter(s => {
+          const live = fresh.servers.find(x => x.id === s.id);
+          return live && _hasGoodSlots(live);
+        });
+        valid.sort((a, b) => _srvStabilityScore(a) - _srvStabilityScore(b));
       }
-    } catch (e) { /* keep going */ }
-    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
-  }
+    } catch (e) { /* keep the collected list if the re-check fails */ }
+    if (!valid.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
+    const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+    let ok = 0;
+    let si = 0;
+    for (let i = 0; i < members.length; i++) {
+      if (si >= valid.length) break;
+      const m = members[i];
+      for (let attempt = 0; attempt < 2 && si < valid.length; attempt++) {
+        const s = valid[si++];
+        if (!s) break;
+        const target = placeId + ':' + s.id;
+        logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+        try {
+          const res = await api.launchRoblox(m.id, m.cookie, target);
+          if (res && res.success) {
+            ok++;
+            markLaunched(m.id);
+            _srvJoined[m.id] = { placeId: String(placeId), jobId: s.id, serverId: String(s.id).slice(0, 8), username: m.username || m.id };
+            break;
+          } else if (res && res.error) {
+            _flagCookieMaybeDead(m.id, res.error);
+          }
+        } catch (e) { /* keep going */ }
+        if (attempt === 0) await new Promise(r => setTimeout(r, Math.min(delay || 1000, 3000)));
+      }
+      if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
+    }
   toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
   renderPackages();
 }
