@@ -3450,7 +3450,10 @@ function toggleSrvSort(el) {
     const list = document.getElementById('srv-list');
     if (list) _renderSrvList(list);
   } else {
-    _fetchServers();
+    // Force fresh: the API orders by occupancy (Asc/Desc) and the 20s cache
+    // is per-place — reusing it after a sort change would keep showing the
+    // previous sort's data (e.g. "most players" stuck on 1-person servers).
+    _fetchServers(true);
   }
 }
 
@@ -3513,7 +3516,13 @@ function _renderSrvList(list) {
   }
   const sorted = servers.map((s, i) => ({ s, i, here: _srvHereCount(s) }))
     .sort((a, b) => (b.here - a.here) || _srvSortFn()(a, b))
-    .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
+    .filter(x => {
+      // "Most players": populated but not full — at least 2 players, still a
+      // free slot — sorted most -> least by the client sort. Empty and full
+      // servers stay in the general list under the other sorts.
+      if (_srvSort === 'most') return x.s.playing >= 2 && x.s.playing < (x.s.maxPlayers || 1);
+      return !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1));
+    });
   if (!sorted.length) {
     list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic">filter_alt_off</span><div class="srv-state-title" data-i18n="srv.noFreeTitle">No servers with free slots</div><div class="srv-state-desc" data-i18n="srv.noFreeDesc">Try turning off the &quot;hide full servers&quot; filter.</div></div>';
     return;
@@ -3664,7 +3673,7 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh, full) {
       let allServers = [];
       let cursor = '';
       for (let page = 0; page < maxPages; page++) {
-        const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=' + (_srvSortOrder() || 'Asc') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
         const r = await fetcher(srvUrl);
         const data = (r && r.data) || {};
         const batch = (data.data) || [];
@@ -3761,7 +3770,10 @@ async function _fetchServers(force) {
   const placeId = _srvCtx.placeId;
   if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
-    const maxPages = _srvHideFull ? 10 : 1;
+    // "Most players" needs deeper pages: Desc puts the fullest servers
+    // first, and the populated-but-not-full ones sit past the full pages —
+    // a single page would often return only full servers.
+    const maxPages = _srvSort === 'most' ? 8 : (_srvHideFull ? 10 : 1);
     const data = await _srvFetchRaw(placeId, maxPages, !!force, false);
     _srvList = data.servers.slice();
     _srvInjectJoined();
@@ -3784,8 +3796,8 @@ function _srvStopPolling() {
   if (_srvPollTimer) { clearInterval(_srvPollTimer); _srvPollTimer = null; }
 }
 async function launchToServer(jobId) {
-  const s = _srvList.find(x => x.id === jobId);
-  if (!s || !_srvCtx || !_srvCtx.accountId) return;
+  const s = _srvList.find(x => x.id === jobId) || { id: jobId };
+  if (!s.id || !_srvCtx || !_srvCtx.accountId) return;
   const id = _srvCtx.accountId;
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
@@ -3826,8 +3838,8 @@ function openPkgServerList(pkgId) {
 }
 
 async function launchPkgToServer(jobId) {
-  const s = _srvList.find(x => x.id === jobId);
-  if (!s || !_srvCtx || !_srvCtx.packageId) return;
+  const s = _srvList.find(x => x.id === jobId) || { id: jobId };
+  if (!s.id || !_srvCtx || !_srvCtx.packageId) return;
   const p = packages.find(x => x.id === _srvCtx.packageId);
   if (!p) return;
   const members = pkgMembers(p);
@@ -3982,16 +3994,42 @@ async function distributePkg(pkgId) {
   renderPackages();
 }
 
-function joinRandomServer() {
+// Picks a random server that is actually free: fetched fresh from the API,
+// not full, and never one where another of the user's accounts is currently
+// in (those live in _srvPresence). Bounded retries ride out a momentarily
+// stale or empty API answer before giving up.
+async function joinRandomServer() {
   if (!_srvCtx || (!_srvCtx.accountId && !_srvCtx.packageId)) return;
-  if (!_srvList.length) { toast(t('srv.randomNone'), 'err'); return; }
-  const pool = _srvList
-    .map((s, i) => ({ s, i }))
-    .filter(x => !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1)));
-  if (!pool.length) { toast(t('srv.randomNone'), 'err'); return; }
-  const pick = pool[Math.floor(Math.random() * pool.length)];
-  if (_srvCtx.packageId) launchPkgToServer(pick.s.id);
-  else launchToServer(pick.s.id);
+  const placeId = _srvCtx.placeId;
+  const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
+  const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
+  const isFree = (s) =>
+    s.playing < (s.maxPlayers || 1) &&   // has a free slot (not full)
+    !(_srvPresence[s.id] || []).length;  // no own account already inside
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const pool = [];
+      let cursor = '';
+      // Asc puts the least-occupied (free) servers first — exactly the pool
+      // we want; stop once we have enough candidates for a fair random pick.
+      for (let page = 0; page < 3; page++) {
+        const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        const r = await fetcher(url);
+        const data = (r && r.data) || {};
+        for (const s of (data.data) || []) if (isFree(s)) pool.push(s);
+        cursor = data.nextPageCursor || '';
+        if (pool.length >= 5 || !cursor) break;
+      }
+      if (pool.length) {
+        const pick = pool[Math.floor(Math.random() * pool.length)];
+        if (_srvCtx.packageId) launchPkgToServer(pick.id);
+        else launchToServer(pick.id);
+        return;
+      }
+    } catch (e) { /* retry below */ }
+    if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
+  }
+  toast(t('srv.randomNone'), 'err');
 }
 
 async function joinPastedServer() {
