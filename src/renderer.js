@@ -4375,11 +4375,31 @@ async function launchPackage(id) {
   if (linkPlace && !link.includes(':')) {
     try {
       const fetcher = members[0] && members[0].cookie ? (u) => api.robloxGetAuth(u, members[0].cookie) : (u) => api.robloxGet(u);
-      const r = await fetcher('https://games.roblox.com/v1/games/' + linkPlace + '/servers/Public?limit=50&sortOrder=Asc');
-      const servers = (r && r.data && r.data.data) || [];
-      const good = servers.find(s => _hasGoodSlots(s)) || servers.find(s => s.playing < (s.maxPlayers || 1));
-      if (good) autoTarget = linkPlace + ':' + good.id;
-    } catch (e) { /* fall back to the plain link */ }
+      // Search a few pages for a server with REAL headroom (2+ free slots).
+      // Never fall back to a 1-slot server (queue) and never launch blind
+      // into a random server (accounts land in full ones).
+      let servers = [];
+      let cursor = '';
+      for (let page = 0; page < 5; page++) {
+        const r = await fetcher('https://games.roblox.com/v1/games/' + linkPlace + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+        const data = (r && r.data) || {};
+        servers = servers.concat((data.data) || []);
+        cursor = data.nextPageCursor || '';
+        if (servers.some(s => _hasGoodSlots(s))) break;
+        if (!cursor) break;
+      }
+      const good = servers.find(s => _hasGoodSlots(s));
+      if (good) {
+        autoTarget = linkPlace + ':' + good.id;
+      } else {
+        // No server with real headroom right now — don't launch blind.
+        toast(t('pkg.noGoodServers'), 'err');
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Start All'; delete btn.dataset.busy; }
+        if (killBtn && killBtn.dataset.busy !== '1') killBtn.disabled = false;
+        if (progress) progress.innerHTML = '';
+        return;
+      }
+    } catch (e) { /* API failed — keep plain-link behavior */ }
   }
   for (const m of members) {
     const target = autoTarget || link || m.gameTarget || null;

@@ -706,6 +706,7 @@ window.I18N.en = {
   'pkg.deleted': 'Group deleted',
   'pkg.distribute': 'Spread across different servers',
   'pkg.distributedN': '{ok}/{total} accounts launched into different servers ({name})',
+  'pkg.noGoodServers': 'No server with enough free slots found. Try again in a moment.',
   'pkg.noFreeServers': 'No free servers available to spread the group.',
   'pkg.noAccounts': 'This group has no accounts yet',
   'pkg.killBusy': 'A kill is already in progress for this group',

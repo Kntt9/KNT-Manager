@@ -704,6 +704,7 @@ window.I18N.pt = {
   'pkg.deleted': 'Grupo excluído',
   'pkg.distribute': 'Distribuir em servidores diferentes',
   'pkg.distributedN': '{ok}/{total} contas abertas em servidores diferentes ({name})',
+  'pkg.noGoodServers': 'Nenhum servidor com vaga livre suficiente encontrado. Tente novamente em alguns instantes.',
   'pkg.noFreeServers': 'Nenhum servidor com vaga disponível para distribuir.',
   'pkg.noAccounts': 'Este grupo ainda não tem contas',
   'pkg.killBusy': 'Já há um encerramento em andamento para este grupo',
