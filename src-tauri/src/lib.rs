@@ -148,6 +148,8 @@ pub fn run() {
             commands::roblox_trim_memory,
             commands::roblox_trim_account_memory,
             commands::roblox_set_account_priority,
+            commands::roblox_minimize_bg,
+            commands::roblox_restore_bg,
             commands::roblox_get_game_name,
             commands::roblox_get_json,
             commands::roblox_get_json_auth,
@@ -217,6 +219,46 @@ pub fn run() {
                     // there's no runtime left to await on here.
                     let state = app_handle.state::<AppState>();
                     helper::shutdown_blocking(&state);
+                }
+                tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::Focused(false), .. } => {
+                    // The KNT window lost focus (user alt-tabbed away or
+                    // clicked another app). Minimize all Roblox windows so
+                    // the DWM stops composing them at full rate, dropping
+                    // GPU usage while instances sit in the background.
+                    // Use a short delay so a quick alt-tab back doesn't
+                    // minimize-restore-minimize in a flash.
+                    let handle = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        let state = handle.state::<AppState>();
+                        let minimized = crate::native::minimize_roblox_windows(&handle, &state).await;
+                        if minimized > 0 {
+                            crate::native::emit_log(
+                                &handle,
+                                "info",
+                                "system",
+                                &format!("Minimized {} Roblox window(s) — GPU savings active", minimized),
+                                None,
+                            );
+                        }
+                    });
+                }
+                tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::Focused(true), .. } => {
+                    // KNT window regained focus. Restore the Roblox windows.
+                    let handle = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = handle.state::<AppState>();
+                        let restored = crate::native::restore_roblox_windows(&handle, &state).await;
+                        if restored > 0 {
+                            crate::native::emit_log(
+                                &handle,
+                                "info",
+                                "system",
+                                &format!("Restored {} Roblox window(s)", restored),
+                                None,
+                            );
+                        }
+                    });
                 }
                 _ => {}
             }

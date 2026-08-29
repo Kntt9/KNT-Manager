@@ -87,6 +87,8 @@ internal static class RobloxNative
                 case "home":         return RunHome();
                 case "watch":        return RunWatch(args);
                 case "capture":      return RunCapture(args);
+                case "minimize":     return RunMinimize();
+                case "restore":      return RunRestore();
                 case "daemon":       return Daemon.Run();
                 default:
                     Console.Error.WriteLine("Unknown command. Use: daemon | mutex | closehandles | volume <0-100> | antiafk <seconds> | pids | home | watch [ms] | capture <pid> [xFrac yFrac wFrac hFrac]");
@@ -269,6 +271,62 @@ internal static class RobloxNative
         return 0;
     }
 
+    // Minimizes every visible Roblox window. When a window is minimized the
+    // DWM stops composing it at full rate, which drops GPU usage dramatically
+    // for background instances. Returns the number of windows that were
+    // minimized (0 if none were visible).
+    internal static string MinimizeList()
+    {
+        int count = 0;
+        foreach (var p in Process.GetProcessesByName("RobloxPlayerBeta"))
+        {
+            try
+            {
+                bool wasMinimised = IsIconic(p.MainWindowHandle);
+                if (!wasMinimised && p.MainWindowHandle != IntPtr.Zero)
+                {
+                    ShowWindow(p.MainWindowHandle, SW_MINIMIZE);
+                    count++;
+                }
+            }
+            catch { }
+        }
+        return count.ToString();
+    }
+
+    private static int RunMinimize()
+    {
+        Console.Out.WriteLine(MinimizeList());
+        Console.Out.Flush();
+        return 0;
+    }
+
+    // Restores every minimized Roblox window back to its normal state.
+    internal static string RestoreList()
+    {
+        int count = 0;
+        foreach (var p in Process.GetProcessesByName("RobloxPlayerBeta"))
+        {
+            try
+            {
+                if (IsIconic(p.MainWindowHandle))
+                {
+                    ShowWindow(p.MainWindowHandle, SW_RESTORE);
+                    count++;
+                }
+            }
+            catch { }
+        }
+        return count.ToString();
+    }
+
+    private static int RunRestore()
+    {
+        Console.Out.WriteLine(RestoreList());
+        Console.Out.Flush();
+        return 0;
+    }
+
     // Resident mode for the Rust watch loop: instead of spawning a fresh
     // process every poll tick (measurable CPU/AV-scan overhead at a 2s
     // cadence -- the reported cause of high idle CPU with instances open),
@@ -408,8 +466,11 @@ internal static class RobloxNative
     static int Clamp(int v, int min, int max) { return v < min ? min : (v > max ? max : v); }
 
     const int SW_RESTORE_CAPTURE = 9, SW_MINIMIZE_CAPTURE = 6;
+    const int SW_RESTORE = 9, SW_MINIMIZE = 6;
     [DllImport("user32.dll", EntryPoint = "IsIconic")] static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll", EntryPoint = "ShowWindow")] static extern bool ShowWindowCapture(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll", EntryPoint = "ShowWindow")] static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 }
 
 // ── ROBLOX_singletonEvent handle closing (ported from closehandles.ps1) ─────
@@ -664,6 +725,7 @@ internal static class AntiAfk
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
     [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint uiAction, uint uiParam, IntPtr pvParam, uint fWinIni);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -714,12 +776,64 @@ internal static class AntiAfk
 
     // Focus one window and send a single benign key tap. Does NOT restore the
     // previous foreground (the caller does that once after all due taps).
+    //
+    // Minimized windows are handled differently: instead of restoring + focusing
+    // (which wakes the GPU and defeats background farming), we post a WM_KEYDOWN
+    // / WM_KEYUP directly via PostMessage. Roblox processes these messages even
+    // when the window is minimized, so the idle timer resets without any visual
+    // change or GPU wake-up. Visible (non-minimized) windows still get the full
+    // foreground tap path so focus-sensitive games register the input.
+    //
+    // For visible windows, we briefly lower the system-wide foreground lock
+    // timeout (from its default ~500ms to 0) ONLY for the duration of the tap
+    // (~150ms), then restore it immediately. This prevents other apps from
+    // stealing focus mid-tap while keeping the timeout at its normal value the
+    // rest of the time — a zero timeout kept for hours prevents the DWM from
+    // throttling background window compositing, which is what caused sustained
+    // GPU usage even when no taps were happening.
     static bool TapWindow(IntPtr hWnd, byte bVk, byte bScan)
     {
         bool wasMinimised = IsIconic(hWnd);
+        if (wasMinimised)
+        {
+            // PostMessage bypasses the foreground lock and works on minimized
+            // windows — no ShowWindow(SW_RESTORE), no SetForegroundWindow, no
+            // GPU wake-up. The key event reaches Roblox's message pump directly.
+            const uint WM_KEYDOWN = 0x0100;
+            const uint WM_KEYUP = 0x0101;
+            try
+            {
+                PostMessage(hWnd, WM_KEYDOWN, (IntPtr)bVk, IntPtr.Zero);
+                Thread.Sleep(5);
+                PostMessage(hWnd, WM_KEYUP, (IntPtr)bVk, IntPtr.Zero);
+                return true;
+            }
+            catch { return false; }
+        }
+        // Briefly lower foreground lock so no other app can steal focus mid-tap.
+        // Only active for ~200ms instead of the hours the old code kept it at 0.
+        const uint SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000;
+        const uint SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001;
+        uint savedTimeout = 0;
+        bool hadTimeout = false;
         try
         {
-            if (wasMinimised) ShowWindow(hWnd, SW_RESTORE);
+            IntPtr buf = Marshal.AllocHGlobal(sizeof(int));
+            try
+            {
+                if (SystemParametersInfo(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, buf, 0))
+                {
+                    savedTimeout = (uint)Marshal.ReadInt32(buf);
+                    hadTimeout = true;
+                }
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+            SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, IntPtr.Zero, 0);
+        }
+        catch { }
+
+        try
+        {
             ForceForeground(hWnd);
             Thread.Sleep(50 + _rng.Next(40)); // let focus settle; slight jitter
             keybd_event(bVk, bScan, 0, IntPtr.Zero);               // key down
@@ -729,7 +843,14 @@ internal static class AntiAfk
             return true;
         }
         catch { return false; }
-        finally { if (wasMinimised) ShowWindow(hWnd, SW_MINIMIZE); }
+        finally
+        {
+            if (hadTimeout)
+            {
+                try { SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, new IntPtr((int)savedTimeout), 0); }
+                catch { }
+            }
+        }
     }
 
     // Per-instance anti-AFK loop. Each Roblox window gets its own countdown from
@@ -743,46 +864,18 @@ internal static class AntiAfk
     // interruptible rather than terminated.
     public static void RunLoop(int deadlineSec, int vk, Action<uint> onTap, WaitHandle stop)
     {
-        // Disable the foreground lock timeout so SetForegroundWindow reliably
-        // brings each Roblox window to the front, even across many instances.
-        // This is a SYSTEM-WIDE setting that applies to every app until the
-        // next reboot, so read the old value first and put it back when
-        // anti-AFK stops (see the finally below) instead of leaving the
-        // machine altered after we're done with it.
-        const uint SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000;
-        const uint SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001;
-        uint previousTimeout = 0;
-        bool restoreTimeout = false;
-        try
-        {
-            IntPtr buf = Marshal.AllocHGlobal(sizeof(int));
-            try
-            {
-                if (SystemParametersInfo(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, buf, 0))
-                {
-                    previousTimeout = (uint)Marshal.ReadInt32(buf);
-                    restoreTimeout = true;
-                }
-            }
-            finally { Marshal.FreeHGlobal(buf); }
-            // For this action the new value travels *in* pvParam, it is not a
-            // pointer to it -- zero here means "no delay".
-            SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, IntPtr.Zero, 0);
-        }
-        catch { }
-
+        // We do NOT change the system-wide foreground lock timeout here.
+        // That setting is global and keeping it at 0 for hours prevents the
+        // DWM from throttling background window compositing, which keeps GPU
+        // usage elevated even when no taps are happening.
+        // Instead, TapWindow temporarily lowers the timeout for just the few
+        // milliseconds of each individual foreground tap and restores it
+        // immediately after (see TapWindow).
         try
         {
             RunLoopCore(deadlineSec, vk, onTap, stop);
         }
-        finally
-        {
-            if (restoreTimeout)
-            {
-                try { SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, new IntPtr((int)previousTimeout), 0); }
-                catch { }
-            }
-        }
+        finally { }
     }
 
     static void RunLoopCore(int deadlineSec, int vk, Action<uint> onTap, WaitHandle stop)

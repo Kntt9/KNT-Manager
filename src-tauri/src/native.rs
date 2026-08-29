@@ -244,6 +244,30 @@ pub async fn start_mutex_holder(app: &AppHandle, state: &AppState) {
     }
 }
 
+/// Minimizes every visible Roblox window so the DWM stops composing them at
+/// full rate, dropping GPU usage while instances sit in the background.
+/// Returns how many windows were actually minimized.
+pub async fn minimize_roblox_windows(app: &AppHandle, state: &AppState) -> u32 {
+    match crate::helper::call(app, state, "minimize", crate::helper::SLOW_TIMEOUT).await {
+        Ok(payload) => payload.trim().parse::<u32>().unwrap_or(0),
+        Err(e) => {
+            eprintln!("[minimize] failed: {e}");
+            0
+        }
+    }
+}
+
+/// Restores every minimized Roblox window back to its normal size.
+pub async fn restore_roblox_windows(app: &AppHandle, state: &AppState) -> u32 {
+    match crate::helper::call(app, state, "restore", crate::helper::SLOW_TIMEOUT).await {
+        Ok(payload) => payload.trim().parse::<u32>().unwrap_or(0),
+        Err(e) => {
+            eprintln!("[restore] failed: {e}");
+            0
+        }
+    }
+}
+
 pub async fn set_multi_instance(app: &AppHandle, state: &AppState, on: bool) {
     let cmd = if on { "mutex|on" } else { "mutex|off" };
     if let Err(e) = crate::helper::call(app, state, cmd, crate::helper::SLOW_TIMEOUT).await {
@@ -495,7 +519,7 @@ pub fn running_account_ids(state: &AppState, alive: &std::collections::HashSet<u
     let pids = state.account_pids.lock().unwrap();
     let mut ids: Vec<String> = pids
         .iter()
-        .filter(|(_, pid)| alive.contains(pid) || is_launcher_process(**pid))
+                .filter(|(_, pid)| alive.contains(pid) || is_launcher_process(state, **pid))
         .map(|(id, _)| id.clone())
         .collect();
     if !alive.is_empty() {
@@ -697,7 +721,7 @@ pub async fn sync_running_instances(app: &AppHandle, state: &AppState) -> Result
         // as survivors — their process name isn't RobloxPlayerBeta.exe so
         // they never show up in alive_pids. It only matches the configured
         // launcher exe, so recycled PIDs can't fake a running account.
-        if (alive_pids.contains(pid) || is_launcher_process(*pid)) && claimed.insert(*pid) {
+        if (alive_pids.contains(pid) || is_launcher_process(state, *pid)) && claimed.insert(*pid) {
             survivors.push((id.clone(), *pid));
         }
     }
@@ -1246,6 +1270,11 @@ pub async fn kill_all_roblox(app: &AppHandle, state: &AppState) -> Value {
     stop_watch_poll_if_idle(state);
     persist_instances(state);
 
+    // Drop the lock before restarting the mutex holder: the pipe round-trip
+    // (mutex|rehold) can take a couple seconds and there's no reason to block
+    // sync/kill-home on it. Events are queued fire-and-forget, so the frontend
+    // won't miss them regardless of when exactly they're emitted.
+    drop(_ops_guard);
     restart_mutex_holder(app, state).await;
     notify(app, &watched_ids);
     // Also notify home accounts so the frontend amber badges clear.
@@ -1393,18 +1422,19 @@ fn process_exe_path(_pid: u32) -> Option<String> {
 // True when the live process at `pid` matches the user-configured custom
 // launcher path (case-insensitive). Returns false when no custom launcher
 // is configured, so the normal RobloxPlayerBeta path is never affected.
-fn is_launcher_process(pid: u32) -> bool {
-    let s = crate::settings::load_settings();
-    let path = s
-        .get("launcherPath")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
+// The launcher path is cached in AppState to avoid reading settings.json
+// on every watch tick — the cache is cleared by settings_save when
+// launcherPath changes.
+fn is_launcher_process(state: &AppState, pid: u32) -> bool {
+    let path = {
+        let cached = state.cached_launcher_path.lock().unwrap();
+        cached.clone()
+    };
     let Some(path) = path else {
         return false;
     };
     match process_exe_path(pid) {
-        Some(p) => p.eq_ignore_ascii_case(path),
+        Some(p) => p.eq_ignore_ascii_case(&path),
         None => false,
     }
 }
@@ -1421,8 +1451,13 @@ fn is_roblox_player_process(pid: u32) -> bool {
 }
 
 pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: &str) -> Value {
+    // Serialize against sync / kill-all / kill-home so a concurrent sync can't
+    // re-adopt a PID the kill is about to clear, or clear state the sync just
+    // populated. Reuses the same ops_lock that sync_running_instances and
+    // kill_all_roblox already acquire.
+    let _ops_guard = state.ops_lock.lock().await;
+
     state.manual_kills.lock().unwrap().insert(account_id.to_string());
-    
     let pid = state.account_pids.lock().unwrap().get(account_id).copied();
 
     let notify_and_cleanup = |app: &AppHandle, success: bool| {
@@ -1697,7 +1732,7 @@ fn auto_relaunch_allowed(state: &AppState, account_id: &str) -> bool {
 }
 
 fn stop_watch_poll_if_idle(state: &AppState) {
-    if state.watched_accounts.lock().unwrap().is_empty() && state.home_accounts.lock().unwrap().is_empty() {
+    if state.watched_accounts.lock().unwrap().is_empty() {
         if let Some(handle) = state.watch_handle.lock().unwrap().take() {
             handle.abort();
         }
@@ -1805,7 +1840,7 @@ static WATCH_TICK_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 async fn watch_tick(app: &AppHandle) {
     let state = app.state::<AppState>();
-    if state.watched_accounts.lock().unwrap().is_empty() && state.home_accounts.lock().unwrap().is_empty() {
+    if state.watched_accounts.lock().unwrap().is_empty() {
         stop_watch_poll_if_idle(&state);
         return;
     }
@@ -1849,15 +1884,6 @@ async fn watch_tick(app: &AppHandle) {
         .iter()
         .map(|(k, v)| (k.clone(), *v))
         .collect();
-    // Fetch home PIDs once per tick so the running check can exclude hidden
-    // tray processes — a "home" (game closed with X, launcher still in tray)
-    // must NOT count as "running" or the account never accumulates misses
-    // and never reaches the home-detection path (the amber badge).
-    let home_now = if !watched_snapshot.is_empty() {
-        home_pids(app, &state).await
-    } else {
-        None
-    };
     for (account_id, ready_at) in watched_snapshot {
         if now < ready_at {
             continue;
@@ -1869,33 +1895,7 @@ async fn watch_tick(app: &AppHandle) {
         // is "ours", so fall back to the coarse "is anything running at all"
         // signal instead of declaring it closed outright.
         let mut running = match pid {
-            // Tracked PID: alive_pids only contains RobloxPlayerBeta.exe
-            // processes. A custom launcher (Fishtrap etc.) won't be in that
-            // set, so fall back to checking whether the live process is
-            // literally the configured launcher exe — never a blanket
-            // "any PID is alive" (that would treat recycled PIDs as running
-            // and break close-detection for the normal Roblox path).
-            //
-            // A live launcher exe only counts as "running" while a Roblox
-            // client is actually up (any_running). The launcher sitting
-            // alone in the tray (game closed with X) is the custom-launcher
-            // equivalent of the home screen — the account is not active.
-            // A PID that the helper identifies as a "home" (tray) process
-            // (its windows are hidden, not visible) is NOT running — the
-            // game itself closed, leaving only the tray launcher. Marking it
-            // as "not running" lets the tick accumulate misses and reach the
-            // home-detection path, which emits the amber badge on the card.
-            Some(p) => {
-                if home_now.as_ref().map_or(false, |h| h.contains(&p)) {
-                    false
-                } else if alive_pids.contains(&p) {
-                    true
-                } else if is_launcher_process(p) {
-                    any_running
-                } else {
-                    false
-                }
-            }
+            Some(p) => alive_pids.contains(&p) || is_launcher_process(&state, p) && any_running,
             None => any_running,
         };
         // Adopt an unclaimed PID only for an account that has never had one
@@ -1932,87 +1932,6 @@ async fn watch_tick(app: &AppHandle) {
             }
         } else {
             state.miss_counts.lock().unwrap().insert(account_id, 0);
-        }
-    }
-
-    // A game that died while a hidden launcher window is still around went to
-    // the Roblox "home" (closed with the X): amber badge instead of closed.
-    // Never for manual kills -- those really close the account.
-    if !candidates.is_empty() {
-        // Some(pids) = helper confirmed; None = helper failed (timeout/busy)
-        // — we don't know whether this is "home" or "closed", so defer the
-        // decision to the next tick instead of guessing. Guessing was the bug:
-        // a single slow tick used to treat every candidate as closed and
-        // permanently lose the amber state.
-        // A custom-launcher account whose launcher exe is still alive (in the
-        // tray) with no Roblox client up counts as "went home" too — the
-        // launcher's tray is the Fishtrap-equivalent of the Roblox home.
-        for account_id in &candidates {
-            let is_manual = state.manual_kills.lock().unwrap().contains(account_id);
-            let pid_here = state.account_pids.lock().unwrap().get(account_id).copied();
-            let launcher_tray = pid_here.is_some()
-                && is_launcher_process(pid_here.unwrap())
-                && !any_running;
-            // Normal Roblox: closing the game with X does not kill the
-            // process — it becomes the hidden tray launcher (home). If the
-            // helper's home probe missed it (timing), a live
-            // RobloxPlayerBeta process that is no longer an active game
-            // window is still the home state.
-            let roblox_tray = pid_here.is_some()
-                && is_roblox_player_process(pid_here.unwrap())
-                && pid_is_alive(pid_here.unwrap())
-                && !alive_pids.contains(&pid_here.unwrap());
-            let went_home = match &home_now {
-                Some(h) if !h.is_empty() && !is_manual => true,
-                Some(_) => {
-                    // The game process died (pid_here is dead). If any Roblox
-                    // client is still running, the account went to the home
-                    // tray (the shared launcher/home window). This is the
-                    // reliable check — the helper's home probe can lag.
-                    let game_dead_home_alive = !is_manual
-                        && pid_here.is_some()
-                        && !pid_is_alive(pid_here.unwrap())
-                        && (launcher_tray || any_running);
-                    (launcher_tray || roblox_tray || game_dead_home_alive) && !is_manual
-                }
-                None => continue, // probe failed — defer this account
-            };
-            if went_home {
-                state.home_accounts.lock().unwrap().insert(account_id.clone());
-                state.watched_accounts.lock().unwrap().remove(account_id);
-                state.miss_counts.lock().unwrap().remove(account_id);
-                state.account_pids.lock().unwrap().remove(account_id);
-                state.home_retry_deadline.lock().unwrap().remove(account_id);
-                clear_manual_priority(&state, account_id);
-                let accounts = crate::storage::load_accounts(&state);
-                let username = accounts
-                    .iter()
-                    .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(account_id.as_str()))
-                    .and_then(|a| a.get("username").and_then(|v| v.as_str()))
-                    .unwrap_or(account_id);
-                emit_log(
-                    app,
-                    "warn",
-                    "crash",
-                    &format!("Roblox closed to the home for {} — game exited, launcher stays in the tray", username),
-                    Some(serde_json::json!({ "accountId": account_id, "username": username })),
-                );
-                let _ = app.emit("roblox:home", account_id.clone());
-            } else if is_manual {
-                closed.push(account_id.clone());
-            } else {
-                // Not confirmed home yet. The home/tray window can lag a
-                // couple of seconds behind the game window closing — give it
-                // a short retry window before declaring the account closed,
-                // so a legit home isn't burned into a permanent closed.
-                let mut retry = state.home_retry_deadline.lock().unwrap();
-                let deadline = retry.entry(account_id.clone()).or_insert_with(|| now + 4_000);
-                if now >= *deadline {
-                    retry.remove(account_id);
-                    drop(retry);
-                    closed.push(account_id.clone());
-                }
-            }
         }
     }
 
@@ -2086,28 +2005,6 @@ async fn watch_tick(app: &AppHandle) {
                 }
             }
         }
-    }
-
-    // The hidden home window itself is gone (user closed it from the tray,
-    // or it was killed) -> previously-home accounts are plainly closed now.
-    // Only drain when the helper confirms the launcher is gone (Some(empty));
-    // None means the probe itself failed and we should wait for the next tick.
-    if !state.home_accounts.lock().unwrap().is_empty() {
-        if let Some(home) = home_pids(app, &state).await {
-            if home.is_empty() {
-            let gone: Vec<String> = state.home_accounts.lock().unwrap().drain().collect();
-            for account_id in gone {
-                emit_log(
-                    app,
-                    "info",
-                    "close",
-                    &format!("Roblox home closed for {}", account_id),
-                    Some(serde_json::json!({ "accountId": account_id })),
-                );
-                let _ = app.emit("roblox:closed", account_id);
-            }
-        }
-    }
     }
 
     // Same definition as count_roblox_processes, and computed after the closed

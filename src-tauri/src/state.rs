@@ -12,6 +12,9 @@ pub struct AppState {
     pub session_pass: Mutex<Option<String>>,
     pub cached_key: Mutex<Option<[u8; 32]>>,
     pub cached_legacy_key: Mutex<Option<[u8; 32]>>,
+    /// Cached launcher path from settings to avoid reading settings.json
+    /// on every watch tick. Cleared whenever settings are saved.
+    pub cached_launcher_path: Mutex<Option<String>>,
 
     // The one resident RobloxNative.exe (see helper.rs). It replaces what used
     // to be a separate child per concern -- mutex holder, anti-AFK, PID
@@ -90,6 +93,7 @@ impl AppState {
             session_pass: Mutex::new(None),
             cached_key: Mutex::new(None),
             cached_legacy_key: Mutex::new(None),
+            cached_launcher_path: Mutex::new(None),
             helper: tokio::sync::Mutex::new(None),
             helper_child: Mutex::new(None),
             helper_shutdown: AtomicBool::new(false),

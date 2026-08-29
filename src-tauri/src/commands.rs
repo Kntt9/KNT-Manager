@@ -40,6 +40,9 @@ pub fn settings_save(state: State<AppState>, data: Map<String, Value>) -> bool {
         s.insert(k, v);
     }
     save_settings(&s);
+    // Invalidate the launcher-path cache so the next watch tick reads the
+    // (possibly updated) value instead of serving a stale one from memory.
+    state.cached_launcher_path.lock().unwrap().take();
     if let Some(Value::Bool(on)) = multi_instance {
         // Releases/re-acquires the mutex inside the one helper process --
         // toggling this no longer starts or kills anything.
@@ -595,6 +598,20 @@ pub async fn roblox_trim_account_memory(
 #[tauri::command]
 pub fn roblox_set_account_priority(state: State<AppState>, id: String, priority: String) -> Value {
     crate::native::set_account_priority(&state, &id, &priority)
+}
+
+/// Minimizes all visible Roblox windows to save GPU when the KNT window is
+/// in the background. The windows are restored automatically when the KNT
+/// window regains focus.
+#[tauri::command]
+pub async fn roblox_minimize_bg(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u32, ()> {
+    Ok(crate::native::minimize_roblox_windows(&app, &state).await)
+}
+
+/// Restores all minimized Roblox windows back to their normal size.
+#[tauri::command]
+pub async fn roblox_restore_bg(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u32, ()> {
+    Ok(crate::native::restore_roblox_windows(&app, &state).await)
 }
 
 #[tauri::command]

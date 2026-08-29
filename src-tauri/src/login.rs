@@ -1,7 +1,6 @@
 use crate::state::AppState;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::network::SetCookieParams;
-use futures::StreamExt;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -329,10 +328,14 @@ pub async fn open_account_in_browser(
         .build()
         .map_err(|e| format!("Failed to launch Chrome: {}", e))?;
 
-    let (browser, mut handler) = Browser::launch(config)
+    let (browser, handler) = Browser::launch(config)
         .await
         .map_err(|e| format!("Failed to launch Chrome: {}", e))?;
-    tokio::spawn(async move { while handler.next().await.is_some() {} });
+    // We only need programmatic control for cookie injection and navigation.
+    // After that the user drives Chrome directly, so drop the CDP handler
+    // (stops the background task that would otherwise run forever) and forget
+    // the Browser handle so the Chrome process stays alive on its own.
+    drop(handler);
 
     let page = browser
         .new_page("about:blank")

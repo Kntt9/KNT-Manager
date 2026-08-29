@@ -347,12 +347,12 @@ async fn spawn(app: &AppHandle, state: &AppState, exe: &Path) -> Option<Arc<Help
         // dies instantly on every start (mismatched build, AV quarantine,
         // missing .NET) would otherwise spawn processes forever.
         if !restart_allowed(&st) {
-            eprintln!("[helper] too many restarts; giving up");
+            eprintln!("[helper] daemon exited too many times in the restart window; giving up");
             crate::native::emit_log(
                 &app_r,
                 "err",
                 "system",
-                "Native helper keeps stopping - giving up. Restart MultiRoblox to try again.",
+                "Native helper crashed repeatedly — check that .NET Framework 4.x is installed and that antivirus isn't blocking RobloxNative.exe. Restart the app to reset.",
                 None,
             );
             return;
@@ -497,28 +497,38 @@ pub async fn shutdown(state: &AppState) {
 /// Synchronous best-effort stop for the app-exit path, where there's no
 /// runtime left to await on.
 ///
-/// Dropping the Helper closes our end of the daemon's stdin, which is what
-/// lets it shut down *gracefully*: it sees EOF, stops its workers, and anti-AFK
-/// restores the system-wide foreground-lock timeout on its way out. Killing it
-/// outright skips all of that and leaves the machine altered, so the kill is
-/// only a backstop for a daemon that doesn't go on its own.
+/// Drops the Helper handle to close our end of the daemon's stdin (graceful
+/// EOF shutdown). Also kills the child process directly as a fallback —
+/// the graceful path can be missed if the async runtime is already tearing
+/// down and the stdin lock can't be acquired. Finally, we also taskkill any
+/// stray RobloxNative.exe left behind in case the state was corrupted.
 pub fn shutdown_blocking(state: &AppState) {
     state.helper_shutdown.store(true, Ordering::SeqCst);
-    // try_lock, not blocking_lock: this runs on the Tauri run-loop thread and
-    // blocking_lock panics inside a runtime context -- with panic=abort that
-    // would take the whole process down on the way out.
+    // Try the graceful path first: drop the Helper so stdin EOF triggers
+    // clean shutdown in the daemon (restores foreground lock, stops threads).
     if let Ok(mut guard) = state.helper.try_lock() {
         drop(guard.take());
     }
+    // Then try to wait for the child to exit, with a short timeout.
     if let Some(mut child) = state.helper_child.lock().unwrap().take() {
-        for _ in 0..12 {
+        for _ in 0..20 {
             if matches!(child.try_wait(), Ok(Some(_))) {
-                return; // exited cleanly, cleanup ran
+                return; // exited cleanly
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         let _ = child.start_kill();
+        // Give it a moment to die after the kill signal.
+        std::thread::sleep(Duration::from_millis(500));
     }
+    // Last resort: kill any stray helper process by name. This covers the
+    // case where the state was lost (crash, panic) and the helper is still
+    // running with no parent to clean it up.
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "taskkill /F /IM RobloxNative.exe /T"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// True when the one helper process is up and holding the singleton mutex.

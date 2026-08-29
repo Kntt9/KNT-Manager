@@ -75,6 +75,7 @@ window.I18N.pt = {
   'batch.killedN': '{ok}/{total} instâncias encerradas.',
   'batch.trimmedN': 'Memória liberada para {ok}/{total} contas.',
   'batch.categorySet': 'Categoria definida para {n} contas.',
+  'batch.categorySetPartial': 'Categoria definida para {ok}/{n} contas ({fail} falharam).',
   'common.save': 'Salvar',
   'common.close': 'Fechar',
   // ── server list ──
@@ -637,6 +638,10 @@ window.I18N.pt = {
   'trash.restored': '{name} restaurada',
   'trash.purged': 'Excluída para sempre',
   'trash.emptied': 'Lixeira esvaziada',
+  'trash.moveFailed': 'Falha ao mover conta para a lixeira',
+  'trash.restoreFailed': 'Falha ao restaurar conta',
+  'trash.purgeFailed': 'Falha ao excluir conta permanentemente',
+  'trash.emptyFailed': 'Falha ao esvaziar a lixeira',
 
   // ── categorias ──
   'cat.title': 'Categorias',

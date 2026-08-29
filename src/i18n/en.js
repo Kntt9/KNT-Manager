@@ -77,6 +77,7 @@ window.I18N.en = {
   'batch.killedN': '{ok}/{total} instances killed.',
   'batch.trimmedN': 'Trimmed memory for {ok}/{total} accounts.',
   'batch.categorySet': 'Category set for {n} accounts.',
+  'batch.categorySetPartial': 'Category set for {ok}/{n} accounts ({fail} failed).',
   'common.save': 'Save',
   'common.close': 'Close',
   // ── server list ──
@@ -639,6 +640,10 @@ window.I18N.en = {
   'trash.restored': 'Restored {name}',
   'trash.purged': 'Deleted forever',
   'trash.emptied': 'Trash emptied',
+  'trash.moveFailed': 'Failed to move account to trash',
+  'trash.restoreFailed': 'Failed to restore account',
+  'trash.purgeFailed': 'Failed to permanently delete account',
+  'trash.emptyFailed': 'Failed to empty trash',
 
   // ── categories ──
   'cat.title': 'Categories',

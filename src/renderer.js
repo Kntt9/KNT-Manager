@@ -1913,14 +1913,20 @@ async function batchSetCategory(catId) {
   document.getElementById('batch-cat-menu')?.classList.remove('open');
   const ids = [..._selectedIds];
   if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  let ok = 0, fail = 0;
   for (const id of ids) {
     const a = accounts.find(x => x.id === id);
-    if (!a) continue;
+    if (!a) { fail++; continue; }
     a.categoryId = catId || null;
-    await api.updateAccount(id, { categoryId: catId || null }).catch(() => {});
+    try { await api.updateAccount(id, { categoryId: catId || null }); ok++; }
+    catch { fail++; }
   }
   render();
-  toast(t('batch.categorySet', { n: ids.length }), 'ok');
+  if (fail > 0) {
+    toast(t('batch.categorySetPartial', { n: ids.length, ok, fail }), 'err');
+  } else {
+    toast(t('batch.categorySet', { n: ids.length }), 'ok');
+  }
   clearSelection();
 }
 
@@ -2155,7 +2161,7 @@ async function recheckAllCookies(force) {
   if (changed) render(); // rebuild once at the end so the cards match
   } finally { _recheckRunning = false; }
 }
-setInterval(() => { if (accounts.length) recheckAllCookies(false); }, 60000);
+setInterval(() => { if (accounts.length) recheckAllCookies(false); }, _COOKIE_RECHECK_INTERVAL);
 
 
 const _gameNameCache = {}; // accountId -> resolved game name
@@ -2225,7 +2231,6 @@ function updateGameLabel(accountId) {
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n) + '\u2026' : s; }
 
-let _dragSaveTimer = null;
 let _dragging = null, _dragClone = null, _dragOffX = 0, _dragOffY = 0, _dragOverId = null;
 
 function initDrag() {
@@ -2324,10 +2329,10 @@ function onDragEnd() {
   // settle the DOM and rebind the drag handlers with one render
   render();
 
-  clearTimeout(_dragSaveTimer);
-  _dragSaveTimer = setTimeout(() => {
-    api.reorderAccounts(accounts.map(a => a.id));
-  }, 400);
+  // Reorder has no visual feedback after settle(), so flush immediately
+  // rather than debouncing — the backend write is fast and a 400 ms stall
+  // leaves the list feeling sluggish during rapid reorders.
+  api.reorderAccounts(accounts.map(a => a.id)).catch(() => {});
 }
 
 function loadAvatar(id, uid) {
@@ -2690,19 +2695,23 @@ async function removeAcc(id) {
   const a = accounts.find(x => x.id === id);
   if (!a) return;
   confirmAction(t('trash.moveConfirm', { name: a.username }), async () => {
-    await api.removeAccount(id);
-    accounts = accounts.filter(x => x.id !== id);
-    a.trashed = true;
-    trashedAccounts.unshift(a);
-    render();
-    updateTrashBadge();
-    if (packages.some(p => p.accountIds.includes(id))) {
-      packages.forEach(p => { p.accountIds = p.accountIds.filter(aid => aid !== id); });
-      api.savePackages(packages);
-      renderPackages();
+    try {
+      await api.removeAccount(id);
+      accounts = accounts.filter(x => x.id !== id);
+      a.trashed = true;
+      trashedAccounts.unshift(a);
+      render();
+      updateTrashBadge();
+      if (packages.some(p => p.accountIds.includes(id))) {
+        packages.forEach(p => { p.accountIds = p.accountIds.filter(aid => aid !== id); });
+        api.savePackages(packages);
+        renderPackages();
+      }
+      forgetTrackingAccount(id);
+      toast(t('trash.moved', { name: a.username }), 'err');
+    } catch (e) {
+      toast(t('common.failed', { msg: e.message || t('trash.moveFailed') }), 'err');
     }
-    forgetTrackingAccount(id);
-    toast(t('trash.moved', { name: a.username }), 'err');
   });
 }
 async function clearAll() {
@@ -2778,37 +2787,49 @@ function renderTrash() {
 async function trashRestore(id) {
   const res = await api.restoreAccount(id);
   if (!res) return;
-  const a = trashedAccounts.find(x => x.id === id);
-  if (a) {
-    trashedAccounts = trashedAccounts.filter(x => x.id !== id);
-    a.trashed = false;
-    accounts.push(a);
+  try {
+    const a = trashedAccounts.find(x => x.id === id);
+    if (a) {
+      trashedAccounts = trashedAccounts.filter(x => x.id !== id);
+      a.trashed = false;
+      accounts.push(a);
+    }
+    render();
+    renderTrash();
+    updateTrashBadge();
+    toast(t('trash.restored', { name: a ? (a.nickname || a.username) : '' }), 'ok');
+  } catch (e) {
+    toast(t('common.failed', { msg: e.message || t('trash.restoreFailed') }), 'err');
   }
-  render();
-  renderTrash();
-  updateTrashBadge();
-  toast(t('trash.restored', { name: a ? (a.nickname || a.username) : '' }), 'ok');
 }
 
 function trashPurge(id) {
   const a = trashedAccounts.find(x => x.id === id);
   confirmAction(t('trash.purgeConfirm', { name: (a ? (a.nickname || a.username) : '') || t('trash.thisAccount') }), async () => {
-    await api.purgeAccount(id);
-    trashedAccounts = trashedAccounts.filter(x => x.id !== id);
-    renderTrash();
-    updateTrashBadge();
-    toast(t('trash.purged'), 'err');
+    try {
+      await api.purgeAccount(id);
+      trashedAccounts = trashedAccounts.filter(x => x.id !== id);
+      renderTrash();
+      updateTrashBadge();
+      toast(t('trash.purged'), 'err');
+    } catch (e) {
+      toast(t('common.failed', { msg: e.message || t('trash.purgeFailed') }), 'err');
+    }
   });
 }
 
 function trashEmpty() {
   if (!trashedAccounts.length) return;
   confirmAction(t('trash.emptyConfirm', { n: trashedAccounts.length, s: trashedAccounts.length === 1 ? '' : 's' }), async () => {
-    await api.emptyTrash();
-    trashedAccounts = [];
-    renderTrash();
-    updateTrashBadge();
-    toast(t('trash.emptied'), 'err');
+    try {
+      await api.emptyTrash();
+      trashedAccounts = [];
+      renderTrash();
+      updateTrashBadge();
+      toast(t('trash.emptied'), 'err');
+    } catch (e) {
+      toast(t('common.failed', { msg: e.message || t('trash.emptyFailed') }), 'err');
+    }
   });
 }
 
@@ -5185,7 +5206,10 @@ function updateWindowTitle(n) {
   if (api && typeof api.setTitle === 'function') api.setTitle(title);
 }
 
+let _COOKIE_RECHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes between cookie re-checks
 let _statusPoll = null;
+let _uptimePoll = null;
+let _cookieRecheckTimer = null;
 let _lastCountPushAt = 0;
 async function pollRunningCount() {
   // Skip if a push from the backend landed recently.
@@ -5284,13 +5308,26 @@ function startStatusPoll() {
   _statusPoll = setInterval(pollStatus, 3000);
   // Refresh uptime labels in place (no re-render) while the Accounts page is
   // visible, so "há 2h 34min" keeps ticking without flashing the grid.
-  setInterval(() => {
+  _uptimePoll = setInterval(() => {
     if (!document.getElementById('page-accounts')?.classList.contains('active')) return;
     document.querySelectorAll('.card.is-live .card-up').forEach(el => {
       const id = el.closest('.card')?.dataset.id;
       if (id && _launchedAt[id]) el.textContent = fmtUptime(_launchedAt[id]);
     });
   }, 30000);
+}
+function stopStatusPoll() {
+  if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
+  if (_uptimePoll) { clearInterval(_uptimePoll); _uptimePoll = null; }
+}
+function stopCookieRecheck() {
+  if (_cookieRecheckTimer) { clearInterval(_cookieRecheckTimer); _cookieRecheckTimer = null; }
+}
+// Called once when the app is tearing down (page unload or dev-mode restart).
+// Stops every interval we own so they don't keep firing against a stale DOM.
+function _destroy() {
+  stopStatusPoll();
+  stopCookieRecheck();
 }
 
 // ── Sync instances ────────────────────────────────────────────────────────
