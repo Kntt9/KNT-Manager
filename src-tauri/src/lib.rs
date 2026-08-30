@@ -227,18 +227,11 @@ pub fn run() {
                     // GPU usage while instances sit in the background.
                     // Use a short delay so a quick alt-tab back doesn't
                     // minimize-restore-minimize in a flash.
-                    // Also skip if a previous action is still in flight —
-                    // rapid focus flicker must not stack async calls.
                     let handle = app_handle.clone();
-                    let pending = handle.state::<AppState>().focus_action_pending.clone();
                     tauri::async_runtime::spawn(async move {
-                        if pending.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                            return; // another action already queued; skip
-                        }
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         let state = handle.state::<AppState>();
                         let minimized = crate::native::minimize_roblox_windows(&handle, &state).await;
-                        pending.store(false, std::sync::atomic::Ordering::SeqCst);
                         if minimized > 0 {
                             crate::native::emit_log(
                                 &handle,
@@ -252,16 +245,10 @@ pub fn run() {
                 }
                 tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::Focused(true), .. } => {
                     // KNT window regained focus. Restore the Roblox windows.
-                    // Skip if a previous action is still in flight.
                     let handle = app_handle.clone();
-                    let pending = handle.state::<AppState>().focus_action_pending.clone();
                     tauri::async_runtime::spawn(async move {
-                        if pending.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                            return;
-                        }
                         let state = handle.state::<AppState>();
                         let restored = crate::native::restore_roblox_windows(&handle, &state).await;
-                        pending.store(false, std::sync::atomic::Ordering::SeqCst);
                         if restored > 0 {
                             crate::native::emit_log(
                                 &handle,

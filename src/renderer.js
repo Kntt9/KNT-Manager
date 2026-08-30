@@ -5315,19 +5315,6 @@ function startStatusPoll() {
       if (id && _launchedAt[id]) el.textContent = fmtUptime(_launchedAt[id]);
     });
   }, 30000);
-  // When the browser/WebView tab is hidden (app switched to background, OS
-  // throttles the tab), pause both the status and uptime polls so they don't
-  // keep the compositor awake and prevent the OS from reducing GPU budget.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
-      if (_uptimePoll) { clearInterval(_uptimePoll); _uptimePoll = null; }
-      document.body.classList.add('gpu-idle');
-    } else {
-      startStatusPoll(); // restarts both polls
-      document.body.classList.remove('gpu-idle');
-    }
-  });
 }
 function stopStatusPoll() {
   if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
