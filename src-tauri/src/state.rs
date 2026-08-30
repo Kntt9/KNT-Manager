@@ -64,6 +64,11 @@ pub struct AppState {
     /// but never actually acquired anywhere — sync and kill could run
     /// concurrently and leave the maps inconsistent.
     pub ops_lock: tokio::sync::Mutex<()>,
+    /// Serializes minimize/restore-on-focus-change so rapid focus events can't
+    /// stack multiple async actions on top of each other. A pending action
+    /// blocks the next until it completes. Arc'd so the clone can be sent into
+    /// the async spawn without moving the whole AppState.
+    pub focus_action_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Last account -> PID map written to instances.json, so the mirror is
     /// only rewritten when tracking actually changed (the watch loop calls
     /// into it once a second).
@@ -119,6 +124,7 @@ impl AppState {
             launch_cancel: Mutex::new(HashMap::new()),
             login_cancel: Mutex::new(None),
             ops_lock: tokio::sync::Mutex::new(()),
+            focus_action_pending: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             persisted_instances: Mutex::new(None),
         }
     }
