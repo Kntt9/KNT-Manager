@@ -15,7 +15,7 @@ mod storage;
 mod tracking;
 
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -29,6 +29,20 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(AppState::new(handle.clone()));
+
+            // Let the frontend know when the main window loses/regains focus so
+            // it can suspend its visual rendering (CSS animations + 3s status
+            // poll) while hidden -- WebView2 keeps compositing GPU work even
+            // when minimized otherwise. Backend loops (watchdog, anti-AFK,
+            // tracking) live in Rust and are untouched by this.
+            if let Some(w) = app.get_webview_window("main") {
+                let h = handle.clone();
+                w.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Focused(focused) = event {
+                        let _ = h.emit("window:visibility", !*focused);
+                    }
+                });
+            }
 
             {
                 let state = app.state::<AppState>();

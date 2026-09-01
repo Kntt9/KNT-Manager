@@ -1279,6 +1279,15 @@ input[type="range"]:disabled{opacity:.4;cursor:not-allowed}
   .btn:hover,.nav-item:hover,.card:hover,.pkg-card:hover,.chart-card:hover,.credit-card:hover,.theme-card:hover{transform:none}
 }
 
+/* Window minimized/unfocused (set by renderer.js on window:visibility):
+   kill every animation/transition so WebView2's compositor has nothing to
+   render while the window isn't on screen. Pure visual -- backend loops
+   (watchdog, anti-AFK, tracking, timers) are untouched. */
+html.app-hidden *,html.app-hidden *::before,html.app-hidden *::after{
+  animation:none!important;transition:none!important;
+  animation-delay:0s!important;transition-delay:0s!important;
+}
+
 /* ── accent themes (dark-based recolors) — tokens only, layout identical ── */
 body.theme-midnight{--bg:#0a0e1a;--s1:#0f1424;--s2:#141a2e;--s3:#1b2238;--s4:#232c46;--bd:rgba(120,150,255,.1);--bd2:rgba(120,150,255,.2);--ac:#4f7cff;--ac-h:#7ea0ff;--ac2:rgba(79,124,255,.32);--ac3:rgba(79,124,255,.5);--theme-texture:var(--tex-grid);--theme-texture-size:38px}
 body.theme-aurora{--bg:#07140f;--s1:#0c1a14;--s2:#11221b;--s3:#172c23;--s4:#1f382d;--bd:rgba(120,255,220,.1);--bd2:rgba(120,255,220,.2);--ac:#2dd4bf;--ac-h:#5eead4;--ac2:rgba(45,212,191,.3);--ac3:rgba(45,212,191,.48);--green:#34e2b0;--gd:rgba(52,226,176,.12);--theme-texture:var(--tex-stars);--theme-texture-size:150px}

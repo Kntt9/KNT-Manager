@@ -82,6 +82,7 @@
     readFpsCap: () => invoke('fps_read'),
     writeFpsCap: (cap) => invoke('fps_write', { cap }),
 
+    onWindowVisibility: (cb) => listen('window:visibility', (e) => cb(e.payload)),
     onChromeProgress: (cb) => listen('chrome:download-progress', (e) => cb(e.payload)),
     onRobloxClosed: (cb) => listen('roblox:closed', (e) => cb(e.payload)),
     onRobloxStarted: (cb) => listen('roblox:started', (e) => cb(e.payload)),

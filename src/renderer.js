@@ -387,6 +387,20 @@ async function continueInit() {
   // Forward main-process log events into the renderer log
   api.onLogEntry(data => logEntry(data.level, data.category, data.message, data.meta));
 
+  // Suspend visual rendering while the window is minimized (backend pushes
+  // -- roblox:count/closed/started -- keep flowing regardless, so state stays
+  // in sync; only the visual polling/compositing work is dropped). Restored
+  // on focus with an immediate re-poll so nothing looks stale.
+  api.onWindowVisibility(hidden => {
+    document.documentElement.classList.toggle('app-hidden', !!hidden);
+    if (hidden) {
+      if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
+      if (_uptimeTimer) { clearInterval(_uptimeTimer); _uptimeTimer = null; }
+    } else {
+      startStatusPoll();
+    }
+  });
+
   // main pushes the count off the watch tick; the local poll backs off below
   api.onRobloxCount(n => { _lastCountPushAt = Date.now(); _mixRunning = n; setRunningBadges(n); });
 
@@ -5186,6 +5200,7 @@ function updateWindowTitle(n) {
 }
 
 let _statusPoll = null;
+let _uptimeTimer = null;
 let _lastCountPushAt = 0;
 async function pollRunningCount() {
   // Skip if a push from the backend landed recently.
@@ -5284,7 +5299,8 @@ function startStatusPoll() {
   _statusPoll = setInterval(pollStatus, 3000);
   // Refresh uptime labels in place (no re-render) while the Accounts page is
   // visible, so "há 2h 34min" keeps ticking without flashing the grid.
-  setInterval(() => {
+  if (_uptimeTimer) return;
+  _uptimeTimer = setInterval(() => {
     if (!document.getElementById('page-accounts')?.classList.contains('active')) return;
     document.querySelectorAll('.card.is-live .card-up').forEach(el => {
       const id = el.closest('.card')?.dataset.id;
