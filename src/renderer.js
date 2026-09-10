@@ -71,10 +71,13 @@ function setLanguage(lang, persist) {
   if (typeof applySettings === 'function' && typeof settings !== 'undefined' && settings) applySettings();
   if (typeof renderBackupHistory === 'function') renderBackupHistory();
   if (typeof renderThemePage === 'function') renderThemePage();
+  if (typeof renderHistory === 'function' && document.getElementById('page-history')?.classList.contains('active')) renderHistory();
+  if (typeof renderPrivateServers === 'function' && typeof chartTab !== 'undefined' && chartTab === 'private' && document.getElementById('page-charts')?.classList.contains('active')) renderPrivateServers();
   if (persist !== false) {
     try { localStorage.setItem('mr-lang', _lang); } catch {}
-    settings.language = _lang;
-    api.saveSettings({ language: _lang }).catch(() => {});
+    if (typeof settings !== 'undefined' && settings) settings.language = _lang;
+    try { api.saveSettings({ language: _lang }).catch(() => {}); } catch {}
+    _syncUiPrefsToSettings();
   }
 }
 
@@ -142,6 +145,64 @@ function _appendLogRow(entry) {
   el.insertAdjacentHTML('beforeend', _logLine(entry));
   while (el.children.length > MAX_LOGS) el.removeChild(el.firstChild);
   if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// ── Account status history (persistent, survives restarts) ───────────────
+// One row per transition: running/idle/home/cookie-dead/cookie-ok.
+const _HIST_KEY = 'mr-status-history';
+const MAX_HIST = 200;
+let _statusHistory = [];
+function _loadStatusHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(_HIST_KEY) || '[]');
+    _statusHistory = Array.isArray(raw) ? raw.filter(e => e && e.ts && e.id && e.to).slice(-MAX_HIST) : [];
+  } catch { _statusHistory = []; }
+}
+function _saveStatusHistory() {
+  try { localStorage.setItem(_HIST_KEY, JSON.stringify(_statusHistory)); } catch {}
+}
+function _histAcctName(id) {
+  const a = (typeof accounts !== 'undefined' ? accounts : []).find(x => x.id === id)
+    || (typeof trashedAccounts !== 'undefined' ? trashedAccounts : []).find(x => x.id === id);
+  return a ? (a.nickname || a.username || id) : id;
+}
+function pushStatusHistory(id, to, from) {
+  if (!id || !to) return;
+  const last = _statusHistory[_statusHistory.length - 1];
+  if (last && last.id === id && last.to === to) return; // no repeat rows
+  _statusHistory.push({ ts: Date.now(), id, name: _histAcctName(id), from: from || '', to });
+  if (_statusHistory.length > MAX_HIST) _statusHistory = _statusHistory.slice(-MAX_HIST);
+  _saveStatusHistory();
+  if (document.getElementById('page-history')?.classList.contains('active')) renderHistory();
+}
+const _HIST_META = {
+  running: ['rocket_launch', 'green'],
+  idle: ['stop_circle', 'muted'],
+  home: ['home', 'amber'],
+  'cookie-dead': ['error_outline', 'red'],
+  'cookie-ok': ['check_circle', 'green'],
+};
+function renderHistory() {
+  const el = document.getElementById('hist-list');
+  if (!el) return;
+  if (!_statusHistory.length) {
+    el.innerHTML = '<div class="logs-empty"><span class="material-icons-round">history</span>' + esc(t('hist.empty')) + '</div>';
+    return;
+  }
+  el.innerHTML = '<div class="dash-feed">' + [..._statusHistory].reverse().map(e => {
+    const meta = _HIST_META[e.to] || ['info', 'muted'];
+    const label = t('hist.' + (e.to === 'cookie-dead' ? 'cookieDead' : e.to === 'cookie-ok' ? 'cookieOk' : e.to));
+    const when = esc(_actTime(e.ts));
+    return '<div class="dash-feed-row"><span class="dash-ic ' + meta[1] + '" style="width:22px;height:22px;font-size:12px"><span class="material-icons-round" style="font-size:13px">' + meta[0] + '</span></span>' +
+      '<span class="dash-feed-text"><b>' + esc(e.name || e.id) + '</b> · ' + esc(label) + '</span><span class="dash-feed-time">' + when + '</span></div>';
+  }).join('') + '</div>';
+}
+function clearHistory() {
+  confirmAction(t('hist.clearConfirm'), () => {
+    _statusHistory = [];
+    _saveStatusHistory();
+    renderHistory();
+  });
 }
 
 // Native-style find (Ctrl+F) over the rendered log text. Uses window.find so
@@ -304,6 +365,7 @@ function flagInvalidCookies(list) {
   for (const a of list) {
     if (a._cookieInvalid) {
       _cookieStatus[a.id] = 'dead';
+      pushStatusHistory(a.id, 'cookie-dead', '');
       logEntry('warn', 'cookie', `Cookie could not be decrypted for ${a.username || a.id} (corrupted or wrong key)`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
     }
   }
@@ -316,6 +378,25 @@ async function continueInit() {
   accounts = loaded.filter(a => !a.trashed);
   trashedAccounts = loaded.filter(a => a.trashed);
   [settings, packages] = await Promise.all([api.loadSettings(), api.loadPackages()]);
+  // Restore visual prefs carried inside settings.json (backup-safe).
+  // On a fresh PC localStorage is empty but settings.uiPrefs comes from restore.
+  try {
+    if (settings && settings.uiPrefs) {
+      const hadLocalTheme = _lsGet('ui-theme');
+      _restoreUiPrefsFromSettings();
+      _loadCustomThemes();
+      const tCur = currentTheme();
+      applyTheme(tCur);
+      _applyBorderRadius();
+      _applyTextureIntensity();
+      document.body.classList.toggle('high-contrast', _highContrast());
+      // First boot with no local prefs yet: persist what restore just gave us.
+      if (!hadLocalTheme) _syncUiPrefsToSettings();
+    } else {
+      // No uiPrefs yet (old install): create it from current localStorage.
+      _syncUiPrefsToSettings();
+    }
+  } catch {}
   // Hydrate persisted server highlights (settings.srvHighlights) so featured
   // servers survive an app restart. Malformed/legacy entries are dropped.
   _srvHighlighted = {};
@@ -410,11 +491,14 @@ async function continueInit() {
   // caller. markLaunched() is idempotent, so the doLaunch() success path
   // below calling it again once its own await resolves is harmless.
   api.onRobloxStarted(id => {
+    const from = _homeIds.has(id) ? 'home' : 'idle';
     markLaunched(id);
     pushActivity('rocket_launch', 'green', t('act.started', { u: esc(_acctLabel(id)) }));
+    pushStatusHistory(id, 'running', from);
   });
 
   api.onRobloxClosed(id => {
+    const from = _launchedIds.has(id) ? 'running' : (_homeIds.has(id) ? 'home' : 'idle');
     _launchedIds.delete(id);
     _homeIds.delete(id);
     _srvAccountLeft(id);
@@ -422,6 +506,7 @@ async function continueInit() {
     const closedAcct = accounts.find(a => a.id === id);
     logEntry('info', 'close', `Roblox closed for ${closedAcct ? closedAcct.username : id}`, { accountId: id, username: closedAcct?.username || null, userId: closedAcct?.userId || null });
     pushActivity('stop_circle', 'muted', t('act.closed', { u: esc(_acctLabel(id)) }));
+    pushStatusHistory(id, 'idle', from);
     const card = document.querySelector(`.card[data-id="${id}"]`);
     if (card) {
       card.classList.remove('is-live');
@@ -445,6 +530,7 @@ async function continueInit() {
     _srvAccountLeft(id);
     delete _launchedAt[id];
     pushActivity('home', 'amber', t('act.home', { u: esc(_acctLabel(id)) }));
+    pushStatusHistory(id, 'home', 'running');
     const card = document.querySelector(`.card[data-id="${id}"]`);
     if (card) {
       card.classList.remove('is-live');
@@ -636,6 +722,7 @@ function setTheme(name) {
   if (!name) return;
   applyTheme(name);
   try { localStorage.setItem('ui-theme', name); } catch {}
+  _syncUiPrefsToSettings();
   renderThemePage();
 }
 function currentTheme() { try { return localStorage.getItem('ui-theme') || 'dark'; } catch { return 'dark'; } }
@@ -646,6 +733,75 @@ function _loadCustomThemes() {
 }
 function _saveCustomThemes() {
   try { localStorage.setItem('mr-custom-themes', JSON.stringify(_customThemes)); } catch {}
+  _syncUiPrefsToSettings();
+}
+// Mirror visual prefs into settings.json so encrypted backups carry them.
+// Purely additive: old backups without uiPrefs still restore fine.
+function _lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function _lsSet(k, v) { try { if (v === null || v === undefined || v === '') localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} }
+function _collectUiPrefs() {
+  let customs = [];
+  try {
+    const raw = JSON.parse(localStorage.getItem('mr-custom-themes') || '[]');
+    if (Array.isArray(raw)) {
+      customs = raw.slice(-30).map(x => ({
+        id: String(x.id || '').slice(0, 64),
+        name: String(x.name || '').slice(0, 40),
+        accent: _isHexColor(x.accent) ? x.accent.trim() : '#5c5ce0',
+        bg: _isHexColor(x.bg) ? x.bg.trim() : '#0b0c0f',
+        surface: _isHexColor(x.surface) ? x.surface.trim() : '#141519',
+        isDark: !!x.isDark
+      })).filter(x => x.id);
+    }
+  } catch { customs = []; }
+  return {
+    v: 1,
+    theme: _lsGet('ui-theme') || 'dark',
+    customThemes: customs,
+    lang: _lsGet('mr-lang') || '',
+    radius: _lsGet('mr-border-radius') || '',
+    highContrast: _lsGet('mr-high-contrast') || '',
+    texture: _lsGet('mr-theme-texture') || '',
+    pattern: _lsGet('mr-theme-pattern') || '',
+    texSize: _lsGet('mr-theme-tex-size') || '',
+    autoTheme: _lsGet('mr-auto-theme') || '',
+    autoThemeBase: _lsGet('mr-auto-theme-base') || ''
+  };
+}
+let _uiPrefsTimer = null;
+function _syncUiPrefsToSettings() {
+  if (typeof api === 'undefined' || !api.saveSettings) return;
+  if (typeof settings === 'undefined' || !settings) return;
+  clearTimeout(_uiPrefsTimer);
+  _uiPrefsTimer = setTimeout(() => {
+    try {
+      const prefs = _collectUiPrefs();
+      const json = JSON.stringify(prefs);
+      if (json.length > 100 * 1024) return; // never bloat settings.json
+      settings.uiPrefs = prefs;
+      api.saveSettings({ uiPrefs: prefs }).catch(() => {});
+    } catch {}
+  }, 800);
+}
+function _restoreUiPrefsFromSettings() {
+  try {
+    const p = settings && settings.uiPrefs;
+    if (!p || typeof p !== 'object') return false;
+    if (p.theme && typeof p.theme === 'string') _lsSet('ui-theme', p.theme.slice(0, 64));
+    if (Array.isArray(p.customThemes)) {
+      try { localStorage.setItem('mr-custom-themes', JSON.stringify(p.customThemes.slice(-30))); } catch {}
+      _loadCustomThemes();
+    }
+    if (p.lang) _lsSet('mr-lang', String(p.lang).slice(0, 8));
+    if (p.radius !== undefined) _lsSet('mr-border-radius', String(p.radius).slice(0, 8));
+    if (p.highContrast !== undefined) _lsSet('mr-high-contrast', String(p.highContrast).slice(0, 8));
+    if (p.texture) _lsSet('mr-theme-texture', String(p.texture).slice(0, 16));
+    if (p.pattern !== undefined) _lsSet('mr-theme-pattern', String(p.pattern).slice(0, 16));
+    if (p.texSize !== undefined) _lsSet('mr-theme-tex-size', String(p.texSize).slice(0, 8));
+    if (p.autoTheme !== undefined) _lsSet('mr-auto-theme', String(p.autoTheme).slice(0, 8));
+    if (p.autoThemeBase) _lsSet('mr-auto-theme-base', String(p.autoThemeBase).slice(0, 32));
+    return true;
+  } catch { return false; }
 }
 function _uniqueThemeName(name, excludeId) {
   const all = THEMES.map(t => t).concat(_customThemes.filter(t => t.id !== excludeId).map(t => t.name));
@@ -704,15 +860,19 @@ function _applyTextureIntensity() {
 function setThemeTexture(v) {
   try { localStorage.setItem('mr-theme-texture', v); } catch {}
   _applyTextureIntensity();
+  _syncUiPrefsToSettings();
 }
 function setThemePattern(v) {
   try { localStorage.setItem('mr-theme-pattern', v); } catch {}
   _applyTextureIntensity();
+  _syncUiPrefsToSettings();
 }
 function setThemeTexSize(v) {
   const n = parseInt(v, 10) || 0;
   try { localStorage.setItem('mr-theme-tex-size', n ? String(n) : ''); } catch {}
   _applyTextureIntensity();
+  updateSliderFill(document.getElementById('texture-size'));
+  _syncUiPrefsToSettings();
 }
 function _renderTexturePatternSelect() {
   const sel = document.getElementById('texture-pattern');
@@ -732,6 +892,7 @@ function toggleHighContrast() {
   document.body.classList.toggle('high-contrast', on);
   const el = document.getElementById('set-highcontrast');
   if (el) el.checked = on;
+  _syncUiPrefsToSettings();
 }
 
 // ── Border radius ─────────────────────────────────────────────────────────
@@ -747,6 +908,8 @@ function setBorderRadius(v) {
   _applyBorderRadius();
   const lbl = document.getElementById('radius-val');
   if (lbl) lbl.textContent = v + 'px';
+  updateSliderFill(document.getElementById('set-radius'));
+  _syncUiPrefsToSettings();
 }
 
 // ── Auto theme (day/night) ────────────────────────────────────────────────
@@ -775,6 +938,7 @@ function toggleAutoTheme() {
   }
   const el = document.getElementById('set-autotheme');
   if (el) el.checked = on;
+  _syncUiPrefsToSettings();
 }
 function _startAutoTheme() {
   if (!_autoThemeEnabled()) return;
@@ -844,30 +1008,52 @@ function saveCustomTheme() {
   const surfaceEl = document.getElementById('custom-surface');
   const darkEl = document.getElementById('custom-isdark');
   const saveBtn = document.getElementById('custom-theme-save');
-  let name = (nameEl?.value || '').trim();
+  let name = (nameEl?.value || '').trim().slice(0, 40);
   if (!name) { name = t('themes.newTheme'); }
-  const accent = accentEl?.value || '#5c5ce0';
-  const bg = bgEl?.value || '#0b0c0f';
-  const surface = surfaceEl?.value || '#141519';
+  const accent = _isHexColor(accentEl?.value) ? accentEl.value.trim() : '#5c5ce0';
+  const bg = _isHexColor(bgEl?.value) ? bgEl.value.trim() : '#0b0c0f';
+  const surface = _isHexColor(surfaceEl?.value) ? surfaceEl.value.trim() : '#141519';
   const isDark = darkEl?.checked || false;
   const editId = saveBtn?.dataset.editId || '';
   name = _uniqueThemeName(name, editId);
+  let activeId = editId;
   if (editId) {
     const ct = _customThemes.find(t => t.id === editId);
     if (ct) { ct.name = name; ct.accent = accent; ct.bg = bg; ct.surface = surface; ct.isDark = isDark; }
-  } else {
-    _customThemes.push({ id: 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), name, accent, bg, surface, isDark });
+    else { activeId = ''; }
+  }
+  if (!activeId) {
+    activeId = 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    _customThemes.push({ id: activeId, name, accent, bg, surface, isDark });
   }
   _saveCustomThemes();
-  setTheme('custom:' + _customThemes[_customThemes.length - 1].id);
+  setTheme('custom:' + activeId);
   closeCustomThemePanel();
 }
 function deleteCustomTheme(id) {
-  _customThemes = _customThemes.filter(t => t.id !== id);
+  const ct = _customThemes.find(t => t.id === id);
+  const name = ct ? ct.name : '';
+  confirmAction(t('themes.deleteConfirm', { name: name || t('themes.newTheme') }), () => {
+    _customThemes = _customThemes.filter(t => t.id !== id);
+    _saveCustomThemes();
+    if (currentTheme() === 'custom:' + id) setTheme('dark');
+    closeCustomThemePanel();
+    renderThemePage();
+  });
+}
+function duplicateTheme(name) {
+  // Built-ins are immutable: copy the preset into a new editable custom theme.
+  const m = (typeof THEME_META !== 'undefined' && THEME_META[name]) ? THEME_META[name] : null;
+  if (!m) { toast(t('themes.exportFailed'), 'err'); return; }
+  const base = t('settings.theme' + name.charAt(0).toUpperCase() + name.slice(1));
+  const newName = _uniqueThemeName(base, '').slice(0, 40);
+  const ct = { id: 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), name: newName, accent: m.accent, bg: m.bg, surface: m.surface, isDark: !!m.isDark };
+  _customThemes.push(ct);
   _saveCustomThemes();
-  if (currentTheme() === 'custom:' + id) setTheme('dark');
-  closeCustomThemePanel();
+  setTheme('custom:' + ct.id);
   renderThemePage();
+  toast(t('themes.duplicated', { name: newName }), 'ok');
+  openCustomThemePanel(ct.id);
 }
 
 // ── Import / Export ────────────────────────────────────────────────────────
@@ -876,8 +1062,11 @@ function exportTheme() {
   let data;
   if (name.startsWith('custom:')) {
     data = _customThemes.find(t => t.id === name.slice(7));
+  } else if (typeof THEME_META !== 'undefined' && THEME_META[name]) {
+    const m = THEME_META[name];
+    data = { name: name, accent: m.accent, bg: m.bg, surface: m.surface, isDark: m.isDark };
   } else {
-    // Export preset — use its CSS vars to guess colors
+    // Fallback — use default dark colors
     data = { name: name, accent: '#5c5ce0', bg: '#0b0c0f', surface: '#141519', isDark: name !== 'light' };
   }
   if (!data) { toast(t('themes.exportFailed'), 'err'); return; }
@@ -889,19 +1078,24 @@ function exportTheme() {
   a.click(); URL.revokeObjectURL(url);
   toast(t('themes.exported'), 'ok');
 }
+function _isHexColor(v) {
+  return typeof v === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v.trim());
+}
 function importTheme() {
   const input = document.createElement('input');
   input.type = 'file'; input.accept = '.json';
   input.onchange = () => {
     const file = input.files?.[0];
     if (!file) return;
+    if (file.size > 50 * 1024) { toast(t('themes.importError'), 'err'); return; }
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const data = JSON.parse(reader.result);
-        if (!data.accent || !data.bg || !data.surface) { toast(t('themes.importError'), 'err'); return; }
-        const name = _uniqueThemeName(data.name || t('themes.newTheme'), '');
-        const ct = { id: 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), name, accent: data.accent, bg: data.bg, surface: data.surface, isDark: !!data.isDark };
+        if (!_isHexColor(data.accent) || !_isHexColor(data.bg) || !_isHexColor(data.surface)) { toast(t('themes.importError'), 'err'); return; }
+        const rawName = String(data.name || t('themes.newTheme')).slice(0, 40);
+        const name = _uniqueThemeName(rawName, '');
+        const ct = { id: 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), name, accent: data.accent.trim(), bg: data.bg.trim(), surface: data.surface.trim(), isDark: !!data.isDark };
         _customThemes.push(ct);
         _saveCustomThemes();
         setTheme('custom:' + ct.id);
@@ -966,7 +1160,7 @@ function renderThemePage() {
     if (!m) continue;
     html += '<div class="theme-card" data-theme="'+name+'" onclick="setTheme(\''+name+'\')" onmouseenter="previewTheme(\''+m.accent+'\',\''+m.bg+'\',\''+m.surface+'\','+m.isDark+')" onmouseleave="clearPreview()" role="button" tabindex="0">';
     html += _themeCardMiniHtml(m.accent, m.bg, m.surface, m.isDark, m.tex);
-    html += '<div class="tc-foot"><span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>'+esc(t('settings.theme'+name.charAt(0).toUpperCase()+name.slice(1)))+'</span>';
+    html += '<div class="tc-foot"><span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>'+esc(t('settings.theme'+name.charAt(0).toUpperCase()+name.slice(1)))+' <button class="btn btn-sm btn-ghost" style="margin-left:6px;padding:2px 6px;font-size:10px" title="'+esc(t('themes.duplicate'))+'" onclick="event.stopPropagation();duplicateTheme(\''+name+'\')"><span class="material-icons-round" style="font-size:12px">content_copy</span></button></span>';
     html += _swatchesHtml(m.accent, m.bg, m.surface);
     html += '</div></div>';
   }
@@ -1002,6 +1196,7 @@ function openDiscord() {
 }
 (function() {
   _loadCustomThemes();
+  _loadStatusHistory();
   let t0;
   try {
     t0 = localStorage.getItem('ui-theme');
@@ -1059,19 +1254,11 @@ async function showAppVersion() {
 }
 
 // ── Slider fill (visual only) ────────────────────────────────────────────
-// Keeps the --fill custom property in sync so every range input shows its
-// filled portion up to the current value. Purely cosmetic — does not touch
-// any slider's own logic/values/events.
-function _updateSliderFill(el) {
-  const min = parseFloat(el.min) || 0, max = parseFloat(el.max) || 100, val = parseFloat(el.value) || 0;
-  const pct = max > min ? Math.min(100, Math.max(0, ((val - min) / (max - min)) * 100)) : 0;
-  el.style.setProperty('--fill', pct + '%');
-}
+// Single system: updateSliderFill() below owns the --fill var, the delegated
+// input listener keeps drags in sync, and refreshAllSliderFills() covers
+// programmatic changes. No per-slider wiring needed.
 function _initSliderFills() {
-  document.querySelectorAll('input[type="range"]').forEach(el => {
-    _updateSliderFill(el);
-    el.addEventListener('input', function() { _updateSliderFill(this); });
-  });
+  refreshAllSliderFills();
 }
 
 function applySettings() {
@@ -1114,6 +1301,8 @@ function applySettings() {
   if (relaunch) relaunch.checked = !!settings.autoRelaunch;
   const killOnClose = document.getElementById('set-killonclose');
   if (killOnClose) killOnClose.checked = !!settings.killOnClose;
+  const arr = document.getElementById('set-autoarrange');
+  if (arr) arr.checked = !!settings.autoArrangeWindows;
   const lowPriority = document.getElementById('set-lowpriority');
   if (lowPriority) lowPriority.checked = settings.lowPriorityMultiInstance !== false;
   const lockChannel = document.getElementById('set-lockchannel');
@@ -1278,6 +1467,16 @@ function toggleKillOnClose() {
   api.saveSettings({ killOnClose: on });
   toast(on ? t('settings.killOnCloseOn') : t('settings.killOnCloseOff'), 'ok');
 }
+// Tiles the KNT-managed Roblox windows into a grid after launches/closes.
+// On enable it arranges the currently open instances right away.
+function toggleAutoArrange() {
+  const el = document.getElementById('set-autoarrange');
+  const on = el.checked;
+  settings.autoArrangeWindows = on;
+  api.saveSettings({ autoArrangeWindows: on });
+  toast(on ? t('settings.autoArrangeOn') : t('settings.autoArrangeOff'), 'ok');
+  if (on && api.arrangeRobloxWindows) api.arrangeRobloxWindows().catch(() => {});
+}
 // Releasing/re-acquiring the mutex happens inside the helper and isn't
 // instant, so re-read the real state afterwards instead of assuming the badge
 // can be derived from the checkbox.
@@ -1386,7 +1585,7 @@ document.addEventListener('click', e => { if (!e.target.closest('.cdd')) closeAl
 
 // Called after any navigation/tab switch so slider fills are always correct.
 function refreshAllSliderFills() {
-  document.querySelectorAll('.fps-slider').forEach(updateSliderFill);
+  document.querySelectorAll('input[type="range"]').forEach(updateSliderFill);
 }
 
 // Segments aren't equal width, so the pill's left/width are computed in
@@ -1492,9 +1691,15 @@ function goTo(p) {
     positionTabSlider(document.getElementById('stab-general')?.closest('.tab-bar'));
   }
   if (p === 'logs') renderLogs();
+  if (p === 'history') renderHistory();
   if (p === 'charts') {
-    if (!chartsLoaded) loadCharts();
-    positionTabSlider(document.getElementById('ctab-popular')?.closest('.tab-bar'));
+    if (typeof chartTab !== 'undefined' && chartTab === 'private') {
+      renderPrivateServers();
+      positionTabSlider(document.getElementById('ctab-private')?.closest('.tab-bar'));
+    } else {
+      if (!chartsLoaded) loadCharts();
+      positionTabSlider(document.getElementById('ctab-popular')?.closest('.tab-bar'));
+    }
   }
   if (p === 'packages') renderPackages();
   if (p === 'mixer') mixInit();
@@ -1723,9 +1928,42 @@ function ctxLaunch(id) { closeCardMenu(); const a = accounts.find(x => x.id === 
 function ctxEdit(id) { closeCardMenu(); openEdit(id); }
 function ctxCopyId(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.userId) navigator.clipboard.writeText(a.userId).then(() => toast(t('acct.copyId'), 'ok')); else toast(t('acct.noId'), 'err'); }
 function ctxCopyUser(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.username) navigator.clipboard.writeText(a.username).then(() => toast(t('acct.copyUser'), 'ok')); else toast(t('acct.noUser'), 'err'); }
-function ctxCopyCookie(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.cookie) navigator.clipboard.writeText(a.cookie).then(() => toast(t('acct.copyCookie'), 'ok')); else toast(t('acct.noCookie'), 'err'); }
-function ctxCopyPassword(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.password) navigator.clipboard.writeText(a.password).then(() => toast(t('acct.copyPassword'), 'ok')); else toast(t('acct.noPassword'), 'err'); }
-function ctxCopyCombo(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.username && a?.password) navigator.clipboard.writeText(a.username + ':' + a.password).then(() => toast(t('acct.copyCombo'), 'ok')); else toast(t('acct.noCombo'), 'err'); }
+function _copySecretWithClear(text, okKey, vars) {
+  const val = text;
+  try { navigator.clipboard.writeText(val).then(() => toast(t(okKey, vars), 'ok')); } catch { toast(t(okKey, vars), 'ok'); }
+  clearTimeout(_copySecretWithClear._t);
+  _copySecretWithClear._t = setTimeout(() => {
+    try {
+      // Only clear if clipboard still holds our secret (best-effort).
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(cur => {
+          if (cur === val) navigator.clipboard.writeText('').then(() => toast(t('acct.clipCleared'), 'ok')).catch(() => {});
+        }).catch(() => {});
+      }
+    } catch {}
+  }, 30000);
+}
+function ctxCopyCookie(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a?.cookie) { closeCardMenu(); toast(t('acct.noCookie'), 'err'); return; }
+  const label = a.nickname || a.username || 'account';
+  closeCardMenu();
+  confirmAction(t('acct.copyCookieConfirm', { name: label }), () => _copySecretWithClear(a.cookie, 'acct.copyCookie'), { confirmLabel: t('common.copy'), danger: false });
+}
+function ctxCopyPassword(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a?.password) { closeCardMenu(); toast(t('acct.noPassword'), 'err'); return; }
+  const label = a.nickname || a.username || 'account';
+  closeCardMenu();
+  confirmAction(t('acct.copyPasswordConfirm', { name: label }), () => _copySecretWithClear(a.password, 'acct.copyPassword'), { confirmLabel: t('common.copy'), danger: false });
+}
+function ctxCopyCombo(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a?.username || !a?.password) { closeCardMenu(); toast(t('acct.noCombo'), 'err'); return; }
+  const label = a.nickname || a.username || 'account';
+  closeCardMenu();
+  confirmAction(t('acct.copyComboConfirm', { name: label }), () => _copySecretWithClear(a.username + ':' + a.password, 'acct.copyCombo'), { confirmLabel: t('common.copy'), danger: false });
+}
 async function ctxOpenBrowser(id) {
   closeCardMenu();
   const a = accounts.find(x => x.id === id);
@@ -1806,7 +2044,7 @@ function render() {
     return;
   }
   grid.innerHTML = list.map((a, i) => `
-    <div class="card${_launchedIds.has(a.id) ? ' is-live' : ''}${_homeIds.has(a.id) ? ' is-home' : ''}${_cookieStatus[a.id] === 'dead' ? ' cookie-dead' : ''}${_selectMode && _selectedIds.has(a.id) ? ' is-selected' : ''}${_selectMode ? ' select-mode' : ''}" data-id="${a.id}" style="animation-delay:${i * 18}ms" onclick="${_selectMode ? `if(!event.target.closest('button'))toggleSelectCard('${a.id}')` : ''}">
+    <div class="card${_launchedIds.has(a.id) ? ' is-live' : ''}${_homeIds.has(a.id) ? ' is-home' : ''}${_cookieStatus[a.id] === 'dead' ? ' cookie-dead' : ''}${_selectMode && _selectedIds.has(a.id) ? ' is-selected' : ''}${_selectMode ? ' select-mode' : ''}" data-id="${a.id}" style="animation-delay:${Math.min(i, 20) * 18}ms" onclick="${_selectMode ? `if(!event.target.closest('button'))toggleSelectCard('${a.id}')` : ''}">
       ${_selectMode ? `<div class="card-check${_selectedIds.has(a.id) ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelectCard('${a.id}')"><span class="material-icons-round">check</span></div>` : ''}
       <div class="card-dot${_launchedIds.has(a.id) ? ' launched' : ''}${_homeIds.has(a.id) ? ' home' : ''}" title="${_homeIds.has(a.id) ? esc(t('accounts.home')) : (_launchedIds.has(a.id) ? esc(t('accounts.launched')) : esc(t('accounts.notLaunched')))}"></div>
       <span class="material-icons-round drag-handle">drag_indicator</span>
@@ -1882,13 +2120,71 @@ function updateBatchBar() {
 async function batchKill() {
   const ids = [..._selectedIds];
   if (!ids.length) { toast(t('batch.none'), 'err'); return; }
-  let ok = 0;
-  for (const id of ids) {
-    const res = await api.killOneRoblox(id).catch(() => null);
-    if (res && res.ok) ok++;
+  confirmAction(t('batch.killConfirm', { n: ids.length }), async () => {
+    let ok = 0;
+    for (const id of ids) {
+      const res = await api.killOneRoblox(id).catch(() => null);
+      if (res && res.ok) ok++;
+    }
+    toast(t('batch.killedN', { ok, total: ids.length }), ok === ids.length ? 'ok' : 'err');
+    clearSelection();
+  }, { confirmLabel: t('batch.kill') });
+}
+let _batchLaunchBusy = false;
+async function batchLaunch() {
+  if (_batchLaunchBusy) return;
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  if (settings.multiInstance === false && (ids.length > 1 || _launchedIds.size > 0)) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
+    return;
   }
-  toast(t('batch.killedN', { ok, total: ids.length }), ok === ids.length ? 'ok' : 'err');
-  clearSelection();
+  _batchLaunchBusy = true;
+  let ok = 0, skipped = 0;
+  for (const id of ids) {
+    const a = accounts.find(x => x.id === id);
+    if (!a) continue;
+    if (_launchedIds.has(id)) { skipped++; continue; }
+    if (!a.cookie) { logEntry('warn', 'launch', `Skipped ${a.username || id}: no cookie`, { accountId: id }); continue; }
+    const target = a.gameTarget || null;
+    logEntry('info', 'launch', `Launching Roblox for ${a.username || id} (selection)...`, { accountId: id, username: a.username || null, userId: a.userId || null, target: target || 'Roblox home' });
+    let res = null;
+    try { res = await api.launchRoblox(a.id, a.cookie, target); } catch (e) { res = { success: false, error: e?.message || String(e) }; }
+    if (res && res.success) {
+      ok++;
+      logEntry('ok', 'launch', `Roblox launched successfully as ${a.username || id} (selection)`, { accountId: id, username: a.username || null, userId: a.userId || null });
+      markLaunched(a.id);
+    } else if (res && !res.cancelled) {
+      logEntry('err', 'launch', `Launch failed for ${a.username || id} (selection): ${res.error}`, { accountId: id });
+      _flagCookieMaybeDead(a.id, res.error);
+    }
+  }
+  _batchLaunchBusy = false;
+  pollRunningCount();
+  reorderCardsByStatus();
+  const parts = t('batch.launchedN', { ok, total: ids.length });
+  toast(skipped ? parts + ' ' + t('batch.skippedRunning', { n: skipped }) : parts, ok > 0 ? 'ok' : 'err');
+}
+function batchCopyLogins() {
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  const list = ids.map(id => accounts.find(x => x.id === id)).filter(Boolean);
+  const valid = list.filter(a => a.username && a.password);
+  const missing = list.filter(a => !(a.username && a.password));
+  if (!valid.length) {
+    const names = missing.map(a => a.nickname || a.username || 'account').slice(0, 5).join(', ');
+    toast(t('batch.missingPw', { names: names || '-' }), 'err');
+    return;
+  }
+  const label = t('batch.copyConfirm', { n: valid.length });
+  confirmAction(label, () => {
+    const text = valid.map(a => a.username + ':' + a.password).join('\n');
+    _copySecretWithClear(text, 'batch.copiedN', { ok: valid.length, total: list.length });
+    if (missing.length) {
+      const names = missing.map(a => a.nickname || a.username || 'account').slice(0, 5).join(', ');
+      setTimeout(() => toast(t('batch.missingPw', { names }), 'err'), 600);
+    }
+  }, { confirmLabel: t('common.copy'), danger: false });
 }
 async function batchTrim() {
   const ids = [..._selectedIds];
@@ -1937,9 +2233,41 @@ async function batchSetCategory(catId) {
   toast(t('batch.categorySet', { n: ids.length }), 'ok');
   clearSelection();
 }
+function openBatchTarget() {
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  const inp = document.getElementById('batch-target-input');
+  if (inp) { inp.value = ''; }
+  const sub = document.getElementById('batch-target-sub');
+  if (sub) sub.textContent = t('batch.gameDescN', { n: ids.length, s: ids.length === 1 ? '' : 's' });
+  openModal('m-batch-target');
+  setTimeout(() => inp && inp.focus(), 60);
+}
+async function submitBatchTarget() {
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  const inp = document.getElementById('batch-target-input');
+  const btn = document.getElementById('batch-target-save');
+  const target = (inp ? inp.value : '').trim();
+  if (!target) { toast(t('batch.gameEmpty'), 'err'); if (inp) inp.focus(); return; }
+  if (btn) btn.disabled = true;
+  let ok = 0;
+  for (const id of ids) {
+    const a = accounts.find(x => x.id === id);
+    if (!a) continue;
+    a.gameTarget = target;
+    try { delete _gameNameCache[id]; } catch {}
+    try { await api.updateAccount(id, { gameTarget: target }); ok++; } catch {}
+  }
+  if (btn) btn.disabled = false;
+  closeModal('m-batch-target');
+  render();
+  toast(t('batch.gameSet', { ok, total: ids.length }), ok === ids.length ? 'ok' : 'err');
+}
 
 // Double-click the card nickname (or the pencil icon) to rename it inline.
 function inlineEditNickname(id, el) {
+  if (_selectMode) return;
   if (!el || el.dataset.editing) return;
   const a = accounts.find(x => x.id === id);
   if (!a) return;
@@ -2092,6 +2420,7 @@ function applyCookieStatus(id) {
 // flip the badge, not rate-limits or transient HTTP errors.
 function _flagCookieMaybeDead(id, error) {
   if (id && error && /cookie|expired|\b403\b/i.test(error)) {
+    if (_cookieStatus[id] !== 'dead') pushStatusHistory(id, 'cookie-dead', _cookieStatus[id] || '');
     _cookieStatus[id] = 'dead';
     applyCookieStatus(id);
   }
@@ -2122,7 +2451,7 @@ async function checkCookieHealth(list) {
         const res = await api.validateCookie(a.cookie);
         const st = (res && res.ok) ? 'ok' : 'dead';
         _cookieStatus[a.id] = st;
-        if (st === 'dead') logEntry('warn', 'cookie', `Cookie invalid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
+        if (st === 'dead') { pushStatusHistory(a.id, 'cookie-dead', ''); logEntry('warn', 'cookie', `Cookie invalid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null }); }
         else logEntry('info', 'cookie', `Cookie valid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
       } catch { _cookieStatus[a.id] = 'unknown'; logEntry('warn', 'cookie', `Cookie check failed for ${a.username || a.id}`, { accountId: a.id }); }
       applyCookieStatus(a.id);
@@ -2159,8 +2488,8 @@ async function recheckAllCookies(force) {
         _cookieStatus[a.id] = next;
         applyCookieStatus(a.id); // toggles .cookie-dead on the card (badge + ring)
         changed = true;
-        if (next === 'dead') logEntry('warn', 'cookie', `Cookie expired for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId });
-        else if (prev === 'dead' && next === 'ok') logEntry('ok', 'cookie', `Cookie re-validated for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId });
+        if (next === 'dead') { pushStatusHistory(a.id, 'cookie-dead', prev || ''); logEntry('warn', 'cookie', `Cookie expired for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId }); }
+        else if (prev === 'dead' && next === 'ok') { pushStatusHistory(a.id, 'cookie-ok', prev); logEntry('ok', 'cookie', `Cookie re-validated for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId }); }
       } else {
         _cookieStatus[a.id] = next;
       }
@@ -2515,7 +2844,7 @@ async function startBrowserLogin() {
     }
     return;
   }
-  await finishLogin(res);
+  await finishLogin(res, { askPassword: true });
 }
 
 async function addByCookie() {
@@ -2541,7 +2870,7 @@ async function addByCookie() {
     setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>' + (res.reason || t('login.err')));
     return;
   }
-  await finishLogin({ success: true, cookie, username: res.username, userId: res.userId });
+  await finishLogin({ success: true, cookie, username: res.username, userId: res.userId }, { askPassword: true });
 }
 
 function cancelLogin() {
@@ -2549,16 +2878,28 @@ function cancelLogin() {
   api.cancelLogin && api.cancelLogin();
 }
 
-async function finishLogin(res) {
+async function finishLogin(res, opts) {
+  opts = opts || {};
   setStatus('login-status', 'ok', '<span class="material-icons-round">check_circle</span>' + esc(t('login.signedIn', { user: res.username })));
   const a = await api.addAccount({ username: res.username, userId: res.userId, cookie: res.cookie, gameTarget: '' });
   accounts.push(a); render();
   setTimeout(() => {
     closeModal('m-login');
     toast(t('login.added', { user: res.username }), 'ok');
-    const grid = document.getElementById('grid');
-    if (grid) grid.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Browser/cookie login never sees the password (Roblox page is isolated),
+    // so offer to complete it right away instead of hunting the card later.
+    if (opts.askPassword && a && !a.password) {
+      openEdit(a.id);
+      setTimeout(() => {
+        const pw = document.getElementById('in-password');
+        if (pw) { pw.focus(); pw.placeholder = t('edit.passwordPh') + ' — ' + t('login.passwordOptional'); }
+      }, 300);
+    } else {
+      const grid = document.getElementById('grid');
+      if (grid) grid.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }, 800);
+  return a;
 }
 
 function openEdit(id) {
@@ -2687,9 +3028,10 @@ function confirmAction(message, onConfirm, opts) {
   const btn = document.getElementById('m-confirm-delete-btn');
   const newBtn = btn.cloneNode(true); // clone to remove old listeners
   btn.parentNode.replaceChild(newBtn, btn);
-  // Custom confirm label (e.g. "Restore") and non-danger styling when needed
-  if (opts.confirmLabel) newBtn.textContent = opts.confirmLabel;
+  // Reset every time: clone keeps the previous custom label/class.
+  newBtn.textContent = opts.confirmLabel || t('common.delete');
   if (opts.danger === false) newBtn.classList.remove('btn-danger');
+  else newBtn.classList.add('btn-danger');
   newBtn.addEventListener('click', () => { closeModal('m-confirm-delete'); onConfirm(); });
   // All overlays share the same z-index, so equal-z stacking falls back to
   // DOM order -- moving this to the end of <body> guarantees it renders on
@@ -2916,7 +3258,7 @@ function renderCategories() {
   list.innerHTML = categories.map(c => {
     const n = accounts.filter(a => a.categoryId === c.id).length;
     return `<div class="trash-row" id="cat-row-${c.id}">
-      <span class="cat-dot cat-dot-cycle" data-i18n-title="cat.colorTip" title="Click to change color" onclick="catCycleColor('${c.id}')" style="background:${c.color || catColor(c.id)}"></span>
+      <input type="color" class="cat-dot" data-i18n-title="cat.colorTip" title="Click to change color" value="${_hexOrFallback(c.color || catColor(c.id))}" onchange="catSetColor('${c.id}', this.value)"/>
       <span class="trash-info">
         <span class="trash-name cat-name">${esc(c.name)}</span>
         <span class="trash-meta">${esc(t('cat.accountCount', { n: n, s: n !== 1 ? 's' : '' }))}</span>
@@ -2999,11 +3341,14 @@ function catDelete(id) {
   });
 }
 
-async function catCycleColor(id) {
+function _hexOrFallback(color) {
+  return /^#[0-9a-fA-F]{6}$/.test(color || '') ? color : '#5c5ce0';
+}
+async function catSetColor(id, color) {
   const c = categories.find(x => x.id === id);
   if (!c) return;
-  const idx = CAT_COLORS.indexOf(c.color || catColor(c.id));
-  c.color = CAT_COLORS[(idx + 1) % CAT_COLORS.length];
+  if (!/^#[0-9a-fA-F]{6}$/.test(color || '')) { renderCategories(); return; }
+  c.color = color;
   await api.saveSettings({ categories });
   renderCategories();
   renderFilterCategories();
@@ -3234,6 +3579,19 @@ async function reloadAllData() {
   trashedAccounts = loaded.filter(a => a.trashed);
   settings = await api.loadSettings();
   packages = await api.loadPackages();
+  // After a backup restore, settings.uiPrefs holds theme/language.
+  try {
+    if (settings && settings.uiPrefs) {
+      _restoreUiPrefsFromSettings();
+      _loadCustomThemes();
+      applyTheme(currentTheme());
+      _applyBorderRadius();
+      _applyTextureIntensity();
+      document.body.classList.toggle('high-contrast', _highContrast());
+      if (settings.language && LANG_META[settings.language]) setLanguage(settings.language, false);
+      renderThemePage();
+    }
+  } catch {}
   categories = Array.isArray(settings.categories) ? settings.categories : [];
   categories.forEach(c => { if (!c.color) c.color = catColor(c.id); }); // backfill color for categories saved before colors existed
   // A category filter pointing at a category the restore no longer has would
@@ -3788,22 +4146,34 @@ function _srvCacheSweep() {
   }
 }
 
-async function _fetchServers(force) {
+// Overlapping fetches (30s poll vs manual refresh vs sort change) used to
+// race: an older response rendered last and the skeleton flashed on every
+// background tick. The seq guard drops stale responses; quiet background
+// ticks never wipe the list (no skeleton, no error screen on hiccup).
+let _srvFetchSeq = 0;
+async function _fetchServers(force, quiet) {
   const list = document.getElementById('srv-list');
   if (!_srvCtx) return false;
   const placeId = _srvCtx.placeId;
-  if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
+  const seq = ++_srvFetchSeq;
+  if (list && !quiet) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
     // "Most players" needs deeper pages: Desc puts the fullest servers
     // first, and the populated-but-not-full ones sit past the full pages —
     // a single page would often return only full servers.
     const maxPages = _srvSort === 'most' ? 8 : (_srvHideFull ? 10 : 1);
     const data = await _srvFetchRaw(placeId, maxPages, !!force, false);
+    if (seq !== _srvFetchSeq) return true; // a newer fetch started: ignore
+    // Empty sample on a background tick is almost always a hiccup/429, not
+    // a game that suddenly has zero servers: keep the old list.
+    if (!data.servers.length && quiet && _srvList.length) return true;
     _srvList = data.servers.slice();
     _srvInjectJoined();
     if (list) _renderSrvList(list);
     return true;
   } catch (e) {
+    if (seq !== _srvFetchSeq) return true;
+    if (quiet) return false; // background tick hiccup: keep the old list
     if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
     return false;
   }
@@ -3815,7 +4185,7 @@ function _srvStartPolling() {
   _srvStopPolling();
   _srvPollTimer = setInterval(() => {
     const modal = document.getElementById('m-servers');
-    if (modal && modal.classList.contains('open')) _fetchServers();
+    if (modal && modal.classList.contains('open')) _fetchServers(false, true);
   }, SRV_POLL);
 }
 function _srvStopPolling() {
@@ -3944,8 +4314,10 @@ async function launchPkgToServer(jobId) {
   }
 }
 
-// Launches each account of a group into a DIFFERENT free server, so no two
-// accounts land in the same instance. Useful to spread a group across servers.
+// Launches each account of a group into its OWN server: the emptiest
+// servers that already have at least 1 player (so our account is never the
+// first one in — Roblox shuts down truly idle servers). Strictly one account
+// per server: if servers run out, the rest wait for the next round.
 async function distributePkg(pkgId) {
   const p = packages.find(x => x.id === pkgId);
   if (!p) return;
@@ -3958,83 +4330,70 @@ async function distributePkg(pkgId) {
   const link = String(p.link || '').trim();
   const placeId = _extractPlaceId(link);
   if (!placeId) { toast(t('srv.errResolve'), 'err'); return; }
-  // Collect enough servers with REAL headroom (2+ free slots when the game
-  // allows) so accounts don't land in a queue; stop as soon as we have
-  // enough — a short fetch means a short gap before launching.
+  // Lively = at least 1 player inside + REAL headroom (2+ free slots when
+  // the game allows) so accounts neither open an idle server nor queue up.
+  const isLively = (s) => (s.playing || 0) >= 1 && _hasGoodSlots(s);
   const acc = members[0];
   const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
-  const freeServers = [];
+  const seen = new Set();
+  const lively = [];
   let cursor = '';
-  for (let page = 0; page < 5 && freeServers.length < members.length; page++) {
-    const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-    const r = await fetcher(url);
-    const data = (r && r.data) || {};
-    const batch = (data.data) || [];
+  // Collect more than needed (2x): entries go stale between fetch and
+  // launch, and the fresh re-check below drops the dead ones.
+  for (let page = 0; page < 8 && lively.length < members.length * 2; page++) {
+    let batch = [];
+    try {
+      const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      const r = await fetcher(url);
+      const data = (r && r.data) || {};
+      batch = (data.data) || [];
+      cursor = data.nextPageCursor || '';
+    } catch (e) { break; }
     for (const s of batch) {
-      if (_hasGoodSlots(s)) freeServers.push(s);
-      if (freeServers.length >= members.length) break;
+      if (!s || !s.id || seen.has(s.id)) continue;
+      seen.add(s.id);
+      if (isLively(s)) lively.push(s);
     }
-    cursor = data.nextPageCursor || '';
     if (!cursor) break;
   }
-  if (!freeServers.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-  // Sort by stability: servers with 1-3 players first (stable, not idle),
-  // then fuller servers, then truly empty ones last (Roblox kills idle
-  // servers, so sending accounts there risks 'experiência terminou').
-  freeServers.sort((a, b) => _srvStabilityScore(a) - _srvStabilityScore(b));
-  // ONE fresh re-check of every candidate (a single fast fetch, not one per
-  // candidate) so servers that died/filled between listing and launch are
-  // dropped instead of joined.
-  let valid = freeServers;
+  if (!lively.length) { toast(t('pkg.noLivelyServers'), 'err'); return; }
+  // Emptiest first (our account becomes #2, #3...), ping as tiebreak.
+  const emptiestFirst = (a, b) => ((a.playing || 0) - (b.playing || 0)) || ((a.ping ?? 99999) - (b.ping ?? 99999));
+  lively.sort(emptiestFirst);
+  // ONE fresh re-check so servers that died/filled between listing and
+  // launch are dropped instead of joined.
+  let valid = lively;
   try {
-    const fresh = await _srvFetchRaw(placeId, 5, true, true);
+    const fresh = await _srvFetchRaw(placeId, 8, true, true);
     if (fresh.servers.length) {
-      valid = freeServers
+      valid = lively
         .map(s => {
           const live = fresh.servers.find(x => x.id === s.id);
-          return live && _hasGoodSlots(live) ? live : null;
+          return live && isLively(live) ? live : null;
         })
         .filter(Boolean);
-      // Re-sort after filtering (preserve stability order).
-      valid.sort((a, b) => _srvStabilityScore(a) - _srvStabilityScore(b));
+      valid.sort(emptiestFirst);
     }
   } catch (e) { /* keep the collected list if the re-check fails */ }
-  if (!valid.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
+  if (!valid.length) { toast(t('pkg.noLivelyServers'), 'err'); return; }
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
   let ok = 0;
-  // Assignment state: how many accounts we have aimed at each server, and
-  // each server's real headroom (from the fresh re-check above).
-  const aimed = {};      // serverId -> accounts aimed here
-  const capacity = {};   // serverId -> free slots
-  for (const s of valid) capacity[s.id] = Math.max(0, (s.maxPlayers || 1) - (s.playing || 0));
-  const hasRoom = (s) => (aimed[s.id] || 0) < (capacity[s.id] || 0);
-  // Next candidate: first a server no other account was aimed at yet (each
-  // account gets its own server); when those run out, reuse the least-aimed
-  // server that still has room, spreading accounts evenly. Ties resolve to
-  // the stability order `valid` is already sorted in.
-  function nextServer() {
-    for (const s of valid) {
-      if (!(aimed[s.id] || 0) && hasRoom(s)) return s;
-    }
-    let best = null;
-    for (const s of valid) {
-      if (!hasRoom(s)) continue;
-      if (!best) { best = s; continue; }
-      if ((aimed[s.id] || 0) < (aimed[best.id] || 0)) best = s;
-    }
-    return best;
-  }
+  const used = new Set(); // serverId already taken this round: 1 account each
+  const nextServer = (skip) => valid.find(s => !used.has(s.id) && !(skip && skip.has(s.id)) && isLively(s)) || null;
   for (let i = 0; i < members.length; i++) {
     const m = members[i];
-    // Try up to 2 servers for this account (the first may have been shut
-    // down by Roblox between the fetch and the launch, or filled up).
+    // Try up to 2 fresh servers for this account (the first may have been
+    // shut down by Roblox between the fetch and the launch, or filled up).
+    // A failed server is never retried for the same account.
+    const failed = new Set();
     let launched = false;
     for (let attempt = 0; attempt < 2 && !launched; attempt++) {
-      const s = nextServer();
+      const s = nextServer(failed);
       if (!s) break;
-      aimed[s.id] = (aimed[s.id] || 0) + 1;
+      used.add(s.id);
+      failed.add(s.id);
       const target = placeId + ':' + s.id;
-      logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+      logEntry('info', 'launch', `Launching ${m.username || m.id} into server with ${s.playing} player(s) #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
       try {
         const res = await api.launchRoblox(m.id, m.cookie, target);
         if (res && res.success) {
@@ -4042,16 +4401,19 @@ async function distributePkg(pkgId) {
           markLaunched(m.id);
           _srvAddJoined(m.id, String(placeId), s.id);
           launched = true; // launched ok, move to next account
-        } else if (res && res.error) {
-          _flagCookieMaybeDead(m.id, res.error);
+        } else {
+          used.delete(s.id); // failed here: offer this server to the next account
+          if (res && res.error) _flagCookieMaybeDead(m.id, res.error);
         }
-      } catch (e) { /* keep going */ }
+      } catch (e) { used.delete(s.id); /* keep going */ }
       // Brief pause before retrying with the next candidate server.
       if (!launched && attempt === 0) await new Promise(r => setTimeout(r, Math.min(delay || 1000, 3000)));
     }
-    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
+    if (!launched) break; // out of lively servers: stop, report partial
+    if (delay > 0 && i < members.length - 1) await new Promise(r => setTimeout(r, delay));
   }
-  toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
+  if (ok < members.length) toast(t('pkg.distributedPartial', { ok: ok, total: members.length, name: p.name }), 'err');
+  else toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), 'ok');
   renderPackages();
 }
 
@@ -4422,6 +4784,7 @@ function openCreatePackage() {
   document.getElementById('in-pkg-delay').value = 0;
   document.getElementById('pkg-picker-search').value = '';
   document.getElementById('pkg-order-row').innerHTML = '';
+  document.querySelector('#pkg-color-row .pkg-color-swatch[data-custom="1"]')?.remove();
   setPkgColorSel('');
   renderPackagePicker([]);
   openModal('m-package');
@@ -4444,7 +4807,30 @@ function openEditPackage(id) {
 }
 
 function setPkgColorSel(color) {
-  document.querySelectorAll('#pkg-color-row .pkg-color-swatch').forEach(b => b.classList.toggle('sel', b.dataset.color === color));
+  if (color && /^#[0-9a-fA-F]{6}$/.test(color)) pkgEnsureCustomSwatch(color);
+  document.querySelectorAll('#pkg-color-row .pkg-color-swatch').forEach(b => b.classList.toggle('sel', (b.dataset.color || '').toLowerCase() === String(color || '').toLowerCase()));
+  const customInput = document.getElementById('pkg-color-custom');
+  if (customInput && /^#[0-9a-fA-F]{6}$/.test(color || '')) customInput.value = color;
+}
+function pkgEnsureCustomSwatch(color) {
+  const row = document.getElementById('pkg-color-row');
+  if (!row) return;
+  let custom = row.querySelector('.pkg-color-swatch[data-custom="1"]');
+  if (!custom) {
+    custom = document.createElement('button');
+    custom.type = 'button';
+    custom.className = 'pkg-color-swatch';
+    custom.dataset.custom = '1';
+    row.appendChild(custom);
+  }
+  custom.dataset.color = color;
+  custom.style.background = color;
+  custom.title = color;
+}
+function pkgCustomColor(v) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(v || '')) return;
+  pkgEnsureCustomSwatch(v);
+  setPkgColorSel(v);
 }
 
 function collectPkgChecked() {
@@ -4866,10 +5252,109 @@ function switchChartTab(tab) {
   chartTab = tab;
   document.querySelectorAll('#page-charts .tab-btn').forEach(t => t.classList.remove('active'));
   document.getElementById('ctab-' + tab).classList.add('active');
+  const isPriv = tab === 'private';
+  const searchWrap = document.querySelector('#page-charts .chart-search-wrap');
+  if (searchWrap) searchWrap.style.display = isPriv ? 'none' : '';
+  document.getElementById('charts-private').style.display = isPriv ? '' : 'none';
+  const grid = document.getElementById('charts-grid');
+  const loading = document.getElementById('charts-loading');
+  const empty = document.getElementById('charts-empty');
+  if (isPriv) {
+    // Hide the games surfaces so only the private panel shows.
+    if (grid) grid.style.display = 'none';
+    if (loading) loading.style.display = 'none';
+    if (empty) empty.style.display = 'none';
+    renderPrivateServers();
+    positionTabSlider(document.getElementById('ctab-' + tab).closest('.tab-bar'));
+    return;
+  }
   const s = document.getElementById('chart-search'); if (s) s.value = '';
   _searchMode = false;
   if (chartsLoaded) renderCharts(allCharts[tab] || [], false);
+  else loadCharts();
   positionTabSlider(document.getElementById('ctab-' + tab).closest('.tab-bar'));
+}
+
+// ── Saved private/VIP servers ──────────────────────────────────────────
+// Roblox exposes no API listing other people's private servers, so links
+// are saved here once and joined in one click. Stored in settings.json,
+// which means they ride along with encrypted backups.
+function _savedServers() {
+  if (typeof settings === 'undefined' || !settings) return [];
+  if (!Array.isArray(settings.savedServers)) settings.savedServers = [];
+  return settings.savedServers;
+}
+function _privLooksLikeGameLink(link) {
+  if (!link) return false;
+  return /(\d{6,})|roblox\.com|privateServerLinkCode|share|code=|placeId=/i.test(link);
+}
+function privAdd() {
+  const nameEl = document.getElementById('priv-name');
+  const linkEl = document.getElementById('priv-link');
+  const name = (nameEl ? nameEl.value : '').trim().slice(0, 40) || t('priv.untitled');
+  const link = (linkEl ? linkEl.value : '').trim();
+  if (!_privLooksLikeGameLink(link)) { toast(t('priv.invalid'), 'err'); if (linkEl) linkEl.focus(); return; }
+  const list = _savedServers();
+  list.unshift({ id: 'ps_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), name, link });
+  if (list.length > 50) list.length = 50;
+  try { api.saveSettings({ savedServers: list }).catch(() => {}); } catch {}
+  if (nameEl) nameEl.value = '';
+  if (linkEl) linkEl.value = '';
+  renderPrivateServers();
+  toast(t('priv.added', { name }), 'ok');
+}
+function privRemove(id) {
+  const list = _savedServers();
+  const e = list.find(x => x.id === id);
+  confirmAction(t('priv.removeConfirm', { name: e ? e.name : '' }), () => {
+    settings.savedServers = _savedServers().filter(x => x.id !== id);
+    try { api.saveSettings({ savedServers: settings.savedServers }).catch(() => {}); } catch {}
+    renderPrivateServers();
+  });
+}
+function privCopy(id) {
+  const e = _savedServers().find(x => x.id === id);
+  if (!e) return;
+  navigator.clipboard.writeText(e.link).then(() => toast(t('priv.copied'), 'ok')).catch(() => {});
+}
+async function privJoin(id) {
+  const e = _savedServers().find(x => x.id === id);
+  if (!e) return;
+  const sel = document.getElementById('priv-acc-' + id);
+  const acc = accounts.find(a => a.id === (sel ? sel.value : ''));
+  if (!acc) { toast(t('priv.noAccounts'), 'err'); return; }
+  if (!acc.cookie) { toast(t('acct.noCookie'), 'err'); return; }
+  logEntry('info', 'launch', `Launching ${acc.username || acc.id} into saved server "${e.name}"...`, { accountId: acc.id, target: e.link });
+  let res = null;
+  try { res = await api.launchRoblox(acc.id, acc.cookie, e.link); } catch (err) { res = { success: false, error: err?.message || String(err) }; }
+  if (res && res.success) {
+    markLaunched(acc.id);
+    toast(t('priv.launched', { u: acc.nickname || acc.username || '', name: e.name }), 'ok');
+  } else if (!(res && res.cancelled)) {
+    if (res && res.error) _flagCookieMaybeDead(acc.id, res.error);
+    toast((res && res.error) || t('priv.failed'), 'err');
+  }
+}
+function renderPrivateServers() {
+  const wrap = document.getElementById('priv-list');
+  if (!wrap) return;
+  const list = _savedServers();
+  if (!list.length) {
+    wrap.innerHTML = '<div class="logs-empty"><span class="material-icons-round">lock</span>' + esc(t('priv.empty')) + '</div>';
+    return;
+  }
+  const accOpts = accounts.map(a => '<option value="' + a.id + '">' + esc(a.nickname || a.username || a.id) + '</option>').join('');
+  wrap.innerHTML = '<div class="dash-feed">' + list.map(e => {
+    const shortLink = e.link.length > 46 ? e.link.slice(0, 46) + '…' : e.link;
+    return '<div class="dash-feed-row" style="align-items:center">' +
+      '<span class="dash-ic purple" style="width:22px;height:22px;font-size:12px"><span class="material-icons-round" style="font-size:13px">lock</span></span>' +
+      '<span class="dash-feed-text" style="min-width:0"><b>' + esc(e.name) + '</b><br/><span style="opacity:.65;font-size:11px;word-break:break-all">' + esc(shortLink) + '</span></span>' +
+      (accounts.length ? '<select class="sr-input" id="priv-acc-' + e.id + '" style="height:30px;max-width:150px;font-size:11.5px">' + accOpts + '</select>' : '') +
+      '<button class="btn btn-primary btn-sm" onclick="privJoin(\'' + e.id + '\')" title="' + esc(t('priv.join')) + '"><span class="material-icons-round">play_arrow</span></button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="privCopy(\'' + e.id + '\')" title="' + esc(t('priv.copyLink')) + '"><span class="material-icons-round">content_copy</span></button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="privRemove(\'' + e.id + '\')" title="' + esc(t('priv.remove')) + '"><span class="material-icons-round">delete_outline</span></button>' +
+      '</div>';
+  }).join('') + '</div>';
 }
 
 async function loadCharts() {
@@ -5456,16 +5941,19 @@ function setRobloxChannel(channel) {
 }
 
 // Smoothly fill the slider track up to the current value.
+// Single system: the track is painted from the --fill var (see styles.css).
+// The old inline-background gradient is cleared so the two never fight.
 function updateSliderFill(el) {
-  if (!el) return;
-  const min = parseFloat(el.min) || 0, max = parseFloat(el.max) || 100, v = parseFloat(el.value);
-  const pct = max > min ? ((v - min) / (max - min)) * 100 : 0;
-  el.style.background = 'linear-gradient(90deg, var(--ac) ' + pct + '%, var(--s4) ' + pct + '%)';
+  if (!el || !el.style) return;
+  const min = parseFloat(el.min) || 0, max = parseFloat(el.max) || 100, v = parseFloat(el.value) || 0;
+  const pct = max > min ? Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100)) : 0;
+  el.style.setProperty('--fill', pct + '%');
+  el.style.background = '';
 }
 
 // Delegated listener so slider fill stays correct without every call site remembering to update it.
 document.addEventListener('input', e => {
-  if (e.target.matches && e.target.matches('.fps-slider')) updateSliderFill(e.target);
+  if (e.target.matches && e.target.matches('input[type="range"]')) updateSliderFill(e.target);
 });
 
 // Graphics
@@ -5794,10 +6282,31 @@ async function genAltgen(apiKey) {
 let _manualCreds = null;
 let _manualResult = null;
 
-const MAN_WORDS = [
-  'Wolf','Dragon','Falcon','Tiger','Shark','Eagle','Storm','Blaze','Frost','Shadow',
-  'Thunder','Viper','Panther','Cobra','Raptor','Comet','Nova','Pulse','Bolt','Stealth',
-  'Neon','Cosmo','Turbo','Quantum','Cipher','Phantom','Raven','Onyx','Ember','Gale',
+// ASCII-only on purpose: Roblox usernames allow letters/numbers/underscore.
+const MAN_ADJ = [
+  'Swift','Brave','Clever','Silent','Rapid','Golden','Silver','Iron','Stormy','Frosty',
+  'Shadow','Neon','Cosmic','Turbo','Quantum','Mighty','Sneaky','Lucky','Wild','Bold',
+  'Crimson','Azure','Jade','Amber','Onyx','Solar','Lunar','Aero','Blaze','Vivid',
+  'Prime','Ultra','Mega','Hyper','Alpha','Omega','Pixel','Ninja','Samurai','Viking',
+  'Pirate','Astro','Retro','Magic','Dark','Light','Rapid','Feroz','Veloz','Astuto',
+];
+const MAN_NOUN = [
+  'Wolf','Dragon','Falcon','Tiger','Shark','Eagle','Storm','Frost','Thunder','Viper',
+  'Panther','Cobra','Raptor','Comet','Nova','Pulse','Bolt','Raven','Ember','Gale',
+  'Fox','Bear','Lion','Panda','Koala','Otter','Hawk','Crow','Frog','Crab',
+  'Knight','Wizard','Ranger','Hunter','Scout','Pilot','Captain','Sniper','Reaper','Ghost',
+  'Robot','Cyborg','Ninja','Pirate','Titan','Golem','Phoenix','Griffin','Hydra','Kraken',
+  'Castle','Tower','Bridge','River','Ocean','Desert','Forest','Mountain','Valley','Canyon',
+  'Rocket','Satellite','Meteor','Planet','Galaxy','Engine','Circuit','Radar','Laser','Drift',
+  'Blast','Surge','Dash','Flip','Spin','Jump','Rush','Storm','Flame','Wave',
+];
+// Readable password words: short, unambiguous spelling (no l/1/I/O/0 traps).
+const MAN_PASS_WORDS = [
+  'Lobo','Tigre','Falcao','Urso','Raposa','Aguia','Tubarao','Coruja','Gaviao','Panda',
+  'Verde','Azul','Vermelho','Amarelo','Roxo','Cinza','Preto','Branco','Dourado','Prata',
+  'Ninja','Pirata','Mago','Cacador','Piloto','Capitao','Escudo','Espada','Flecha','Martelo',
+  'Solar','Lunar','Vento','Chuva','Neve','Ondas','Areia','Pedra','Fogo','Gelo',
+  'Turbo','Pixel','Laser','Radar','Motor','Foguete','Meteoro','Planeta','Orbita','Sinal',
 ];
 
 function manRandomInt(max) {
@@ -5810,31 +6319,44 @@ function manRandomUsername() {
   // Keep generating until the username doesn't collide with an existing
   // account (the user asked for this to avoid wasting signup attempts).
   const existing = new Set(accounts.map(a => (a.username || '').toLowerCase()));
+  const pickNoun = () => MAN_NOUN[manRandomInt(MAN_NOUN.length)];
+  const pickAdj = () => MAN_ADJ[manRandomInt(MAN_ADJ.length)];
+  const digits = n => {
+    let s = '';
+    for (let i = 0; i < n; i++) s += String(manRandomInt(10));
+    return s;
+  };
   let tries = 0;
   while (tries++ < 200) {
-    const word = MAN_WORDS[manRandomInt(MAN_WORDS.length)];
-    const username = word + String(10000 + manRandomInt(90000));
+    const style = manRandomInt(4);
+    let username;
+    if (style === 0) {
+      username = pickNoun() + String(10000 + manRandomInt(90000)); // Wolf48392
+    } else if (style === 1) {
+      username = (pickAdj() + pickNoun() + digits(2 + manRandomInt(2))).slice(0, 20); // SwiftWolf42
+    } else if (style === 2) {
+      username = pickNoun() + '_' + digits(3 + manRandomInt(2)); // Wolf_482
+    } else {
+      username = (pickAdj() + digits(3 + manRandomInt(2)) + pickNoun()).slice(0, 20); // Swift482Wolf
+    }
+    if (username.length < 3 || username.length > 20) continue;
     if (!existing.has(username.toLowerCase())) return username;
   }
   // Fallback: extremely unlikely, but if every possible combo collides (e.g.
   // tens of thousands of accounts), append a counter.
-  return MAN_WORDS[manRandomInt(MAN_WORDS.length)] + Date.now().toString(36);
+  return MAN_NOUN[manRandomInt(MAN_NOUN.length)] + Date.now().toString(36);
 }
 
 function manRandomPassword() {
-  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const lower = 'abcdefghjkmnpqrstuvwxyz';
-  const digits = '23456789';
-  const special = '!@#$%*_-+=?';
-  const all = upper + lower + digits + special;
-  const pick = set => set[manRandomInt(set.length)];
-  const chars = [pick(upper), pick(lower), pick(digits), pick(special)];
-  while (chars.length < 12) chars.push(pick(all));
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = manRandomInt(i + 1);
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-  }
-  return chars.join('');
+  // Readable but strong: Word-Word-NN! — always has upper, lower, digits and
+  // symbols, ~13-16 chars, easy to read and type (no more alphabet soup).
+  const w = () => MAN_PASS_WORDS[manRandomInt(MAN_PASS_WORDS.length)];
+  const seps = ['-', '_', '.', '#'];
+  const end = ['!', '?', '*', '#'];
+  let a = w(), b = w();
+  if (a === b) b = MAN_PASS_WORDS[(MAN_PASS_WORDS.indexOf(a) + 1 + manRandomInt(MAN_PASS_WORDS.length - 1)) % MAN_PASS_WORDS.length];
+  const num = String(10 + manRandomInt(90));
+  return a + seps[manRandomInt(seps.length)] + b + seps[manRandomInt(seps.length)] + num + end[manRandomInt(end.length)];
 }
 
 function manRenderCreds() {

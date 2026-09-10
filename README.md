@@ -38,7 +38,7 @@
 
 ## 📥 Installation
 
-1. Grab the latest **`MultiRoblox.exe`** from the [Releases](../../releases) page
+1. Grab the latest **`KNT-Manager.exe`** from the [Releases](../../releases) page
 2. Run it — no installer needed, portable
 3. Windows 10/11 with **WebView2** runtime (usually preinstalled)
 
@@ -52,7 +52,7 @@ Requirements: [Rust](https://rustup.rs) (stable), [Node.js](https://nodejs.org),
 build.bat
 ```
 
-That produces `dist\MultiRoblox.exe`. The frontend lives in `src/` and is embedded at compile time — rebuild after any UI change.
+That produces `dist\KNT-Manager.exe` (plus `dist\MultiRoblox.exe` for compatibility). The frontend lives in `src/` and is embedded at compile time — rebuild after any UI change.
 
 ## 📁 Project structure
 

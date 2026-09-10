@@ -3,7 +3,7 @@ use crate::state::AppState;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::process::Command;
@@ -521,30 +521,6 @@ pub async fn count_roblox_processes(app: &AppHandle, state: &AppState) -> u32 {
     }
 }
 
-/// The Running set the accounts grid reconciles against. Reads the same PID
-/// snapshot count_roblox_processes does, so a poll of both in the same tick
-/// can't return a list and a count that disagree.
-pub async fn running_ids(app: &AppHandle, state: &AppState) -> Vec<String> {
-    match cached_or_spawn_pids(app, state).await {
-        Some(alive) => running_account_ids(state, &alive),
-        // Couldn't read the process list this time. Answering "nothing is
-        // running" would blank every card over a transient helper hiccup, so
-        // hand back the last known tracking state and let the next poll (or
-        // the watch tick) correct it.
-        None => {
-            let mut ids: Vec<String> = state
-                .watched_accounts
-                .lock()
-                .unwrap()
-                .keys()
-                .cloned()
-                .collect();
-            ids.sort();
-            ids
-        }
-    }
-}
-
 // ---- instance mirror (instances.json) ----
 // account_pids only ever lived in memory, so closing MultiRoblox with clients
 // still open threw away the only record of which process belonged to which
@@ -734,9 +710,33 @@ pub async fn sync_running_instances(app: &AppHandle, state: &AppState) -> Result
     // tray is open. If the probe fails (None) we simply don't exclude — the
     // worst case is a rare mis-adoption the watch loop will correct.
     let home_now: std::collections::HashSet<u32> = home_pids(app, state).await.unwrap_or_default();
+    // Idle --launch-to-tray strays are not adoptable either: attributing one
+    // to a pidless account pins that account on Running/Home for a process
+    // that is just background noise. Only *old* tray processes are excluded
+    // so a just-launched instance is never refused attribution while still
+    // starting up.
+    let tray_now: std::collections::HashSet<u32> =
+        tray_roblox_pids(app, state).await.unwrap_or_default();
+    let quarantined = now - LAST_TRAY_KILL_MS.load(Ordering::SeqCst) < TRAY_KILL_COOLDOWN_MS;
+    let old_tray = |p: &u32| -> bool {
+        if !tray_now.contains(p) {
+            return false;
+        }
+        // Recém-morto: presume renascimento e recusa adoção por um tempo.
+        if quarantined {
+            return true;
+        }
+        match process_start_time(*p) {
+            Some(st) => {
+                let epoch_ms = (st / 10_000) as i64 - 116_444_736_00000i64;
+                epoch_ms <= 0 || now - epoch_ms >= TRAY_MIN_AGE_MS
+            }
+            None => true,
+        }
+    };
     let mut orphans: Vec<u32> = alive_pids
         .iter()
-        .filter(|p| !claimed.contains(p) && !home_now.contains(p))
+        .filter(|p| !claimed.contains(p) && !home_now.contains(p) && !old_tray(p))
         .copied()
         .collect();
     orphans.sort_unstable();
@@ -820,6 +820,22 @@ pub async fn sync_running_instances(app: &AppHandle, state: &AppState) -> Result
         ensure_pid_watcher(app, state).await;
     }
     apply_priority_policy(state, &crate::settings::load_settings()).await;
+
+    // After a reconcile that (re)attached instances, offer to tile them once
+    // the freshly adopted windows appear. Spawned so it can't hold ops_lock or
+    // block the caller. Deliberately skipped when nothing changed.
+    let synced_settings = crate::settings::load_settings();
+    if setting_bool(&synced_settings, "autoArrangeWindows", false)
+        && (!restored.is_empty() || !adopted.is_empty())
+    {
+        let app2 = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            let st = app2.state::<AppState>();
+            arrange_roblox_windows(&app2, &st, 4).await;
+        });
+    }
+
 
     Ok(running_count)
 }
@@ -1008,27 +1024,6 @@ pub async fn trim_account_memory(app: &AppHandle, state: &AppState, account_id: 
 // Waits for specific PIDs to disappear. Scoped to our own processes: a
 // blanket "no RobloxPlayerBeta.exe anywhere" wait would never be satisfied
 // while an instance the user started outside MultiRoblox is still open.
-async fn wait_for_pids_closed(
-    app: &AppHandle,
-    state: &AppState,
-    pids: &[u32],
-    max_wait: Duration,
-) {
-    let started = std::time::Instant::now();
-    loop {
-        match native_pids(app, state).await {
-            // Couldn't enumerate -- no point spinning on an unanswerable question.
-            None => return,
-            Some(alive) if !pids.iter().any(|p| alive.contains(p)) => return,
-            _ => {}
-        }
-        if started.elapsed() >= max_wait {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
-}
-
 pub async fn kill_all_roblox(app: &AppHandle, state: &AppState) -> Value {
     // Serialize against sync / kill-home / wipe. Without this, a concurrent
     // sync could re-adopt a process mid-kill, and two kill-alls could double
@@ -1289,37 +1284,117 @@ pub async fn kill_home_roblox(app: &AppHandle, state: &AppState) -> Value {
     for account_id in &gone {
         let _ = app.emit("roblox:closed", account_id.clone());
     }
+    if killed > 0 {
+        LAST_TRAY_KILL_MS.store(now_ms(), Ordering::SeqCst);
+    }
     serde_json::json!({ "ok": true, "killed": killed, "cleared": gone.len() })
 }
 
-async fn get_all_roblox_pids() -> Option<Vec<u32>> {
-    #[cfg(windows)]
-    {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "tasklist /FI \\\"IMAGENAME eq RobloxPlayerBeta.exe\\\" /FO CSV /NH"]);
-        hide_window(&mut cmd);
+// ---------------------------------------------------------------------------
+// Helpers de bandeja (--launch-to-tray)
+// ---------------------------------------------------------------------------
+// A process younger than this is presumed to still be starting up / being
+// attributed; never treat it as a stray.
+const TRAY_MIN_AGE_MS: i64 = 20_000;
+// Quarentena pós-morte: o launcher "always running" costuma renascer
+// segundos depois de morto. Nesse intervalo nenhum processo de bandeja é
+// adotável (nem os novos), senão a conta morta "volta" âmbar sozinha.
+const TRAY_KILL_COOLDOWN_MS: i64 = 90_000;
+static LAST_TRAY_KILL_MS: AtomicI64 = AtomicI64::new(0);
 
-        match tokio::time::timeout(Duration::from_secs(3), cmd.output()).await {
-            Ok(Ok(output)) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let pids: Vec<u32> = stdout
-                    .lines()
-                    .filter_map(|line| {
-                        let parts: Vec<&str> = line.split(',').collect();
-                        if parts.len() >= 2 {
-                            parts[1].trim_matches('"').parse::<u32>().ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if pids.is_empty() { None } else { Some(pids) }
-            }
-            _ => None,
-        }
+fn setting_bool(s: &serde_json::Map<String, serde_json::Value>, key: &str, default: bool) -> bool {
+    s.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+}
+
+// RobloxPlayerBeta PIDs whose command line carries `--launch-to-tray`.
+async fn tray_roblox_pids(
+    app: &AppHandle,
+    state: &AppState,
+) -> Option<std::collections::HashSet<u32>> {
+    if !cfg!(windows) {
+        return Some(std::collections::HashSet::new());
     }
-    #[cfg(not(windows))]
-    None
+    match crate::helper::call(app, state, "tray", Duration::from_secs(10)).await {
+        Ok(payload) => Some(
+            payload
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u32>().ok())
+                .collect(),
+        ),
+        Err(_) => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-arrange — tile the windows of KNT-managed instances in a grid
+// ---------------------------------------------------------------------------
+// HWND -> PID -> KNT instance: we only hand the helper the PIDs currently
+// tracked in account_pids (and alive, and not home), so no foreign "Roblox"
+// window is ever moved.
+
+/// Arrange once; returns how many windows were positioned.
+async fn arrange_roblox_windows_once(app: &AppHandle, state: &AppState) -> Value {
+    if !cfg!(windows) {
+        return serde_json::json!({ "ok": false, "error": "Windows only" });
+    }
+    let Some(alive) = native_pids(app, state).await else {
+        return serde_json::json!({ "ok": false, "error": "Could not enumerate Roblox processes" });
+    };
+    let home: std::collections::HashSet<u32> = home_pids(app, state).await.unwrap_or_default();
+    let tracked: Vec<u32> = state
+        .account_pids
+        .lock()
+        .unwrap()
+        .values()
+        .copied()
+        .filter(|p| alive.contains(p) && !home.contains(p))
+        .collect();
+    if tracked.is_empty() {
+        return serde_json::json!({ "ok": true, "arranged": 0, "expected": 0 });
+    }
+    let csv = tracked
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    match crate::helper::call(
+        app,
+        state,
+        &format!("arrange|{}", csv),
+        crate::helper::DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        Ok(payload) => {
+            let arranged = payload.trim().parse::<u32>().unwrap_or(0);
+            emit_log(
+                app,
+                "info",
+                "system",
+                &format!("[ARRANGE] Arranged {}/{} Roblox window(s)", arranged, tracked.len()),
+                Some(serde_json::json!({ "arranged": arranged, "expected": tracked.len() })),
+            );
+            serde_json::json!({ "ok": true, "arranged": arranged, "expected": tracked.len() })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
+/// Retried arrangement: a freshly launched client's window may take a moment
+/// to appear after its process does. Bounded retries with a short pause, never
+/// an infinite loop, and never blocking the UI (callers spawn this).
+pub async fn arrange_roblox_windows(app: &AppHandle, state: &AppState, max_attempts: u32) {
+    let mut attempts = 0u32;
+    loop {
+        let res = arrange_roblox_windows_once(app, state).await;
+        let arranged = res.get("arranged").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let expected = res.get("expected").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        if arranged >= expected || expected == 0 || attempts >= max_attempts {
+            break;
+        }
+        attempts += 1;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }
 
 // Direct kernel probe: "does this PID still exist?". Used by kill_all because
@@ -1517,6 +1592,15 @@ pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: 
     let _ = app.emit("roblox:closed", account_id);
     notify_and_cleanup(app, true);
     apply_priority_policy(state, &crate::settings::load_settings()).await;
+
+    // If enabled, re-tile the remaining instances now that this one closed.
+    if setting_bool(&crate::settings::load_settings(), "autoArrangeWindows", false) {
+        let app2 = app.clone();
+        tokio::spawn(async move {
+            let st = app2.state::<AppState>();
+            arrange_roblox_windows(&app2, &st, 3).await;
+        });
+    }
 
     if killed {
         serde_json::json!({ "ok": true })
@@ -1962,8 +2046,15 @@ async fn watch_tick(app: &AppHandle) {
                 && is_roblox_player_process(pid_here.unwrap())
                 && pid_is_alive(pid_here.unwrap())
                 && !alive_pids.contains(&pid_here.unwrap());
+            // Só é home com evidência própria: a sonda nomeando O PRÓPRIO
+            // processo da conta, ou os checks abaixo (launcher próprio na
+            // bandeja, exe virado launcher, jogo morto com outro cliente
+            // vivo). Um conjunto não-vazio sozinho não basta — o launcher
+            // compartilhado pertence a todos os jogos fechados, e esse
+            // atalho marcava como bandeja conta que não tinha nada a ver
+            // com ele (e a recolocava âmbar segundos após a faxina).
             let went_home = match &home_now {
-                Some(h) if !h.is_empty() && !is_manual => true,
+                Some(h) if !is_manual && pid_here.is_some_and(|p| h.contains(&p)) => true,
                 Some(_) => {
                     // The game process died (pid_here is dead). If any Roblox
                     // client is still running, the account went to the home
@@ -2092,6 +2183,7 @@ async fn watch_tick(app: &AppHandle) {
     // or it was killed) -> previously-home accounts are plainly closed now.
     // Only drain when the helper confirms the launcher is gone (Some(empty));
     // None means the probe itself failed and we should wait for the next tick.
+    let mut home_drained = false;
     if !state.home_accounts.lock().unwrap().is_empty() {
         if let Some(home) = home_pids(app, &state).await {
             if home.is_empty() {
@@ -2106,6 +2198,7 @@ async fn watch_tick(app: &AppHandle) {
                 );
                 let _ = app.emit("roblox:closed", account_id);
             }
+            home_drained = true;
         }
     }
     }
@@ -2118,6 +2211,23 @@ async fn watch_tick(app: &AppHandle) {
     // (adoptions, closures) so a restart from here recovers the right set.
     // No-ops unless the map actually moved.
     persist_instances(&state);
+
+    // Periodic background work runs here so the tick is never blocked by a
+    // helper call.
+    let watch_settings = crate::settings::load_settings();
+    // Re-arrange remaining windows when an account was closed or the home
+    // launcher disappeared (the false-positive of calling arrange on every
+    // tick is harmless — it's a no-op when nothing is tracked).
+    if setting_bool(&watch_settings, "autoArrangeWindows", false)
+        && (!closed.is_empty() || home_drained)
+    {
+        let app2 = app.clone();
+        tokio::spawn(async move {
+            let st = app2.state::<AppState>();
+            arrange_roblox_windows(&app2, &st, 3).await;
+        });
+    }
+
     stop_watch_poll_if_idle(&state);
 }
 
@@ -2536,6 +2646,29 @@ pub async fn do_launch(
         }
     }
 
+    // Optional window arrangement + tray cleanup after a successful launch.
+    // Both run in the background (never block the launch path or the UI) and
+    // both are conservative: arrange only moves KNT-tracked windows, tray
+    // cleanup only kills --launch-to-tray strays that aren't tracked/home/
+    // freshly created.
+    if setting_bool(&launch_settings, "autoArrangeWindows", false) {
+        let app2 = app.clone();
+        tokio::spawn(async move {
+            // Pass 1: espera a janela aparecer, depois tenta até 5x a cada 2s.
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            let st = app2.state::<AppState>();
+            arrange_roblox_windows(&app2, &st, 5).await;
+        });
+        // Pass 2: mesmo que a primeira tenha funcionado, uma segunda passada
+        // depois de um delay maior garante que janelas que mudaram de tamanho
+        // ao terminar de carregar (loading screen → jogo) sejam reposicionadas.
+        let app3 = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            let st = app3.state::<AppState>();
+            arrange_roblox_windows(&app3, &st, 3).await;
+        });
+    }
     serde_json::json!({ "success": true })
 }
 

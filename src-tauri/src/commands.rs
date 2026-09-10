@@ -465,7 +465,7 @@ pub async fn roblox_kill_all(app: AppHandle, state: State<'_, AppState>) -> Resu
         "warn",
         "kill",
         &format!(
-            "Killing Roblox instances launched by MultiRoblox ({} running: {})",
+            "Killing Roblox instances launched by KNT Manager ({} running: {})",
             count,
             if running_names.is_empty() {
                 "none".into()
@@ -576,6 +576,13 @@ pub fn roblox_home_ids(state: State<'_, AppState>) -> Vec<String> {
 #[tauri::command]
 pub async fn roblox_kill_home(app: AppHandle, state: State<'_, AppState>) -> Result<Value, ()> {
     Ok(crate::native::kill_home_roblox(&app, &state).await)
+}
+
+// Tiles the windows of the KNT-managed instances into a grid.
+#[tauri::command]
+pub async fn roblox_arrange_windows(app: AppHandle, state: State<'_, AppState>) -> Result<Value, ()> {
+    crate::native::arrange_roblox_windows(&app, &state, 4).await;
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
@@ -769,7 +776,30 @@ pub async fn tracking_capture_and_send(
 pub async fn clear_app_data(app: AppHandle, state: State<'_, AppState>) -> Result<Value, ()> {
     crate::native::stop_all_native_helpers(&state).await;
     let dir = crate::paths::app_data_dir();
-    let result = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&dir)).await;
+    // Preserve the backups folder: a full reset should never delete the
+    // user's safety net. Deletes everything else entry by entry.
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name.eq_ignore_ascii_case("backups") {
+                    continue;
+                }
+            }
+            if p.is_dir() {
+                let _ = std::fs::remove_dir_all(&p);
+            } else {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+        Ok(())
+    })
+    .await;
     crate::native::reset_state_for_wipe(&state);
     // Re-extracts the embedded helper into the now-empty folder and starts
     // exactly one again, holding the mutex as before.

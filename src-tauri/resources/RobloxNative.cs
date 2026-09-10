@@ -85,11 +85,13 @@ internal static class RobloxNative
                 case "antiafk":      return RunAntiAfk(args);
                 case "pids":         return RunPids();
                 case "home":         return RunHome();
+                case "tray":         return RunTray();
+                case "arrange":      return RunArrange(args);
                 case "watch":        return RunWatch(args);
                 case "capture":      return RunCapture(args);
                 case "daemon":       return Daemon.Run();
                 default:
-                    Console.Error.WriteLine("Unknown command. Use: daemon | mutex | closehandles | volume <0-100> | antiafk <seconds> | pids | home | watch [ms] | capture <pid> [xFrac yFrac wFrac hFrac]");
+                    Console.Error.WriteLine("Unknown command. Use: daemon | mutex | closehandles | volume <0-100> | antiafk <seconds> | pids | home | tray | arrange <pid1,pid2,...> | watch [ms] | capture <pid> [xFrac yFrac wFrac hFrac]");
                     return 2;
             }
         }
@@ -269,6 +271,23 @@ internal static class RobloxNative
         return 0;
     }
 
+    // One-shot: print RobloxPlayerBeta PIDs carrying `--launch-to-tray`.
+    private static int RunTray()
+    {
+        Console.Out.WriteLine(TrayList());
+        Console.Out.Flush();
+        return 0;
+    }
+
+    // One-shot: tile the windows of the given PIDs. Prints ARRANGED:<count>.
+    private static int RunArrange(string[] args)
+    {
+        string csv = args.Length > 1 ? args[1] : "";
+        Console.Out.WriteLine("ARRANGED:" + ArrangeWindows(csv));
+        Console.Out.Flush();
+        return 0;
+    }
+
     // Resident mode for the Rust watch loop: instead of spawning a fresh
     // process every poll tick (measurable CPU/AV-scan overhead at a 2s
     // cadence -- the reported cause of high idle CPU with instances open),
@@ -295,6 +314,179 @@ internal static class RobloxNative
     [StructLayout(LayoutKind.Sequential)]
     struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+    [DllImport("user32.dll", EntryPoint = "ShowWindow")] static extern bool ShowWindowArrange(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll", EntryPoint = "GetWindowTextLengthW")] static extern int GetWindowTextLengthArrange(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int nIndex);
+    [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref RECT pvParam, uint fWinIni);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, uint dwAttribute, out RECT pvAttribute, uint cbAttribute);
+
+    // PEB walk to read a Roblox client's command line, mirroring the
+    // reference implementation. The daemon has no other way to tell a
+    // `--launch-to-tray` background client apart from a real game session:
+    // WMI command-line reads are blocked by Hyperion on Roblox, but the PEB
+    // (Process Environment Block) is readable for same-user processes via
+    // OpenProcess + NtQueryInformationProcess + ReadProcessMemory.
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROCESS_BASIC_INFORMATION
+    {
+        public IntPtr ExitStatus;
+        public IntPtr PebBaseAddress;
+        public IntPtr AffinityMask;
+        public IntPtr BasePriority;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("kernel32.dll")] static extern IntPtr OpenProcessCmdline(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+    [DllImport("kernel32.dll")] static extern bool ReadProcessMemoryCmdline(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead);
+    [DllImport("kernel32.dll")] static extern bool CloseHandleCmdline(IntPtr hObject);
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationProcessCmdline(IntPtr hProcess, int processInformationClass, out PROCESS_BASIC_INFORMATION processInformation, int processInformationLength, out int returnLength);
+
+    const uint PROCESS_QUERY_INFORMATION_CMD = 0x0400;
+    const uint PROCESS_VM_READ_CMD = 0x0010;
+
+    static string CommandLineOf(int pid)
+    {
+        IntPtr h = OpenProcessCmdline(PROCESS_QUERY_INFORMATION_CMD | PROCESS_VM_READ_CMD, false, pid);
+        if (h == IntPtr.Zero) return null;
+        try
+        {
+            PROCESS_BASIC_INFORMATION pbi;
+            int retLen;
+            if (NtQueryInformationProcessCmdline(h, 0, out pbi, Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION)), out retLen) != 0) return null;
+            IntPtr peb = pbi.PebBaseAddress;
+            if (peb == IntPtr.Zero) return null;
+            int ppOffset = IntPtr.Size == 8 ? 0x20 : 0x10; // ProcessParameters in PEB
+            byte[] ppBuf = new byte[IntPtr.Size];
+            int read;
+            if (!ReadProcessMemoryCmdline(h, new IntPtr(peb.ToInt64() + ppOffset), ppBuf, IntPtr.Size, out read)) return null;
+            long procParams = IntPtr.Size == 8 ? BitConverter.ToInt64(ppBuf, 0) : BitConverter.ToInt32(ppBuf, 0);
+            if (procParams == 0) return null;
+            int cmdOffset = IntPtr.Size == 8 ? 0x70 : 0x40; // CommandLine UNICODE_STRING
+            int usSize = IntPtr.Size == 8 ? 16 : 8;
+            byte[] usBuf = new byte[usSize];
+            if (!ReadProcessMemoryCmdline(h, new IntPtr(procParams + cmdOffset), usBuf, usSize, out read)) return null;
+            int length = BitConverter.ToUInt16(usBuf, 0);
+            long buffer = IntPtr.Size == 8 ? BitConverter.ToInt64(usBuf, 8) : BitConverter.ToInt32(usBuf, 4);
+            if (length <= 0 || buffer == 0) return null;
+            byte[] cmdBuf = new byte[length];
+            if (!ReadProcessMemoryCmdline(h, new IntPtr(buffer), cmdBuf, length, out read)) return null;
+            return System.Text.Encoding.Unicode.GetString(cmdBuf);
+        }
+        finally { CloseHandleCmdline(h); }
+    }
+
+    // PIDs of every RobloxPlayerBeta.exe whose command line carries
+    // `--launch-to-tray` (the "always running" background client). The daemon
+    // hands this to the Rust side, which decides what's actually safe to kill.
+    internal static string TrayList()
+    {
+        var tray = new System.Collections.Generic.List<string>();
+        foreach (var p in Process.GetProcessesByName("RobloxPlayerBeta"))
+        {
+            try
+            {
+                string cl = CommandLineOf(p.Id);
+                if (cl != null && cl.IndexOf("--launch-to-tray", StringComparison.OrdinalIgnoreCase) >= 0)
+                    tray.Add(p.Id.ToString());
+            }
+            catch { }
+        }
+        return string.Join(",", tray);
+    }
+
+    // Tiles only the windows of the supplied PIDs (the KNT-managed instances)
+    // into a grid over the primary monitor's work area. Returns how many
+    // windows were actually positioned, so the Rust side can retry while the
+    // client is still loading its window.
+    internal static int ArrangeWindows(string pidCsv)
+    {
+        var pids = new System.Collections.Generic.HashSet<uint>();
+        foreach (var s in (pidCsv ?? "").Split(','))
+        {
+            uint p;
+            if (uint.TryParse(s.Trim(), out p) && p > 0) pids.Add(p);
+        }
+        if (pids.Count == 0) return 0;
+
+        var hwnds = new System.Collections.Generic.List<IntPtr>();
+        EnumWindows((hWnd, lp) =>
+        {
+            if (!IsWindowVisible(hWnd)) return true;
+            if (GetWindowTextLengthArrange(hWnd) == 0) return true; // skip helper/child windows
+            uint pid;
+            GetWindowThreadProcessId(hWnd, out pid);
+            if (pids.Contains(pid)) hwnds.Add(hWnd);
+            return true;
+        }, IntPtr.Zero);
+
+        int count = hwnds.Count;
+        if (count == 0) return 0;
+
+        // Work area (excludes the taskbar) rather than the full screen, so
+        // windows never land underneath it. Falls back to the full screen if
+        // the work-area query fails.
+        RECT wa = new RECT();
+        if (!SystemParametersInfo(0x0030, 0, ref wa, 0)) // SPI_GETWORKAREA
+        {
+            wa.Left = 0; wa.Top = 0;
+            wa.Right = GetSystemMetrics(0); // SM_CXSCREEN
+            wa.Bottom = GetSystemMetrics(1); // SM_CYSCREEN
+        }
+        int screenW = wa.Right - wa.Left;
+        int screenH = wa.Bottom - wa.Top;
+        int baseX = wa.Left;
+        int baseY = wa.Top;
+        if (screenW <= 0 || screenH <= 0) return 0;
+
+        // Measure the invisible DWM borders on the first window so the grid
+        // can be expanded past them and windows snap flush (Win10/11 leave
+        // ~7px transparent resize borders inside the window rect).
+        int bL = 0, bR = 0, bT = 0, bB = 0;
+        try
+        {
+            RECT wr, fr;
+            if (GetWindowRect(hwnds[0], out wr) &&
+                DwmGetWindowAttribute(hwnds[0], 9, out fr, (uint)Marshal.SizeOf(typeof(RECT))) == 0) // DWMWA_EXTENDED_FRAME_BOUNDS
+            {
+                bL = fr.Left - wr.Left;
+                bR = wr.Right - fr.Right;
+                bT = fr.Top - wr.Top;
+                bB = wr.Bottom - fr.Bottom;
+            }
+        }
+        catch { }
+
+        int cols = (int)Math.Ceiling(Math.Sqrt(count));
+        if (cols < 1) cols = 1;
+        int rows = (int)Math.Ceiling((double)count / cols);
+        if (rows < 1) rows = 1;
+        int cellW = screenW / cols;
+        int cellH = screenH / rows;
+
+        for (int i = 0; i < count; i++)
+        {
+            int col = i % cols;
+            int row = i / cols;
+            int x = baseX + col * cellW;
+            int y = baseY + row * cellH;
+            int w = cellW, h = cellH;
+
+            // Center the (short) last row, matching the reference layout.
+            int inLastRow = count - (rows - 1) * cols;
+            if (row == rows - 1 && inLastRow < cols)
+            {
+                int lastCol = i - (rows - 1) * cols;
+                int totalWidth = inLastRow * cellW;
+                x = baseX + (screenW - totalWidth) / 2 + lastCol * cellW;
+            }
+
+            ShowWindowArrange(hwnds[i], 9); // SW_RESTORE
+            SetWindowPos(hwnds[i], IntPtr.Zero, x - bL, y - bT, w + bL + bR, h + bT + bB, 0x0004); // SWP_NOZORDER
+        }
+        return count;
+    }
 
     // Screenshots one Roblox window (by PID), optionally cropped to a
     // fractional sub-rectangle of the captured image, and prints the PNG as
@@ -1102,6 +1294,17 @@ internal static class Daemon
                     if (sec > 1140) sec = 1140; // stay under Roblox's ~20-min kick
                     StartAfk(sec, vk);
                     Reply(id, sec.ToString());
+                    break;
+                }
+
+                case "tray":
+                    Reply(id, RobloxNative.TrayList());
+                    break;
+
+                case "arrange":
+                {
+                    string pidCsv = p.Length > 2 ? p[2] : "";
+                    Reply(id, RobloxNative.ArrangeWindows(pidCsv).ToString());
                     break;
                 }
 

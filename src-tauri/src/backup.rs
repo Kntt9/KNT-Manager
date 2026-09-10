@@ -87,7 +87,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 fn open_container(container: &Value, password: &str) -> Result<Payload, String> {
     if container.get("type").and_then(|v| v.as_str()) != Some(BACKUP_TYPE) {
-        return Err("This file is not a MultiRoblox backup.".into());
+        return Err("This file is not a KNT Manager backup.".into());
     }
     if container.get("encrypted").and_then(|v| v.as_bool()) != Some(true) {
         return Err("This backup file is not encrypted.".into());
@@ -190,8 +190,8 @@ pub async fn create_backup(app: &AppHandle, state: &AppState, password: String) 
     let (tx, rx) = oneshot::channel::<Option<tauri_plugin_dialog::FilePath>>();
     app.dialog()
         .file()
-        .set_title("Save MultiRoblox backup")
-        .add_filter("MultiRoblox backup", &["mrbackup"])
+        .set_title("Save KNT Manager backup")
+        .add_filter("KNT Manager backup", &["mrbackup"])
         .set_file_name(&format!("multiroblox-backup-{}.mrbackup", date_stamp()))
         .save_file(move |file| {
             let _ = tx.send(file);
@@ -434,7 +434,7 @@ pub async fn do_restore(app: &AppHandle, state: &AppState, path: &std::path::Pat
     let container: Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(_) => {
-            return json!({ "ok": false, "error": "The selected file is not a valid MultiRoblox backup." })
+            return json!({ "ok": false, "error": "The selected file is not a valid KNT Manager backup." })
         }
     };
     let mut payload = match open_container(&container, password) {
@@ -498,8 +498,8 @@ pub async fn restore_backup(app: &AppHandle, state: &AppState, password: String)
     let (tx, rx) = oneshot::channel::<Option<tauri_plugin_dialog::FilePath>>();
     app.dialog()
         .file()
-        .set_title("Select a MultiRoblox backup to restore")
-        .add_filter("MultiRoblox backup", &["mrbackup", "json"])
+        .set_title("Select a KNT Manager backup to restore")
+        .add_filter("KNT Manager backup", &["mrbackup", "json"])
         .pick_file(move |file| {
             let _ = tx.send(file);
         });

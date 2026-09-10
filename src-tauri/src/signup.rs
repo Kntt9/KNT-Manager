@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use url::Url;
 
+
 pub struct SignupResult {
     pub success: bool,
     pub cookie: Option<String>,
@@ -219,7 +220,7 @@ pub async fn open_signup_window(
                 user_id: None,
                 closed: false,
                 error: Some(e.to_string()),
-            };
+            }
         }
     };
 
@@ -242,7 +243,7 @@ pub async fn open_signup_window(
                 user_id: None,
                 closed: false,
                 error: Some(format!("Failed to open signup window: {}", e)),
-            };
+            }
         }
     };
 
@@ -353,3 +354,4 @@ pub async fn open_signup_window(
     let _ = window.destroy();
     result
 }
+

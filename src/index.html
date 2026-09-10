@@ -42,7 +42,7 @@
       <span class="material-icons-round">inventory_2</span><span data-i18n="nav.groups">Groups</span>
     </button>
     <button class="nav-item" id="nav-charts" onclick="goTo('charts')">
-      <span class="material-icons-round">bar_chart</span><span data-i18n="nav.charts">Charts</span>
+      <span class="material-icons-round">videogame_asset</span><span data-i18n="nav.charts">Games</span>
     </button>
     <div class="nav-label" data-i18n="nav.secTools">Tools</div>
     <button class="nav-item" id="nav-mixer" onclick="goTo('mixer')">
@@ -63,6 +63,9 @@
     </button>
     <button class="nav-item" id="nav-logs" onclick="goTo('logs')">
       <span class="material-icons-round">terminal</span><span data-i18n="nav.logs">Logs</span>
+    </button>
+    <button class="nav-item" id="nav-history" onclick="goTo('history')">
+      <span class="material-icons-round">history</span><span data-i18n="nav.history">History</span>
     </button>
     <button class="nav-item" id="nav-credits" onclick="goTo('credits')">
       <span class="material-icons-round">favorite</span><span data-i18n="nav.credits">Credits</span>
@@ -213,7 +216,7 @@
       <div class="page" id="page-charts">
         <div class="ph" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
           <div>
-            <div class="ph-title" data-i18n="charts.title">Charts</div>
+            <div class="ph-title" data-i18n="charts.title">Games</div>
             <div class="ph-sub" data-i18n="charts.sub">Trending &amp; top games on Roblox</div>
           </div>
           <button class="btn btn-ghost" style="font-size:11px;padding:7px 10px;flex-shrink:0" onclick="loadCharts()">
@@ -225,6 +228,7 @@
           <button class="tab-btn active" id="ctab-popular" onclick="switchChartTab('popular')" data-i18n="charts.topPlaying">Top Playing Now</button>
           <button class="tab-btn" id="ctab-trending" onclick="switchChartTab('trending')" data-i18n="charts.topRated">Top Rated</button>
           <button class="tab-btn" id="ctab-favorited" onclick="switchChartTab('favorited')" data-i18n="charts.topEarning">Top Earning</button>
+          <button class="tab-btn" id="ctab-private" onclick="switchChartTab('private')" data-i18n="charts.private">Private servers</button>
         </div>
         <div class="chart-search-wrap" style="padding:0 18px 8px">
           <div class="search" style="width:100%">
@@ -242,6 +246,15 @@
             <span class="material-icons-round">wifi_off</span>
             <div class="empty-title" data-i18n="charts.emptyTitle">Couldn't load games</div>
             <div class="empty-sub" data-i18n="charts.emptySub">Check your connection and press Refresh.</div>
+          </div>
+          <div id="charts-private" style="display:none;padding:0 18px 18px">
+            <div class="modal-sub" style="margin:4px 0 12px" data-i18n="priv.desc">Save private/VIP server links here. Roblox doesn't list other people's private servers, so paste the link once and join in one click.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+              <input type="text" id="priv-name" class="sr-input" data-i18n-ph="priv.namePh" data-i18n-aria="priv.namePh" placeholder="Name, e.g. farm do grupo" aria-label="Server name" style="flex:1;min-width:140px;width:auto" maxlength="40"/>
+              <input type="text" id="priv-link" class="sr-input" data-i18n-ph="priv.linkPh" data-i18n-aria="priv.linkPh" placeholder="Private server link…" aria-label="Private server link" style="flex:2;min-width:180px;width:auto" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')privAdd()"/>
+              <button class="btn btn-primary btn-sm" onclick="privAdd()"><span class="material-icons-round">add</span><span data-i18n="priv.add">Save</span></button>
+            </div>
+            <div id="priv-list"></div>
           </div>
         </div>
         </div>
@@ -611,6 +624,12 @@
             <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.relaunchLabel">Relaunch on disconnect</div><div class="sr-desc" data-i18n="settings.relaunchDesc">If a running instance disconnects unexpectedly, relaunch that same account back into the same game automatically.</div></div><label class="toggle"><input type="checkbox" id="set-autorelaunch" onchange="toggleAutoRelaunch()"/><span class="toggle-trk"></span></label></div>
             <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.killOnCloseLabel">Kill Roblox on exit</div><div class="sr-desc" data-i18n="settings.killOnCloseDesc">When you close MultiRoblox, kill all running Roblox instances to prevent orphaned processes from causing issues on the next startup.</div></div><label class="toggle"><input type="checkbox" id="set-killonclose" onchange="toggleKillOnClose()"/><span class="toggle-trk"></span></label></div>
           </div>
+          <!-- Background / windows -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.backgroundWindows">Background Processes &amp; Windows</div>
+
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.autoArrangeLabel">Organizar janelas do Roblox automaticamente após o lançamento</div><div class="sr-desc" data-i18n="settings.autoArrangeDesc">Organiza as janelas do Roblox em grade (2 = lado a lado, 4 = 2×2, etc.).</div></div><label class="toggle"><input type="checkbox" id="set-autoarrange" onchange="toggleAutoArrange()"/><span class="toggle-trk"></span></label></div>
+          </div>
         </div>
         <div class="sw" id="stab-panel-performance" style="display:none">
           <!-- Memory -->
@@ -846,6 +865,21 @@
           <div class="logs-empty"><span class="material-icons-round">terminal</span><span data-i18n="logs.empty">No log entries yet.</span></div>
         </div>
       </div>
+      <!-- status history page -->
+      <div class="page" id="page-history">
+        <div class="ph">
+          <div>
+            <div class="ph-title" data-i18n="hist.title">Status history</div>
+            <div class="ph-sub" data-i18n="hist.sub">When each account started, stopped or lost its cookie. Kept across restarts.</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="clearHistory()"><span class="material-icons-round">delete_outline</span><span data-i18n="hist.clear">Clear</span></button>
+          </div>
+        </div>
+        <div id="hist-list" class="logs-text" tabindex="0">
+          <div class="logs-empty"><span class="material-icons-round">history</span><span data-i18n="hist.empty">No status changes yet.</span></div>
+        </div>
+      </div>
       <div class="page" id="page-credits">
         <div class="ph">
           <div class="ph-title" data-i18n="credits.title">Credits</div>
@@ -885,7 +919,10 @@
 <!-- Batch actions bar (multi-select mode) -->
 <div class="batch-bar" id="batch-bar" style="display:none">
   <span class="batch-count" id="batch-count">0 selected</span>
+  <button class="btn btn-primary" onclick="batchLaunch()" data-i18n="batch.launch"><span class="material-icons-round" style="font-size:15px">rocket_launch</span>Launch</button>
   <button class="btn btn-danger" onclick="batchKill()" data-i18n="batch.kill"><span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill</button>
+  <button class="btn btn-ghost" onclick="batchCopyLogins()" data-i18n="batch.copy"><span class="material-icons-round" style="font-size:15px">content_copy</span>Copy logins</button>
+  <button class="btn btn-ghost" onclick="openBatchTarget()" data-i18n="batch.setGame"><span class="material-icons-round" style="font-size:15px">sports_esports</span>Set game</button>
   <button class="btn btn-ghost" onclick="batchTrim()" data-i18n="batch.trim"><span class="material-icons-round" style="font-size:15px">memory</span>Trim</button>
   <button class="btn btn-ghost" onclick="batchToGroup()" data-i18n="batch.toGroup"><span class="material-icons-round" style="font-size:15px">inventory_2</span>To group…</button>
   <div class="filter-wrap">
@@ -893,6 +930,18 @@
     <div class="filter-menu" id="batch-cat-menu" style="right:0;left:auto"></div>
   </div>
   <button class="btn btn-ghost" onclick="clearSelection()" data-i18n="common.cancel"><span class="material-icons-round" style="font-size:15px">close</span></button>
+</div>
+<!-- batch set game -->
+<div class="overlay" id="m-batch-target" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-batch-target')">
+  <div class="modal" onclick="event.stopPropagation()" style="width:400px;max-width:92vw">
+    <div class="modal-title" data-i18n="batch.gameTitle">Set game for selected</div>
+    <div class="modal-sub" id="batch-target-sub" data-i18n="batch.gameDesc">Paste the game ID, link or server. Applies to every selected account at once.</div>
+    <input type="text" id="batch-target-input" class="sr-input" data-i18n-ph="batch.gamePh" data-i18n-aria="batch.gamePh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..." aria-label="Game target" style="width:100%" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')submitBatchTarget()"/>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('m-batch-target')" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-primary" id="batch-target-save" onclick="submitBatchTarget()" data-i18n="common.save">Save</button>
+    </div>
+  </div>
 </div>
 <!-- tracking region picker -->
 <div class="overlay" id="m-region-picker" data-backdrop-close="true" onclick="if(event.target===this)closeRegionPicker()">
@@ -1018,6 +1067,7 @@
             <button type="button" class="pkg-color-swatch" data-color="#3b82f6" style="background:#3b82f6"></button>
             <button type="button" class="pkg-color-swatch" data-color="#c084fc" style="background:#c084fc"></button>
             <button type="button" class="pkg-color-swatch" data-color="#22d3ee" style="background:#22d3ee"></button>
+            <label class="pkg-color-custom" data-i18n-title="groups.customColor" title="Custom color"><span class="material-icons-round">add</span><input type="color" id="pkg-color-custom" value="#5c5ce0" oninput="pkgCustomColor(this.value)"/></label>
           </div>
         </div>
         <div style="width:130px">
@@ -1055,59 +1105,65 @@
         <div class="edit-head-meta" id="edit-head-meta"></div>
       </div>
     </div>
-    <div class="field">
-      <label for="in-nickname" data-i18n="edit.alias">Alias</label>
-      <input type="text" id="in-nickname" data-i18n-ph="edit.aliasPh" placeholder="e.g. MainAlt or FarmBot"/>
-    </div>
-    <div class="field">
-      <label for="in-description" data-i18n="edit.description">Description</label>
-      <textarea id="in-description" data-i18n-ph="edit.descriptionPh" placeholder="Personal note..."></textarea>
-    </div>
-    <div class="field">
-      <label for="in-category" data-i18n="edit.category">Category</label>
-      <div class="cdd cat-cdd" id="cdd-in-category">
-        <div class="cdd-trigger" id="cdd-in-category-trigger" onclick="toggleCdd('in-category')" onkeydown="catTriggerKey(event)" role="button" tabindex="0" aria-label="Category">
-          <span class="cat-dot cdd-cat-dot" id="in-category-dot" style="background:var(--s4)"></span>
-          <span class="cdd-label" id="in-category-label" data-i18n="edit.noCategory">No category</span>
-          <span class="material-icons-round cdd-arrow">expand_more</span>
+    <div class="edit-cols">
+      <div class="edit-col">
+        <div class="field">
+          <label for="in-nickname" data-i18n="edit.alias">Alias</label>
+          <input type="text" id="in-nickname" data-i18n-ph="edit.aliasPh" placeholder="e.g. MainAlt or FarmBot"/>
         </div>
-        <div class="cdd-menu cat-menu" id="cdd-in-category-menu">
-          <div class="cdd-search" id="cat-search-wrap" style="display:none">
-            <span class="material-icons-round">search</span>
-            <input id="cat-search-input" data-i18n-ph="edit.searchCatsPh" placeholder="Search categories…" oninput="catSearchInput(this.value)" aria-label="Search categories"/>
+        <div class="field">
+          <label for="in-description" data-i18n="edit.description">Description</label>
+          <textarea id="in-description" data-i18n-ph="edit.descriptionPh" placeholder="Personal note..."></textarea>
+        </div>
+        <div class="field">
+          <label for="in-category" data-i18n="edit.category">Category</label>
+          <div class="cdd cat-cdd" id="cdd-in-category">
+            <div class="cdd-trigger" id="cdd-in-category-trigger" onclick="toggleCdd('in-category')" onkeydown="catTriggerKey(event)" role="button" tabindex="0" aria-label="Category">
+              <span class="cat-dot cdd-cat-dot" id="in-category-dot" style="background:var(--s4)"></span>
+              <span class="cdd-label" id="in-category-label" data-i18n="edit.noCategory">No category</span>
+              <span class="material-icons-round cdd-arrow">expand_more</span>
+            </div>
+            <div class="cdd-menu cat-menu" id="cdd-in-category-menu">
+              <div class="cdd-search" id="cat-search-wrap" style="display:none">
+                <span class="material-icons-round">search</span>
+                <input id="cat-search-input" data-i18n-ph="edit.searchCatsPh" placeholder="Search categories…" oninput="catSearchInput(this.value)" aria-label="Search categories"/>
+              </div>
+              <div class="cat-options" id="in-category-options"></div>
+            </div>
           </div>
-          <div class="cat-options" id="in-category-options"></div>
+          <div class="field-hint" data-i18n="edit.categoryHint">Organize accounts into groups. Create and manage categories with the Categories button in the Accounts toolbar.</div>
         </div>
       </div>
-      <div class="field-hint" data-i18n="edit.categoryHint">Organize accounts into groups. Create and manage categories with the Categories button in the Accounts toolbar.</div>
-    </div>
-    <div class="field">
-      <label for="in-target" data-i18n="edit.target">Game ID, Invite Link, or Private Server Link</label>
-      <input type="text" id="in-target" data-i18n-ph="edit.targetPh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..."/>
-    </div>
-    <div class="field">
-      <label for="in-password" data-i18n="edit.password">Password</label>
-      <div style="display:flex;gap:8px;align-items:stretch">
-        <input type="password" id="in-password" data-i18n-ph="edit.passwordPh" placeholder="Account password" style="flex:1;min-width:0" autocomplete="off" spellcheck="false"/>
-        <button class="btn btn-ghost" style="flex-shrink:0;height:34px;padding:0 8px" onclick="togglePassVis()" title="Show/hide"><span class="material-icons-round" style="font-size:16px" id="pass-vis-icon">visibility_off</span></button>
+      <div class="edit-col">
+        <div class="field">
+          <label for="in-target" data-i18n="edit.target">Game ID, Invite Link, or Private Server Link</label>
+          <input type="text" id="in-target" data-i18n-ph="edit.targetPh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..."/>
+        </div>
+        <div class="field">
+          <label for="in-password" data-i18n="edit.password">Password</label>
+          <div style="display:flex;gap:8px;align-items:stretch">
+            <input type="password" id="in-password" data-i18n-ph="edit.passwordPh" placeholder="Account password" style="flex:1;min-width:0" autocomplete="off" spellcheck="false"/>
+            <button class="btn btn-ghost" style="flex-shrink:0;height:34px;padding:0 8px" onclick="togglePassVis()" title="Show/hide"><span class="material-icons-round" style="font-size:16px" id="pass-vis-icon">visibility_off</span></button>
+          </div>
+          <div class="field-hint" data-i18n="edit.passwordHint">Optional. Stored encrypted on your PC only.</div>
+        </div>
+        <div class="field">
+          <button class="btn btn-ghost" id="edit-refresh-btn" style="width:100%;justify-content:center" onclick="refreshEditFromRoblox()">
+            <span class="material-icons-round" style="font-size:15px">refresh</span><span data-i18n="edit.refresh">Refresh from Roblox</span>
+          </button>
+          <div class="field-hint" data-i18n="edit.refreshHint">Re-fetches the username and user ID from the saved cookie.</div>
+        </div>
+        <div class="field">
+          <label for="in-follow" data-i18n="edit.follow">Follow user</label>
+          <div style="display:flex;gap:8px;align-items:stretch">
+            <input type="text" id="in-follow" data-i18n-ph="edit.followPh" placeholder="username" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();followUserLookup();}"/>
+            <button class="btn btn-ghost" id="follow-btn" style="flex-shrink:0" onclick="followUserLookup()">
+              <span class="material-icons-round" style="font-size:15px">person_search</span><span data-i18n="edit.followFind">Find</span>
+            </button>
+          </div>
+          <div class="field-hint" id="follow-status" data-i18n="edit.followHint">Finds the server they're in and fills the target above.</div>
+        </div>
       </div>
-      <div class="field-hint" data-i18n="edit.passwordHint">Optional. Stored encrypted on your PC only.</div>
-    </div>
-    <div class="field">
-      <button class="btn btn-ghost" id="edit-refresh-btn" style="width:100%;justify-content:center" onclick="refreshEditFromRoblox()">
-        <span class="material-icons-round" style="font-size:15px">refresh</span><span data-i18n="edit.refresh">Refresh from Roblox</span>
-      </button>
-      <div class="field-hint" data-i18n="edit.refreshHint">Re-fetches the username and user ID from the saved cookie.</div>
-    </div>
-    <div class="field">
-      <label for="in-follow" data-i18n="edit.follow">Follow user</label>
-      <div style="display:flex;gap:8px;align-items:stretch">
-        <input type="text" id="in-follow" data-i18n-ph="edit.followPh" placeholder="username" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();followUserLookup();}"/>
-        <button class="btn btn-ghost" id="follow-btn" style="flex-shrink:0" onclick="followUserLookup()">
-          <span class="material-icons-round" style="font-size:15px">person_search</span><span data-i18n="edit.followFind">Find</span>
-        </button>
-      </div>
-      <div class="field-hint" id="follow-status" data-i18n="edit.followHint">Finds the server they're in and fills the target above.</div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('m-edit')">Cancel</button>

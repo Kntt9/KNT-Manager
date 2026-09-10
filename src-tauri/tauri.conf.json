@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MultiRoblox",
-  "version": "2.0.3",
+  "productName": "KNT Manager",
+  "version": "2.1.0",
   "identifier": "com.multiroblox.client",
   "build": {
     "frontendDist": "../src"
@@ -37,7 +37,7 @@
     "copyright": "Copyright (c) 2026 Kntt9",
     "homepage": "https://github.com/Kntt9/KNT-Manager",
     "shortDescription": "Run and manage multiple Roblox accounts",
-    "longDescription": "MultiRoblox lets you run several Roblox clients at once and manage multiple accounts from a single dashboard.",
+    "longDescription": "KNT Manager lets you run several Roblox clients at once and manage multiple accounts from a single dashboard.",
     "windows": {
       "nsis": {
         "installMode": "currentUser",

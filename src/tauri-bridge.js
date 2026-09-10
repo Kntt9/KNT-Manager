@@ -38,6 +38,7 @@
     getWatchedIds: () => invoke('roblox_watched_ids'),
     getHomeIds: () => invoke('roblox_home_ids'),
     killHomeRoblox: () => invoke('roblox_kill_home'),
+    arrangeRobloxWindows: () => invoke('roblox_arrange_windows'),
     syncInstances: () => invoke('roblox_sync_instances'),
     trimRobloxMemory: () => invoke('roblox_trim_memory'),
     trimAccountMemory: (id) => invoke('roblox_trim_account_memory', { id }),

@@ -158,6 +158,7 @@ pub fn run() {
             commands::roblox_watched_ids,
             commands::roblox_home_ids,
             commands::roblox_kill_home,
+            commands::roblox_arrange_windows,
             commands::roblox_sync_instances,
             commands::roblox_trim_memory,
             commands::roblox_trim_account_memory,
