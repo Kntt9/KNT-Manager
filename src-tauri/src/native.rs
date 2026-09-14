@@ -302,6 +302,8 @@ pub fn reset_state_for_wipe(state: &AppState) {
     state.home_accounts.lock().unwrap().clear();
     state.csrf_cache.lock().unwrap().clear();
     state.ticket_cache.lock().unwrap().clear();
+    *state.farm_guard.lock().unwrap() = crate::stealth::FarmGuard::default();
+    state.proxy_clients.lock().unwrap().clear();
     *state.last_launch_ts.lock().unwrap() = 0;
     clear_persisted_instances(state);
 }
@@ -321,6 +323,13 @@ pub async fn start_antiafk(app: &AppHandle, state: &AppState) {
         .unwrap_or(0);
     if deadline < 60 {
         deadline = 19 * 60; // 19 min, under the ~20-min idle kick
+    }
+    // Humaniza: +-3min de jitter por sessao pra nao ser metronomo detectavel.
+    // Todas as instancias no mesmo intervalo exato e sinal classico de farm.
+    {
+        use rand::Rng;
+        let jitter: i64 = rand::thread_rng().gen_range(-180..=180);
+        deadline = (deadline + jitter).clamp(11 * 60, 19 * 60 + 60);
     }
     // vk 0 = helper default (VK_SHIFT).
     match crate::helper::call(

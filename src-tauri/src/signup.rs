@@ -224,11 +224,47 @@ pub async fn open_signup_window(
         }
     };
 
+    // Anti-farm: bloqueia rajada de criacao (mesma leva = mesmo ban).
+    // Espacamento minimo de 90s entre signups, com quarentena se falhar.
+    // Pode ser desligado pela chave `signupProtection` nas settings
+    // (toggle liga/desliga na aba Gerador). Default = ligado.
+    let protection_on = crate::settings::load_settings()
+        .get("signupProtection")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if protection_on {
+        if let Some(wait_ms) = state
+            .farm_guard
+            .lock()
+            .unwrap()
+            .check("signup:global", 90_000)
+        {
+            return SignupResult {
+                success: false,
+                cookie: None,
+                username: None,
+                user_id: None,
+                closed: false,
+                error: Some(format!(
+                    "Anti-farm: aguarde {}s antes de criar a proxima conta. Criar em rajada queima a leva inteira.",
+                    (wait_ms / 1000).max(1)
+                )),
+            };
+        }
+        state
+            .farm_guard
+            .lock()
+            .unwrap()
+            .mark_use("signup:global");
+    }
+
     // incognito: same reasoning as the login window -- a persistent cookie
     // store would silently reuse whichever account was already logged in.
+    // Tamanho aleatorio por tentativa pra nao ser sempre 560x840 no centro.
+    let (win_w, win_h) = crate::stealth::random_signup_window();
     let window = match tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(signup_url))
         .title("Create Roblox account")
-        .inner_size(560.0, 840.0)
+        .inner_size(win_w, win_h)
         .resizable(true)
         .center()
         .incognito(true)
@@ -249,13 +285,21 @@ pub async fn open_signup_window(
 
     // Random birthday generated HERE, at autofill time. Fixed values make the
     // re-injection below (slow loads) idempotent.
+    // Delay humanizado antes de preencher: injecao instantanea e assinatura de bot.
+    {
+        use rand::Rng;
+        let ms = rand::thread_rng().gen_range(1200..3200) as u64;
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
     let (month, day, year) = random_birthday();
     let script = build_autofill_script(username, password, month, day, year);
     let _ = window.eval(script.clone());
     {
         let w = window.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(4)).await;
+            use rand::Rng;
+            let ms = rand::thread_rng().gen_range(3500..6500) as u64;
+            tokio::time::sleep(Duration::from_millis(ms)).await;
             let _ = w.eval(script);
         });
     }
@@ -351,6 +395,20 @@ pub async fn open_signup_window(
         }
     }
     .await;
+    // Com a protecao desligada nao registra uso/falha: proxima criacao libera na hora.
+    if protection_on {
+        if result.success {
+            state.farm_guard.lock().unwrap().mark_ok("signup:global");
+        } else if result.closed {
+            // fechou sem criar: nao conta como falha, mas mantem o cooldown
+        } else {
+            state
+                .farm_guard
+                .lock()
+                .unwrap()
+                .mark_fail("signup:global");
+        }
+    }
     let _ = window.destroy();
     result
 }

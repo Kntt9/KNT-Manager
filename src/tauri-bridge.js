@@ -27,6 +27,7 @@
 
     openLogin: () => invoke('roblox_open_login'),
     openSignup: (username, password) => invoke('open_signup', { username, password }),
+    farmQuarantineClear: () => invoke('farm_quarantine_clear'),
     openAccountInBrowser: (cookie) => invoke('roblox_open_account_browser', { cookie }),
     cancelLogin: () => invoke('login_cancel'),
     validateCookie: (cookie) => invoke('roblox_validate_cookie', { cookie }),

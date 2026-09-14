@@ -47,6 +47,8 @@ pub struct AppState {
 
     pub csrf_cache: Mutex<HashMap<String, (String, i64)>>,
     pub ticket_cache: Mutex<HashMap<String, (String, i64)>>,
+    pub farm_guard: Mutex<crate::stealth::FarmGuard>,
+    pub proxy_clients: Mutex<HashMap<String, reqwest::Client>>,
     pub last_launch_ts: Mutex<i64>,
     pub launch_lock: tokio::sync::Mutex<()>,
     /// account id -> flag the UI can set to abandon an in-flight launch.
@@ -110,6 +112,8 @@ impl AppState {
             home_retry_deadline: Mutex::new(HashMap::new()),
             csrf_cache: Mutex::new(HashMap::new()),
             ticket_cache: Mutex::new(HashMap::new()),
+            farm_guard: Mutex::new(crate::stealth::FarmGuard::default()),
+            proxy_clients: Mutex::new(HashMap::new()),
             last_launch_ts: Mutex::new(0),
             launch_lock: tokio::sync::Mutex::new(()),
             launch_cancel: Mutex::new(HashMap::new()),

@@ -422,6 +422,10 @@ window.I18N.en = {
   'gen.man.copiedUser': 'Copied username to clipboard',
   'gen.man.copiedPass': 'Copied password to clipboard',
   'gen.man.nothing': 'Nothing to copy',
+  'gen.man.protection': 'Anti-farm protection (90s cooldown)',
+  'gen.man.protectionDesc': 'On = blocks creating another account right away. Off = allows back-to-back creation (higher ban risk for the batch).',
+  'gen.man.protectionOn': 'Anti-farm protection on — 90s cooldown active',
+  'gen.man.protectionOff': 'Anti-farm protection off — back-to-back creation allowed',
 
   // ── tracking ──
   'tracking.title': 'Tracking',

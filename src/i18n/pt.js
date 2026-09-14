@@ -420,6 +420,10 @@ window.I18N.pt = {
   'gen.man.copiedUser': 'Usuário copiado para a área de transferência',
   'gen.man.copiedPass': 'Senha copiada para a área de transferência',
   'gen.man.nothing': 'Nada para copiar',
+  'gen.man.protection': 'Proteção anti-farm (intervalo de 90s)',
+  'gen.man.protectionDesc': 'Ligado = bloqueia criar outra conta logo em seguida. Desligado = libera criar em sequência (maior risco de ban na leva).',
+  'gen.man.protectionOn': 'Proteção anti-farm ligada — intervalo de 90s ativo',
+  'gen.man.protectionOff': 'Proteção anti-farm desligada — criação liberada em sequência',
 
   // ── tracking ──
   'tracking.title': 'Tracking',

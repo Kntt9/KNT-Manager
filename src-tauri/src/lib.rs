@@ -11,6 +11,7 @@ mod roblox_api;
 mod settings;
 mod signup;
 mod state;
+mod stealth;
 mod storage;
 mod tracking;
 
@@ -187,6 +188,9 @@ pub fn run() {
             commands::backup_restore_path,
             commands::backup_auto_password,
             commands::open_signup,
+            commands::farm_status,
+            commands::farm_test_proxy,
+            commands::farm_quarantine_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

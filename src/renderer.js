@@ -1322,6 +1322,9 @@ function applySettings() {
   document.querySelectorAll('#cdd-autokeep-menu .cdd-option').forEach(o => o.classList.toggle('selected', Number(o.dataset.value) === (ab.keep || 5)));
   const pwEl = document.getElementById('auto-backup-pw');
   if (pwEl) pwEl.textContent = ab.password || '—';
+  // Generator anti-farm protection toggle (default ON when never saved).
+  const prot = document.getElementById('gen-protection-toggle');
+  if (prot) prot.checked = settings.signupProtection !== false;
 }
 
 let _acctQuery = '', _acctFilter = (() => { try { const f = localStorage.getItem('mr-acct-filter'); return (f && f !== 'running' && f !== 'idle') ? f : 'all'; } catch { return 'all'; } })(), _acctView = (() => { try { const v = localStorage.getItem('mr-acct-view'); return (v === 'list' || v === 'compact') ? v : 'grid'; } catch { return 'grid'; } })();
@@ -6470,6 +6473,18 @@ async function manAddAccount() {
 function manDiscard() {
   _manualResult = null;
   manSetStatus('hidden', '');
+}
+
+// Liga/desliga da protecao anti-farm do gerador manual (intervalo de 90s
+// entre criacoes). Persistido em settings.json como `signupProtection`
+// (default ligado). Ao desligar, limpa o cooldown atual pra liberar na hora.
+function toggleSignupProtection() {
+  const el = document.getElementById('gen-protection-toggle');
+  const on = el ? el.checked : true;
+  settings.signupProtection = on;
+  try { api.saveSettings({ signupProtection: on }).catch(() => {}); } catch {}
+  if (!on && api.farmQuarantineClear) api.farmQuarantineClear().catch(() => {});
+  toast(on ? t('gen.man.protectionOn') : t('gen.man.protectionOff'), on ? 'ok' : 'err');
 }
 
 let _genHistory = [];

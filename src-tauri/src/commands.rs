@@ -875,3 +875,41 @@ pub fn open_external(url: String) -> Result<(), String> {
 pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
+
+// ---- farm stealth ----
+#[tauri::command]
+pub fn farm_status(_state: State<'_, AppState>) -> Value {
+    let proxies = crate::stealth::load_proxy_list();
+    serde_json::json!({
+        "proxies": proxies.len(),
+        "hasProxy": !proxies.is_empty(),
+        "ua": crate::stealth::pick_ua(),
+    })
+}
+
+#[tauri::command]
+pub async fn farm_test_proxy(_state: State<'_, AppState>, proxy: String) -> Result<Value, ()> {
+    let v = match crate::stealth::build_client_with_proxy(Some(&proxy)) {
+        Ok(client) => {
+            let r = client
+                .get("https://users.roblox.com/v1/users/authenticated")
+                .header("User-Agent", crate::stealth::pick_ua())
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+            match r {
+                Ok(resp) => serde_json::json!({ "ok": true, "status": resp.status().as_u16() }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            }
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    };
+    Ok(v)
+}
+
+#[tauri::command]
+pub fn farm_quarantine_clear(state: State<'_, AppState>) -> Value {
+    *state.farm_guard.lock().unwrap() = crate::stealth::FarmGuard::default();
+    serde_json::json!({ "ok": true })
+}
+
