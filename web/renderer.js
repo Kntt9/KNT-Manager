@@ -70,10 +70,14 @@ function setLanguage(lang, persist) {
   // so they switch language along with everything else.
   if (typeof applySettings === 'function' && typeof settings !== 'undefined' && settings) applySettings();
   if (typeof renderBackupHistory === 'function') renderBackupHistory();
+  if (typeof renderThemePage === 'function') renderThemePage();
+  if (typeof renderHistory === 'function' && document.getElementById('page-history')?.classList.contains('active')) renderHistory();
+  if (typeof renderPrivateServers === 'function' && typeof chartTab !== 'undefined' && chartTab === 'private' && document.getElementById('page-charts')?.classList.contains('active')) renderPrivateServers();
   if (persist !== false) {
     try { localStorage.setItem('mr-lang', _lang); } catch {}
-    settings.language = _lang;
-    api.saveSettings({ language: _lang }).catch(() => {});
+    if (typeof settings !== 'undefined' && settings) settings.language = _lang;
+    try { api.saveSettings({ language: _lang }).catch(() => {}); } catch {}
+    _syncUiPrefsToSettings();
   }
 }
 
@@ -143,6 +147,64 @@ function _appendLogRow(entry) {
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
+// ── Account status history (persistent, survives restarts) ───────────────
+// One row per transition: running/idle/home/cookie-dead/cookie-ok.
+const _HIST_KEY = 'mr-status-history';
+const MAX_HIST = 200;
+let _statusHistory = [];
+function _loadStatusHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(_HIST_KEY) || '[]');
+    _statusHistory = Array.isArray(raw) ? raw.filter(e => e && e.ts && e.id && e.to).slice(-MAX_HIST) : [];
+  } catch { _statusHistory = []; }
+}
+function _saveStatusHistory() {
+  try { localStorage.setItem(_HIST_KEY, JSON.stringify(_statusHistory)); } catch {}
+}
+function _histAcctName(id) {
+  const a = (typeof accounts !== 'undefined' ? accounts : []).find(x => x.id === id)
+    || (typeof trashedAccounts !== 'undefined' ? trashedAccounts : []).find(x => x.id === id);
+  return a ? (a.nickname || a.username || id) : id;
+}
+function pushStatusHistory(id, to, from) {
+  if (!id || !to) return;
+  const last = _statusHistory[_statusHistory.length - 1];
+  if (last && last.id === id && last.to === to) return; // no repeat rows
+  _statusHistory.push({ ts: Date.now(), id, name: _histAcctName(id), from: from || '', to });
+  if (_statusHistory.length > MAX_HIST) _statusHistory = _statusHistory.slice(-MAX_HIST);
+  _saveStatusHistory();
+  if (document.getElementById('page-history')?.classList.contains('active')) renderHistory();
+}
+const _HIST_META = {
+  running: ['rocket_launch', 'green'],
+  idle: ['stop_circle', 'muted'],
+  home: ['home', 'amber'],
+  'cookie-dead': ['error_outline', 'red'],
+  'cookie-ok': ['check_circle', 'green'],
+};
+function renderHistory() {
+  const el = document.getElementById('hist-list');
+  if (!el) return;
+  if (!_statusHistory.length) {
+    el.innerHTML = '<div class="logs-empty"><span class="material-icons-round">history</span>' + esc(t('hist.empty')) + '</div>';
+    return;
+  }
+  el.innerHTML = '<div class="dash-feed">' + [..._statusHistory].reverse().map(e => {
+    const meta = _HIST_META[e.to] || ['info', 'muted'];
+    const label = t('hist.' + (e.to === 'cookie-dead' ? 'cookieDead' : e.to === 'cookie-ok' ? 'cookieOk' : e.to));
+    const when = esc(_actTime(e.ts));
+    return '<div class="dash-feed-row"><span class="dash-ic ' + meta[1] + '" style="width:22px;height:22px;font-size:12px"><span class="material-icons-round" style="font-size:13px">' + meta[0] + '</span></span>' +
+      '<span class="dash-feed-text"><b>' + esc(e.name || e.id) + '</b> · ' + esc(label) + '</span><span class="dash-feed-time">' + when + '</span></div>';
+  }).join('') + '</div>';
+}
+function clearHistory() {
+  confirmAction(t('hist.clearConfirm'), () => {
+    _statusHistory = [];
+    _saveStatusHistory();
+    renderHistory();
+  });
+}
+
 // Native-style find (Ctrl+F) over the rendered log text. Uses window.find so
 // selection, scroll-to-match and Ctrl+A/Ctrl+C all behave like a normal viewer.
 function openLogFind() {
@@ -203,6 +265,7 @@ function _encErr(m) {
   if (e) { e.textContent = m; e.classList.add('show'); }
 }
 function _encSetBtnState(mode) {
+  // mode: 'normal' | 'loading' | 'success'
   const action = document.getElementById('enc-action');
   if (!action) return;
   const label = action.querySelector('span:last-child') || action;
@@ -221,6 +284,7 @@ function _encShake() {
   const card = document.querySelector('.enc-card');
   if (!card) return;
   card.classList.remove('shake');
+  // reflow to restart the animation
   void card.offsetWidth;
   card.classList.add('shake');
   setTimeout(() => card.classList.remove('shake'), 320);
@@ -249,6 +313,8 @@ async function submitEnc() {
       if (!r || !r.ok) { _encErr(t('enc.errWrong')); logEntry('warn', 'enc', 'Failed encryption unlock attempt (wrong key)'); _encSetBtnState('normal'); _encShake(); inp.value = ''; inp.focus(); return; }
       logEntry('ok', 'enc', 'Encryption key accepted, accounts unlocked');
     }
+    // Success: brief check state, then a smooth fade-out. The unlock has
+    // already finished — the animation never blocks the real operation.
     _encSetBtnState('success');
     await new Promise(r => setTimeout(r, 260));
     closeModal('m-enc');
@@ -299,6 +365,7 @@ function flagInvalidCookies(list) {
   for (const a of list) {
     if (a._cookieInvalid) {
       _cookieStatus[a.id] = 'dead';
+      pushStatusHistory(a.id, 'cookie-dead', '');
       logEntry('warn', 'cookie', `Cookie could not be decrypted for ${a.username || a.id} (corrupted or wrong key)`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
     }
   }
@@ -311,6 +378,25 @@ async function continueInit() {
   accounts = loaded.filter(a => !a.trashed);
   trashedAccounts = loaded.filter(a => a.trashed);
   [settings, packages] = await Promise.all([api.loadSettings(), api.loadPackages()]);
+  // Restore visual prefs carried inside settings.json (backup-safe).
+  // On a fresh PC localStorage is empty but settings.uiPrefs comes from restore.
+  try {
+    if (settings && settings.uiPrefs) {
+      const hadLocalTheme = _lsGet('ui-theme');
+      _restoreUiPrefsFromSettings();
+      _loadCustomThemes();
+      const tCur = currentTheme();
+      applyTheme(tCur);
+      _applyBorderRadius();
+      _applyTextureIntensity();
+      document.body.classList.toggle('high-contrast', _highContrast());
+      // First boot with no local prefs yet: persist what restore just gave us.
+      if (!hadLocalTheme) _syncUiPrefsToSettings();
+    } else {
+      // No uiPrefs yet (old install): create it from current localStorage.
+      _syncUiPrefsToSettings();
+    }
+  } catch {}
   // Hydrate persisted server highlights (settings.srvHighlights) so featured
   // servers survive an app restart. Malformed/legacy entries are dropped.
   _srvHighlighted = {};
@@ -358,11 +444,12 @@ async function continueInit() {
   startStatusPoll();
   if (settings.autoTrim) startAutoTrimLoop();
   startTrackingLoop();
-  ensureAutoPassword(); // create the auto-backup password on first run
-  startAutoBackupLoop();
+  // Automatic backup removed from the UI — keep it force-disabled so a
+  // previously-enabled timer can never run again in the background.
+  if (settings.autoBackup) { settings.autoBackup.enabled = false; }
   renderBackupHistory();
   logEntry('info', 'system', 'KNT Manager started', { version: 'v1', accounts: accounts.length, platform: navigator.platform });
-  try { const k = localStorage.getItem('bloxgen_apikey'); if (k) { const el = document.getElementById('gen-apikey'); if (el) el.value = k; } } catch {}
+  try { genKeysInit(); } catch {}
   genOnKeyInput();
   try {
     const saved = localStorage.getItem('mr_manual_creds');
@@ -381,6 +468,20 @@ async function continueInit() {
   // Forward main-process log events into the renderer log
   api.onLogEntry(data => logEntry(data.level, data.category, data.message, data.meta));
 
+  // Suspend visual rendering while the window is minimized (backend pushes
+  // -- roblox:count/closed/started -- keep flowing regardless, so state stays
+  // in sync; only the visual polling/compositing work is dropped). Restored
+  // on focus with an immediate re-poll so nothing looks stale.
+  api.onWindowVisibility(hidden => {
+    document.documentElement.classList.toggle('app-hidden', !!hidden);
+    if (hidden) {
+      if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
+      if (_uptimeTimer) { clearInterval(_uptimeTimer); _uptimeTimer = null; }
+    } else {
+      startStatusPoll();
+    }
+  });
+
   // main pushes the count off the watch tick; the local poll backs off below
   api.onRobloxCount(n => { _lastCountPushAt = Date.now(); _mixRunning = n; setRunningBadges(n); });
 
@@ -390,11 +491,14 @@ async function continueInit() {
   // caller. markLaunched() is idempotent, so the doLaunch() success path
   // below calling it again once its own await resolves is harmless.
   api.onRobloxStarted(id => {
+    const from = _homeIds.has(id) ? 'home' : 'idle';
     markLaunched(id);
     pushActivity('rocket_launch', 'green', t('act.started', { u: esc(_acctLabel(id)) }));
+    pushStatusHistory(id, 'running', from);
   });
 
   api.onRobloxClosed(id => {
+    const from = _launchedIds.has(id) ? 'running' : (_homeIds.has(id) ? 'home' : 'idle');
     _launchedIds.delete(id);
     _homeIds.delete(id);
     _srvAccountLeft(id);
@@ -402,6 +506,7 @@ async function continueInit() {
     const closedAcct = accounts.find(a => a.id === id);
     logEntry('info', 'close', `Roblox closed for ${closedAcct ? closedAcct.username : id}`, { accountId: id, username: closedAcct?.username || null, userId: closedAcct?.userId || null });
     pushActivity('stop_circle', 'muted', t('act.closed', { u: esc(_acctLabel(id)) }));
+    pushStatusHistory(id, 'idle', from);
     const card = document.querySelector(`.card[data-id="${id}"]`);
     if (card) {
       card.classList.remove('is-live');
@@ -425,6 +530,7 @@ async function continueInit() {
     _srvAccountLeft(id);
     delete _launchedAt[id];
     pushActivity('home', 'amber', t('act.home', { u: esc(_acctLabel(id)) }));
+    pushStatusHistory(id, 'home', 'running');
     const card = document.querySelector(`.card[data-id="${id}"]`);
     if (card) {
       card.classList.remove('is-live');
@@ -476,24 +582,249 @@ async function continueInit() {
 }
 init();
 
-// ── Theme ──────────────────────────────────────────────────────────────────
+// ── Theme engine ──────────────────────────────────────────────────────────
 var THEMES = ['dark','light','midnight','aurora','sunset','crimson','ocean','grape','forest','amber','rose','graphite'];
-function applyTheme(name) {
-  if (THEMES.indexOf(name) < 0) name = 'dark';
+var _previewedKeys = [];
+var _customThemes = [];
+var _themeCat = 'all';
+
+// ── WCAG luminance helpers ────────────────────────────────────────────────
+function _srgbToLinear(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function _luminance(r, g, b) { return 0.2126 * _srgbToLinear(r) + 0.7152 * _srgbToLinear(g) + 0.0722 * _srgbToLinear(b); }
+function _contrastRatio(l1, l2) { const lighter = Math.max(l1, l2), darker = Math.min(l1, l2); return (lighter + 0.05) / (darker + 0.05); }
+function _hexToRgb(hex) {
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  return [parseInt(hex.substr(0,2),16), parseInt(hex.substr(2,2),16), parseInt(hex.substr(4,2),16)];
+}
+function _lighten(hex, amt) {
+  const [r,g,b] = _hexToRgb(hex);
+  const lr = Math.min(255, r + Math.round((255-r)*amt));
+  const lg = Math.min(255, g + Math.round((255-g)*amt));
+  const lb = Math.min(255, b + Math.round((255-b)*amt));
+  return '#'+[lr,lg,lb].map(c=>c.toString(16).padStart(2,'0')).join('');
+}
+function _darken(hex, amt) {
+  const [r,g,b] = _hexToRgb(hex);
+  const dr = Math.max(0, Math.round(r*(1-amt)));
+  const dg = Math.max(0, Math.round(g*(1-amt)));
+  const db = Math.max(0, Math.round(b*(1-amt)));
+  return '#'+[dr,dg,db].map(c=>c.toString(16).padStart(2,'0')).join('');
+}
+function _rgba(hex, alpha) {
+  const [r,g,b] = _hexToRgb(hex);
+  return 'rgba('+r+','+g+','+b+','+alpha+')';
+}
+
+// ── Core theme variable generator ─────────────────────────────────────────
+function generateThemeVars(accent, bg, surface, isDark) {
+  const bgLum = _luminance(..._hexToRgb(bg));
+  const isLight = bgLum > 0.5;
+  // Surfaces: derive from surface input
+  const s2 = isDark ? _darken(surface, 0.05) : _lighten(surface, 0.04);
+  const s3 = isDark ? _darken(surface, 0.12) : _lighten(surface, 0.08);
+  const s4 = isDark ? _darken(surface, 0.18) : _lighten(surface, 0.14);
+  // Borders
+  const bdAlpha = isDark ? 0.065 : 0.09;
+  const bd2Alpha = isDark ? 0.12 : 0.16;
+  const bd3Alpha = isDark ? 0.2 : 0.28;
+  const bdBase = isDark ? '255,255,255' : '10,14,30';
+  // Accent
+  const acH = _lighten(accent, 0.12);
+  const [acR,acG,acB] = _hexToRgb(accent);
+  // Text: WCAG-based
+  let t1, t2, t3;
+  if (isLight) {
+    t1 = '#10121a'; t2 = '#4f5462'; t3 = '#8b90a0';
+  } else {
+    t1 = '#f2f3f6'; t2 = '#a7aab3'; t3 = '#70737c';
+  }
+  // Enforce minimum 4.5:1 contrast on t1
+  const t1Lum = _luminance(..._hexToRgb(t1));
+  const ratio = _contrastRatio(t1Lum, bgLum);
+  if (ratio < 4.5) { t1 = isLight ? '#000000' : '#ffffff'; }
+  // Semantic colors
+  const green = isLight ? '#128a57' : '#3ecf8e';
+  const red = isLight ? '#d64646' : '#f06f6f';
+  const amber = isLight ? '#b45309' : '#f5a623';
+  const blue = isLight ? '#2563eb' : '#3b82f6';
+  // Shadows
+  const shBase = isDark ? 'rgba(0,0,0,' : 'rgba(20,24,40,';
+  const sh1a = isDark ? '.3' : '.08';
+  const sh2a = isDark ? '.55' : '.18';
+  const sh3a = isDark ? '.65' : '.25';
+  return {
+    '--bg': bg, '--s1': surface, '--s2': s2, '--s3': s3, '--s4': s4,
+    '--bd': 'rgba('+bdBase+','+bdAlpha+')', '--bd2': 'rgba('+bdBase+','+bd2Alpha+')', '--bd3': 'rgba('+bdBase+','+bd3Alpha+')',
+    '--t1': t1, '--t2': t2, '--t3': t3,
+    '--ac': accent, '--ac-h': acH, '--ac2': _rgba(accent, 0.3), '--ac3': _rgba(accent, 0.5),
+    '--green': green, '--gd': _rgba(green, 0.12),
+    '--blue': blue, '--bld': _rgba(blue, 0.12),
+    '--red': red, '--rd': _rgba(red, 0.12),
+    '--amber': amber, '--ad': _rgba(amber, 0.12),
+    '--red-rgb': _hexToRgb(red).join(','),
+    '--shadow-1': '0 1px 2px '+shBase+sh1a+')',
+    '--shadow-2': '0 10px 28px -10px '+shBase+sh2a+')',
+    '--shadow-3': '0 24px 64px -14px '+shBase+sh3a+')',
+  };
+}
+
+// ── Reapply everything (theme + radius + high contrast) ───────────────────
+function _reapplyActiveTheme() {
+  const name = currentTheme();
+  // Clear custom inline styles first
+  const customKeys = Object.keys(generateThemeVars('#5c5ce0','#0b0c0f','#141519',true));
+  customKeys.forEach(k => document.documentElement.style.removeProperty(k));
+  document.documentElement.style.removeProperty('--r');
+  document.documentElement.style.removeProperty('--r2');
+  document.documentElement.style.removeProperty('--r3');
+  // Apply class-based theme
   document.body.classList.remove('light');
   THEMES.forEach(t => { if (t !== 'dark' && t !== 'light') document.body.classList.remove('theme-' + t); });
-  if (name === 'light') document.body.classList.add('light');
-  else if (name !== 'dark') document.body.classList.add('theme-' + name);
-  document.querySelectorAll('.theme-card').forEach(c => c.classList.toggle('sel', c.dataset.theme === name));
+  document.body.classList.remove('custom-theme');
+  if (name.startsWith('custom:')) {
+    const id = name.slice(7);
+    const ct = _customThemes.find(t => t.id === id);
+    if (ct) {
+      const vars = generateThemeVars(ct.accent, ct.bg, ct.surface, ct.isDark);
+      Object.entries(vars).forEach(([k,v]) => document.documentElement.style.setProperty(k, v));
+      document.body.classList.add('custom-theme');
+    } else { document.body.classList.add('light'); }
+  } else if (name === 'light') {
+    document.body.classList.add('light');
+  } else if (THEMES.indexOf(name) >= 0) {
+    document.body.classList.add('theme-' + name);
+  }
+  // High contrast
+  document.body.classList.toggle('high-contrast', _highContrast());
+  // Border radius
+  _applyBorderRadius();
+  // Texture intensity
   _applyTextureIntensity();
-  _renderTexturePatternSelect();
+  // Update cards
+  document.querySelectorAll('.theme-card').forEach(c => {
+    const v = c.dataset.theme || '';
+    const isSel = (name === v) || (name.startsWith('custom:') && v === name);
+    c.classList.toggle('sel', isSel);
+  });
+  document.querySelectorAll('.theme-custom-card').forEach(c => {
+    c.classList.toggle('sel', name === 'custom:' + c.dataset.themeId);
+  });
 }
-function currentTheme() { try { return localStorage.getItem('ui-theme') || 'dark'; } catch { return 'dark'; } }
+
+// ── Theme apply with smooth transition ────────────────────────────────────
+function applyTheme(name) {
+  document.body.classList.add('theme-transitioning');
+  _reapplyActiveTheme();
+  setTimeout(() => document.body.classList.remove('theme-transitioning'), 300);
+}
 function setTheme(name) {
-  if (THEMES.indexOf(name) < 0) name = 'dark';
+  if (!name) return;
   applyTheme(name);
   try { localStorage.setItem('ui-theme', name); } catch {}
+  _syncUiPrefsToSettings();
+  renderThemePage();
 }
+function currentTheme() { try { return localStorage.getItem('ui-theme') || 'dark'; } catch { return 'dark'; } }
+
+// ── Custom themes persistence ─────────────────────────────────────────────
+function _loadCustomThemes() {
+  try { _customThemes = JSON.parse(localStorage.getItem('mr-custom-themes') || '[]'); } catch { _customThemes = []; }
+}
+function _saveCustomThemes() {
+  try { localStorage.setItem('mr-custom-themes', JSON.stringify(_customThemes)); } catch {}
+  _syncUiPrefsToSettings();
+}
+// Mirror visual prefs into settings.json so encrypted backups carry them.
+// Purely additive: old backups without uiPrefs still restore fine.
+function _lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function _lsSet(k, v) { try { if (v === null || v === undefined || v === '') localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} }
+function _collectUiPrefs() {
+  let customs = [];
+  try {
+    const raw = JSON.parse(localStorage.getItem('mr-custom-themes') || '[]');
+    if (Array.isArray(raw)) {
+      customs = raw.slice(-30).map(x => ({
+        id: String(x.id || '').slice(0, 64),
+        name: String(x.name || '').slice(0, 40),
+        accent: _isHexColor(x.accent) ? x.accent.trim() : '#5c5ce0',
+        bg: _isHexColor(x.bg) ? x.bg.trim() : '#0b0c0f',
+        surface: _isHexColor(x.surface) ? x.surface.trim() : '#141519',
+        isDark: !!x.isDark
+      })).filter(x => x.id);
+    }
+  } catch { customs = []; }
+  return {
+    v: 1,
+    theme: _lsGet('ui-theme') || 'dark',
+    customThemes: customs,
+    lang: _lsGet('mr-lang') || '',
+    radius: _lsGet('mr-border-radius') || '',
+    highContrast: _lsGet('mr-high-contrast') || '',
+    texture: _lsGet('mr-theme-texture') || '',
+    pattern: _lsGet('mr-theme-pattern') || '',
+    texSize: _lsGet('mr-theme-tex-size') || '',
+    autoTheme: _lsGet('mr-auto-theme') || '',
+    autoThemeBase: _lsGet('mr-auto-theme-base') || ''
+  };
+}
+let _uiPrefsTimer = null;
+function _syncUiPrefsToSettings() {
+  if (typeof api === 'undefined' || !api.saveSettings) return;
+  if (typeof settings === 'undefined' || !settings) return;
+  clearTimeout(_uiPrefsTimer);
+  _uiPrefsTimer = setTimeout(() => {
+    try {
+      const prefs = _collectUiPrefs();
+      const json = JSON.stringify(prefs);
+      if (json.length > 100 * 1024) return; // never bloat settings.json
+      settings.uiPrefs = prefs;
+      api.saveSettings({ uiPrefs: prefs }).catch(() => {});
+    } catch {}
+  }, 800);
+}
+function _restoreUiPrefsFromSettings() {
+  try {
+    const p = settings && settings.uiPrefs;
+    if (!p || typeof p !== 'object') return false;
+    if (p.theme && typeof p.theme === 'string') _lsSet('ui-theme', p.theme.slice(0, 64));
+    if (Array.isArray(p.customThemes)) {
+      try { localStorage.setItem('mr-custom-themes', JSON.stringify(p.customThemes.slice(-30))); } catch {}
+      _loadCustomThemes();
+    }
+    if (p.lang) _lsSet('mr-lang', String(p.lang).slice(0, 8));
+    if (p.radius !== undefined) _lsSet('mr-border-radius', String(p.radius).slice(0, 8));
+    if (p.highContrast !== undefined) _lsSet('mr-high-contrast', String(p.highContrast).slice(0, 8));
+    if (p.texture) _lsSet('mr-theme-texture', String(p.texture).slice(0, 16));
+    if (p.pattern !== undefined) _lsSet('mr-theme-pattern', String(p.pattern).slice(0, 16));
+    if (p.texSize !== undefined) _lsSet('mr-theme-tex-size', String(p.texSize).slice(0, 8));
+    if (p.autoTheme !== undefined) _lsSet('mr-auto-theme', String(p.autoTheme).slice(0, 8));
+    if (p.autoThemeBase) _lsSet('mr-auto-theme-base', String(p.autoThemeBase).slice(0, 32));
+    return true;
+  } catch { return false; }
+}
+function _uniqueThemeName(name, excludeId) {
+  const all = THEMES.map(t => t).concat(_customThemes.filter(t => t.id !== excludeId).map(t => t.name));
+  let n = name, i = 2;
+  while (all.some(t => t.toLowerCase() === n.toLowerCase())) { n = name + ' (' + i + ')'; i++; }
+  return n;
+}
+
+// ── Hover preview ─────────────────────────────────────────────────────────
+function previewTheme(accent, bg, surface, isDark) {
+  clearPreview();
+  const vars = generateThemeVars(accent, bg, surface, isDark);
+  _previewedKeys = Object.keys(vars);
+  document.body.classList.add('theme-transitioning');
+  Object.entries(vars).forEach(([k,v]) => document.documentElement.style.setProperty(k, v));
+}
+function clearPreview() {
+  _previewedKeys.forEach(k => document.documentElement.style.removeProperty(k));
+  _previewedKeys = [];
+  document.body.classList.remove('theme-transitioning');
+  _reapplyActiveTheme();
+}
+
 // ── Texture intensity (off | subtle | medium) ─────────────────────────────
 const _TEX_PATTERNS = ['grain','dots','stars','rays','triangles','crosses','waves','hex','grid','diagonal','mesh','circuit'];
 function _themeTexture() { try { return localStorage.getItem('mr-theme-texture') || 'subtle'; } catch { return 'subtle'; } }
@@ -501,6 +832,8 @@ function _themePattern() { try { return localStorage.getItem('mr-theme-pattern')
 function _themeTexSize() { try { return parseInt(localStorage.getItem('mr-theme-tex-size'), 10) || 0; } catch { return 0; } }
 function _applyTextureIntensity() {
   const v = _themeTexture();
+  // The textures are internally already very faint; intensity only scales
+  // the whole layer's opacity on top of that.
   const opacity = v === 'off' ? 0 : (v === 'medium' ? 1 : 0.55);
   document.documentElement.style.setProperty('--theme-texture-opacity', String(opacity));
   // Pattern override ('' = follow the active theme's own texture).
@@ -511,9 +844,11 @@ function _applyTextureIntensity() {
   if (pat === 'none') document.body.style.setProperty('--theme-texture', 'none');
   else if (pat) document.body.style.setProperty('--theme-texture', 'var(--tex-' + pat + ')');
   else document.body.style.removeProperty('--theme-texture');
+  // Size override (0 = follow the theme's default size)
   const sz = _themeTexSize();
   if (sz) document.body.style.setProperty('--theme-texture-size', sz + 'px');
   else document.body.style.removeProperty('--theme-texture-size');
+  // Sync controls
   document.querySelectorAll('#texture-seg .vt').forEach(b => b.classList.toggle('active', b.dataset.tex === v));
   const sel = document.getElementById('texture-pattern');
   if (sel) sel.value = pat;
@@ -525,15 +860,19 @@ function _applyTextureIntensity() {
 function setThemeTexture(v) {
   try { localStorage.setItem('mr-theme-texture', v); } catch {}
   _applyTextureIntensity();
+  _syncUiPrefsToSettings();
 }
 function setThemePattern(v) {
   try { localStorage.setItem('mr-theme-pattern', v); } catch {}
   _applyTextureIntensity();
+  _syncUiPrefsToSettings();
 }
 function setThemeTexSize(v) {
   const n = parseInt(v, 10) || 0;
   try { localStorage.setItem('mr-theme-tex-size', n ? String(n) : ''); } catch {}
   _applyTextureIntensity();
+  updateSliderFill(document.getElementById('texture-size'));
+  _syncUiPrefsToSettings();
 }
 function _renderTexturePatternSelect() {
   const sel = document.getElementById('texture-pattern');
@@ -544,32 +883,465 @@ function _renderTexturePatternSelect() {
   sel.innerHTML = html;
   sel.value = _themePattern();
 }
+
+// ── High contrast ─────────────────────────────────────────────────────────
+function _highContrast() { try { return localStorage.getItem('mr-high-contrast') === '1'; } catch { return false; } }
+function toggleHighContrast() {
+  const on = !_highContrast();
+  try { localStorage.setItem('mr-high-contrast', on ? '1' : '0'); } catch {}
+  document.body.classList.toggle('high-contrast', on);
+  const el = document.getElementById('set-highcontrast');
+  if (el) el.checked = on;
+  _syncUiPrefsToSettings();
+}
+
+// ── Border radius ─────────────────────────────────────────────────────────
+function _savedRadius() { try { return parseInt(localStorage.getItem('mr-border-radius'), 10) || 12; } catch { return 12; } }
+function _applyBorderRadius() {
+  const r = _savedRadius();
+  document.documentElement.style.setProperty('--r', r + 'px');
+  document.documentElement.style.setProperty('--r2', Math.round(r * 0.67) + 'px');
+  document.documentElement.style.setProperty('--r3', Math.round(r * 0.5) + 'px');
+}
+function setBorderRadius(v) {
+  try { localStorage.setItem('mr-border-radius', String(v)); } catch {}
+  _applyBorderRadius();
+  const lbl = document.getElementById('radius-val');
+  if (lbl) lbl.textContent = v + 'px';
+  updateSliderFill(document.getElementById('set-radius'));
+  _syncUiPrefsToSettings();
+}
+
+// ── Auto theme (day/night) ────────────────────────────────────────────────
+let _autoThemeTimer = null;
+function _autoThemeEnabled() { try { return localStorage.getItem('mr-auto-theme') === '1'; } catch { return false; } }
+function _autoThemeBase() { try { return localStorage.getItem('mr-auto-theme-base') || 'dark'; } catch { return 'dark'; } }
+function _autoThemeTick() {
+  if (!_autoThemeEnabled()) return;
+  const h = new Date().getHours();
+  const isDay = h >= 7 && h < 19;
+  const base = _autoThemeBase();
+  const isDarkBase = THEMES.indexOf(base) >= 0 && base !== 'light';
+  const target = isDay ? (isDarkBase ? 'light' : base) : base;
+  if (currentTheme() !== target) setTheme(target);
+}
+function toggleAutoTheme() {
+  const on = !_autoThemeEnabled();
+  try { localStorage.setItem('mr-auto-theme', on ? '1' : '0'); } catch {}
+  const base = currentTheme();
+  if (on) {
+    try { localStorage.setItem('mr-auto-theme-base', base.startsWith('custom:') ? 'dark' : base); } catch {}
+    _autoThemeTick();
+    _autoThemeTimer = setInterval(_autoThemeTick, 5 * 60 * 1000);
+  } else {
+    if (_autoThemeTimer) { clearInterval(_autoThemeTimer); _autoThemeTimer = null; }
+  }
+  const el = document.getElementById('set-autotheme');
+  if (el) el.checked = on;
+  _syncUiPrefsToSettings();
+}
+function _startAutoTheme() {
+  if (!_autoThemeEnabled()) return;
+  _autoThemeTick();
+  _autoThemeTimer = setInterval(_autoThemeTick, 5 * 60 * 1000);
+}
+
+// ── Custom theme CRUD ─────────────────────────────────────────────────────
+function openCustomThemePanel(editId) {
+  const panel = document.getElementById('theme-custom-panel');
+  if (!panel) return;
+  panel.style.display = '';
+  const titleEl = document.getElementById('theme-custom-title');
+  const nameEl = document.getElementById('custom-theme-name');
+  const accentEl = document.getElementById('custom-accent');
+  const bgEl = document.getElementById('custom-bg');
+  const surfaceEl = document.getElementById('custom-surface');
+  const darkEl = document.getElementById('custom-isdark');
+  const saveBtn = document.getElementById('custom-theme-save');
+  const delBtn = document.getElementById('custom-theme-delete');
+  if (editId) {
+    const ct = _customThemes.find(t => t.id === editId);
+    if (!ct) return;
+    if (titleEl) titleEl.textContent = t('themes.editTheme');
+    if (nameEl) nameEl.value = ct.name;
+    if (accentEl) accentEl.value = ct.accent;
+    if (bgEl) bgEl.value = ct.bg;
+    if (surfaceEl) surfaceEl.value = ct.surface;
+    if (darkEl) darkEl.checked = ct.isDark;
+    if (delBtn) { delBtn.style.display = ''; delBtn.dataset.editId = editId; }
+    if (saveBtn) saveBtn.dataset.editId = editId;
+    previewTheme(ct.accent, ct.bg, ct.surface, ct.isDark);
+  } else {
+    if (titleEl) titleEl.textContent = t('themes.newTheme');
+    if (nameEl) nameEl.value = '';
+    if (accentEl) accentEl.value = '#5c5ce0';
+    if (bgEl) bgEl.value = '#0b0c0f';
+    if (surfaceEl) surfaceEl.value = '#141519';
+    if (darkEl) darkEl.checked = true;
+    if (delBtn) delBtn.style.display = 'none';
+    if (saveBtn) saveBtn.dataset.editId = '';
+    previewTheme('#5c5ce0', '#0b0c0f', '#141419', true);
+  }
+}
+function closeCustomThemePanel() {
+  const panel = document.getElementById('theme-custom-panel');
+  if (panel) panel.style.display = 'none';
+  clearPreview();
+}
+function onCustomColorChange() {
+  const a = document.getElementById('custom-accent')?.value || '#5c5ce0';
+  const b = document.getElementById('custom-bg')?.value || '#0b0c0f';
+  const s = document.getElementById('custom-surface')?.value || '#141519';
+  const d = document.getElementById('custom-isdark')?.checked || false;
+  const ah = document.getElementById('custom-accent-hex');
+  const bh = document.getElementById('custom-bg-hex');
+  const sh = document.getElementById('custom-surface-hex');
+  if (ah) ah.textContent = a;
+  if (bh) bh.textContent = b;
+  if (sh) sh.textContent = s;
+  previewTheme(a, b, s, d);
+}
+function saveCustomTheme() {
+  const nameEl = document.getElementById('custom-theme-name');
+  const accentEl = document.getElementById('custom-accent');
+  const bgEl = document.getElementById('custom-bg');
+  const surfaceEl = document.getElementById('custom-surface');
+  const darkEl = document.getElementById('custom-isdark');
+  const saveBtn = document.getElementById('custom-theme-save');
+  let name = (nameEl?.value || '').trim().slice(0, 40);
+  if (!name) { name = t('themes.newTheme'); }
+  const accent = _isHexColor(accentEl?.value) ? accentEl.value.trim() : '#5c5ce0';
+  const bg = _isHexColor(bgEl?.value) ? bgEl.value.trim() : '#0b0c0f';
+  const surface = _isHexColor(surfaceEl?.value) ? surfaceEl.value.trim() : '#141519';
+  const isDark = darkEl?.checked || false;
+  const editId = saveBtn?.dataset.editId || '';
+  name = _uniqueThemeName(name, editId);
+  let activeId = editId;
+  if (editId) {
+    const ct = _customThemes.find(t => t.id === editId);
+    if (ct) { ct.name = name; ct.accent = accent; ct.bg = bg; ct.surface = surface; ct.isDark = isDark; }
+    else { activeId = ''; }
+  }
+  if (!activeId) {
+    activeId = 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    _customThemes.push({ id: activeId, name, accent, bg, surface, isDark });
+  }
+  _saveCustomThemes();
+  setTheme('custom:' + activeId);
+  closeCustomThemePanel();
+}
+function deleteCustomTheme(id) {
+  const ct = _customThemes.find(t => t.id === id);
+  const name = ct ? ct.name : '';
+  confirmAction(t('themes.deleteConfirm', { name: name || t('themes.newTheme') }), () => {
+    _customThemes = _customThemes.filter(t => t.id !== id);
+    _saveCustomThemes();
+    if (currentTheme() === 'custom:' + id) setTheme('dark');
+    closeCustomThemePanel();
+    renderThemePage();
+  });
+}
+function duplicateTheme(name) {
+  // Built-ins are immutable: copy the preset into a new editable custom theme.
+  const m = (typeof THEME_META !== 'undefined' && THEME_META[name]) ? THEME_META[name] : null;
+  if (!m) { toast(t('themes.exportFailed'), 'err'); return; }
+  const base = t('settings.theme' + name.charAt(0).toUpperCase() + name.slice(1));
+  const newName = _uniqueThemeName(base, '').slice(0, 40);
+  const ct = { id: 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), name: newName, accent: m.accent, bg: m.bg, surface: m.surface, isDark: !!m.isDark };
+  _customThemes.push(ct);
+  _saveCustomThemes();
+  setTheme('custom:' + ct.id);
+  renderThemePage();
+  toast(t('themes.duplicated', { name: newName }), 'ok');
+  openCustomThemePanel(ct.id);
+}
+
+// ── Import / Export ────────────────────────────────────────────────────────
+function exportTheme() {
+  const name = currentTheme();
+  let data;
+  if (name.startsWith('custom:')) {
+    data = _customThemes.find(t => t.id === name.slice(7));
+  } else if (typeof THEME_META !== 'undefined' && THEME_META[name]) {
+    const m = THEME_META[name];
+    data = { name: name, accent: m.accent, bg: m.bg, surface: m.surface, isDark: m.isDark };
+  } else {
+    // Fallback — use default dark colors
+    data = { name: name, accent: '#5c5ce0', bg: '#0b0c0f', surface: '#141519', isDark: name !== 'light' };
+  }
+  if (!data) { toast(t('themes.exportFailed'), 'err'); return; }
+  const json = JSON.stringify({ name: data.name, accent: data.accent, bg: data.bg, surface: data.surface, isDark: data.isDark }, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = (data.name || 'theme') + '.json';
+  a.click(); URL.revokeObjectURL(url);
+  toast(t('themes.exported'), 'ok');
+}
+function _isHexColor(v) {
+  return typeof v === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v.trim());
+}
+function importTheme() {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.json';
+  input.onchange = () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > 50 * 1024) { toast(t('themes.importError'), 'err'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!_isHexColor(data.accent) || !_isHexColor(data.bg) || !_isHexColor(data.surface)) { toast(t('themes.importError'), 'err'); return; }
+        const rawName = String(data.name || t('themes.newTheme')).slice(0, 40);
+        const name = _uniqueThemeName(rawName, '');
+        const ct = { id: 'ct_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), name, accent: data.accent.trim(), bg: data.bg.trim(), surface: data.surface.trim(), isDark: !!data.isDark };
+        _customThemes.push(ct);
+        _saveCustomThemes();
+        setTheme('custom:' + ct.id);
+        renderThemePage();
+        toast(t('themes.imported'), 'ok');
+      } catch { toast(t('themes.importError'), 'err'); }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ── Theme page rendering ──────────────────────────────────────────────────
+// tex: which background texture the theme uses (see --tex-* vars in CSS).
+const THEME_META = {
+  dark: { accent:'#5c5ce0', bg:'#0e0e10', surface:'#18181d', isDark:true, tex:'grain' },
+  light: { accent:'#5c5ce0', bg:'#f4f4f8', surface:'#ffffff', isDark:false, tex:'grain' },
+  midnight: { accent:'#4f7cff', bg:'#0a0e1a', surface:'#141a2e', isDark:true, tex:'grid' },
+  aurora: { accent:'#2dd4bf', bg:'#07140f', surface:'#11221b', isDark:true, tex:'stars' },
+  sunset: { accent:'#ff7a59', bg:'#170b12', surface:'#281320', isDark:true, tex:'rays' },
+  crimson: { accent:'#f43f5e', bg:'#160a0c', surface:'#271216', isDark:true, tex:'hex' },
+  ocean: { accent:'#38bdf8', bg:'#07121a', surface:'#0f2030', isDark:true, tex:'waves' },
+  grape: { accent:'#a855f7', bg:'#120a1c', surface:'#211333', isDark:true, tex:'dots' },
+  forest: { accent:'#4ade80', bg:'#0a1410', surface:'#13251c', isDark:true, tex:'triangles' },
+  amber: { accent:'#f59e0b', bg:'#161106', surface:'#271e0d', isDark:true, tex:'rays' },
+  rose: { accent:'#fb7185', bg:'#170b11', surface:'#29131f', isDark:true, tex:'dots' },
+  graphite: { accent:'#94a3b8', bg:'#0d0e10', surface:'#1a1c21', isDark:true, tex:'grid' },
+};
+function _themeCardMiniHtml(accent, bg, surface, isDark, tex) {
+  const text = isDark ? '#f0f0f5' : '#0e0e1a';
+  const dim = isDark ? 'rgba(255,255,255,.16)' : 'rgba(0,0,0,.14)';
+  const bd = isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.08)';
+  const texVar = tex ? 'var(--tex-' + tex + ')' : 'none';
+  const texSize = (tex === 'waves' || tex === 'mesh') ? 'auto' : (tex === 'stars' ? '150px' : (tex === 'rays' ? '210px' : (tex === 'triangles' ? '96px' : (tex === 'hex' ? '40px' : '26px'))));
+  return '<div class="tc-mini" style="--m-bg:'+bg+';--m-panel:'+surface+';--m-ac:'+accent+';--m-text:'+text+';--m-dim:'+dim+';--m-bd:'+bd+';--m-tex:'+texVar+';--m-tex-size:'+texSize+'"><span class="tcm-bg"></span><span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span><span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span></div>';
+}
+function _swatchesHtml(accent, bg, surface) {
+  return '<span class="tc-sws"><span class="tc-sw" style="background:'+bg+'"></span><span class="tc-sw" style="background:'+surface+'"></span><span class="tc-sw" style="background:'+accent+'"></span></span>';
+}
+function renderThemePage() {
+  const grid = document.getElementById('themes-grid-inner');
+  if (!grid) return;
+  const active = currentTheme();
+  // Category tabs
+  const catBar = document.getElementById('theme-cat-bar');
+  if (catBar) {
+    catBar.querySelectorAll('.theme-cat-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.cat === _themeCat);
+    });
+  }
+  let html = '';
+  // Filter themes by category
+  const darkThemes = ['dark','midnight','aurora','sunset','crimson','ocean','grape','forest','amber','rose','graphite'];
+  const lightThemes = ['light'];
+  let visibleBuiltins = THEMES;
+  if (_themeCat === 'dark') visibleBuiltins = darkThemes;
+  else if (_themeCat === 'light') visibleBuiltins = lightThemes;
+  else if (_themeCat === 'custom') visibleBuiltins = [];
+  // Built-in themes
+  for (const name of visibleBuiltins) {
+    const m = THEME_META[name];
+    if (!m) continue;
+    html += '<div class="theme-card" data-theme="'+name+'" onclick="setTheme(\''+name+'\')" onmouseenter="previewTheme(\''+m.accent+'\',\''+m.bg+'\',\''+m.surface+'\','+m.isDark+')" onmouseleave="clearPreview()" role="button" tabindex="0">';
+    html += _themeCardMiniHtml(m.accent, m.bg, m.surface, m.isDark, m.tex);
+    html += '<div class="tc-foot"><span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>'+esc(t('settings.theme'+name.charAt(0).toUpperCase()+name.slice(1)))+' <button class="btn btn-sm btn-ghost" style="margin-left:6px;padding:2px 6px;font-size:10px" title="'+esc(t('themes.duplicate'))+'" onclick="event.stopPropagation();duplicateTheme(\''+name+'\')"><span class="material-icons-round" style="font-size:12px">content_copy</span></button></span>';
+    html += _swatchesHtml(m.accent, m.bg, m.surface);
+    html += '</div></div>';
+  }
+  // Custom themes
+  if (_themeCat !== 'dark' && _themeCat !== 'light') {
+    for (const ct of _customThemes) {
+      html += '<div class="theme-card theme-custom-card" data-theme-id="'+ct.id+'" onclick="setTheme(\'custom:'+ct.id+'\')" onmouseenter="previewTheme(\''+ct.accent+'\',\''+ct.bg+'\',\''+ct.surface+'\','+ct.isDark+')" onmouseleave="clearPreview()" role="button" tabindex="0">';
+      html += _themeCardMiniHtml(ct.accent, ct.bg, ct.surface, ct.isDark, 'grain');
+      html += '<div class="tc-foot"><span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>'+esc(ct.name)+' <button class="btn btn-sm btn-ghost" style="margin-left:6px;padding:2px 6px;font-size:10px" onclick="event.stopPropagation();openCustomThemePanel(\''+ct.id+'\')"><span class="material-icons-round" style="font-size:12px">edit</span></button></span>';
+      html += _swatchesHtml(ct.accent, ct.bg, ct.surface);
+      html += '</div></div>';
+    }
+    // "New theme" card
+    html += '<div class="theme-card theme-card-add" onclick="openCustomThemePanel()" role="button" tabindex="0"><div class="theme-card-add-inner"><span class="material-icons-round">add</span><span>'+esc(t('themes.newTheme'))+'</span></div></div>';
+  }
+  grid.innerHTML = html;
+    // Restore scroll
+    _renderTexturePatternSelect();
+  }
+function setThemeCat(cat) {
+  _themeCat = cat;
+  // Close the custom-theme editor panel when switching sub-tabs so it
+  // doesn't linger open over the grid.
+  const panel = document.getElementById('theme-custom-panel');
+  if (panel) panel.style.display = 'none';
+  clearPreview();
+  renderThemePage();
+}
+
+// ── Theme init ────────────────────────────────────────────────────────────
 function openDiscord() {
   api.openExternal('https://discord.gg/6eNAcGKmpC');
 }
 (function() {
-  let t;
+  _loadCustomThemes();
+  _loadStatusHistory();
+  let t0;
   try {
-    t = localStorage.getItem('ui-theme');
-    if (!t) { const old = localStorage.getItem('theme'); t = (old === 'light') ? 'light' : 'dark'; }
-  } catch { t = 'dark'; }
-  setTheme(t || 'dark');
+    t0 = localStorage.getItem('ui-theme');
+    if (!t0) { const old = localStorage.getItem('theme'); t0 = (old === 'light') ? 'light' : 'dark'; }
+  } catch { t0 = 'dark'; }
+  applyTheme(t0 || 'dark');
+  _applyBorderRadius();
+  _startAutoTheme();
+  document.body.classList.toggle('high-contrast', _highContrast());
 })();
 
-// ── BloxGen API key persistence ────────────────────────────────────────────
+// ── API key profiles + per-key cooldown ────────────────────────────────────
+// Multiple BloxGen/Altgen keys can be saved (e.g. 4 free BloxGen accounts to
+// rotate around the 30-minute cooldown). Profiles live in localStorage; the
+// old single-key value is migrated into "Conta 1" on first run.
+const FREE_ALT_CD_MS = 30 * 60 * 1000;
+let _genKeys = [];
+let _genKeysReady = false;
+
+function _genUid() { return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function genKeysLoad() { try { const raw = localStorage.getItem('bloxgen_keys'); const arr = raw ? JSON.parse(raw) : null; if (Array.isArray(arr)) return arr.filter(k => k && typeof k.key === 'string'); } catch {} return null; }
+function genKeysSave() { try { localStorage.setItem('bloxgen_keys', JSON.stringify(_genKeys)); } catch {} }
+function genActiveId() { try { return localStorage.getItem('bloxgen_active') || null; } catch { return null; } }
+function genSetActiveId(id) { try { localStorage.setItem('bloxgen_active', id); } catch {} }
+function genActiveKey() { let k = _genKeys.find(x => x.id === genActiveId()); if (!k && _genKeys.length) k = _genKeys[0]; return k || null; }
+function genMask(key) { const s = (key || '').trim(); if (s.length <= 4) return s ? '····' : '—'; return '···' + s.slice(-4); }
+
+function genKeysInit() {
+  if (_genKeysReady) return;
+  _genKeysReady = true;
+  const stored = genKeysLoad();
+  if (stored && stored.length) { _genKeys = stored; }
+  else {
+    let old = '';
+    try { old = localStorage.getItem('bloxgen_apikey') || ''; } catch {}
+    _genKeys = [{ id: _genUid(), label: 'Conta 1', key: old }];
+    genKeysSave();
+    if (old) { try { localStorage.removeItem('bloxgen_apikey'); } catch {} }
+  }
+  if (!genActiveId() || !_genKeys.some(k => k.id === genActiveId())) genSetActiveId(_genKeys[0].id);
+  genRenderKeySelect();
+  const inp = document.getElementById('gen-apikey');
+  const act = genActiveKey();
+  if (inp && act && !inp.value) inp.value = act.key || '';
+  genOnKeyInput();
+  genKeysTick();
+  // Immediate stock readout for the active key (genOnKeyInput only schedules
+  // a debounced one for typing, so cancel it and fetch now).
+  try { clearTimeout(window._genStockT); } catch {}
+  genRefreshStock();
+  try { if (!window._genCdTimer) window._genCdTimer = setInterval(genKeysTick, 1000); } catch {}
+}
+
+function genRenderKeySelect() {
+  const sel = document.getElementById('gen-key-select');
+  if (!sel) return;
+  const aid = genActiveId();
+  sel.innerHTML = '';
+  _genKeys.forEach(k => {
+    const o = document.createElement('option');
+    o.value = k.id;
+    o.textContent = (k.label || 'Conta') + ' (' + genMask(k.key) + ')';
+    if (k.id === aid) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function genSelectKey(id) {
+  if (_genWatch && id !== _genWatch.keyId) genStopWatch(false);
+  genSetActiveId(id);
+  const k = genActiveKey();
+  const inp = document.getElementById('gen-apikey');
+  if (inp) inp.value = (k && k.key) || '';
+  genOnKeyInput();
+  genRefreshStock();
+}
+
+function genAddKey() {
+  const k = { id: _genUid(), label: 'Conta ' + (_genKeys.length + 1), key: '' };
+  _genKeys.push(k); genKeysSave(); genSetActiveId(k.id);
+  genRenderKeySelect();
+  const inp = document.getElementById('gen-apikey');
+  if (inp) { inp.value = ''; inp.focus(); }
+  genOnKeyInput();
+}
+function genRenameKey() {
+  const k = genActiveKey(); if (!k) return;
+  const name = prompt(t('gen.keyName'), k.label || '');
+  if (name === null) return;
+  if (name.trim()) k.label = name.trim();
+  genKeysSave(); genRenderKeySelect(); genKeysTick();
+}
+function genRemoveKey() {
+  const k = genActiveKey(); if (!k) return;
+  _genKeys = _genKeys.filter(x => x.id !== k.id);
+  if (!_genKeys.length) _genKeys = [{ id: _genUid(), label: 'Conta 1', key: '' }];
+  genKeysSave(); genSetActiveId(_genKeys[0].id);
+  genRenderKeySelect();
+  const inp = document.getElementById('gen-apikey');
+  if (inp) inp.value = genActiveKey().key || '';
+  genOnKeyInput();
+}
+
+// Cooldown deadlines per profile id (persisted so they survive restarts).
+function genCdMap() { try { return JSON.parse(localStorage.getItem('bloxgen_cooldowns') || '{}') || {}; } catch { return {}; } }
+function genCdGet(id) { const m = genCdMap(); return m[id] || 0; }
+function genCdSet(id, deadline) { try { const m = genCdMap(); m[id] = deadline; localStorage.setItem('bloxgen_cooldowns', JSON.stringify(m)); } catch {} }
+function genCdLeft(id) { return Math.max(0, genCdGet(id) - Date.now()); }
+function genFmtMs(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60), r = s % 60;
+  if (m < 60) return m + 'm ' + String(r).padStart(2, '0') + 's';
+  return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+}
+// Live countdown under the active key: selecting a key that was used minutes
+// ago immediately shows exactly how long is left.
+function genKeysTick() {
+  const lbl = document.getElementById('gen-cooldown-label');
+  if (!lbl) return;
+  const k = genActiveKey();
+  if (!k || !(k.key || '').trim()) { lbl.textContent = ''; return; }
+  const left = genCdLeft(k.id);
+  lbl.textContent = left > 0
+    ? t('gen.keyInCooldown', { label: k.label, t: genFmtMs(left) })
+    : t('gen.keyReady', { label: k.label });
+  // Watch armed: refresh its elapsed timer on the same 1s tick.
+  if (typeof _genWatch !== 'undefined' && _genWatch) genWatchUi();
+}
 (function() {
-  try {
-    const saved = localStorage.getItem('bloxgen_apikey');
-    if (saved) {
-      const el = document.getElementById('gen-apikey');
-      if (el) el.value = saved;
-    }
-  } catch {}
+  const boot = () => { try { genKeysInit(); } catch {} };
+  if (document.readyState === 'complete' || document.readyState === 'interactive') boot();
+  else document.addEventListener('DOMContentLoaded', boot);
 })();
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('gen-apikey');
   if (el) el.addEventListener('input', () => {
-    try { localStorage.setItem('bloxgen_apikey', el.value); } catch {}
+    try {
+      if (_genKeys.length) {
+        const k = genActiveKey();
+        if (k) { k.key = el.value; genKeysSave(); }
+      } else {
+        localStorage.setItem('bloxgen_apikey', el.value);
+      }
+    } catch {}
   });
 });
 
@@ -599,6 +1371,14 @@ async function showAppVersion() {
   try { v = await api.getAppVersion(); } catch { return; }
   const verEl = document.getElementById('stat-app-ver');
   if (verEl && v) verEl.textContent = t('misc.version') + ' ' + v.replace(/\.0$/, '');
+}
+
+// ── Slider fill (visual only) ────────────────────────────────────────────
+// Single system: updateSliderFill() below owns the --fill var, the delegated
+// input listener keeps drags in sync, and refreshAllSliderFills() covers
+// programmatic changes. No per-slider wiring needed.
+function _initSliderFills() {
+  refreshAllSliderFills();
 }
 
 function applySettings() {
@@ -639,6 +1419,10 @@ function applySettings() {
   }
   const relaunch = document.getElementById('set-autorelaunch');
   if (relaunch) relaunch.checked = !!settings.autoRelaunch;
+  const killOnClose = document.getElementById('set-killonclose');
+  if (killOnClose) killOnClose.checked = !!settings.killOnClose;
+  const arr = document.getElementById('set-autoarrange');
+  if (arr) arr.checked = !!settings.autoArrangeWindows;
   const lowPriority = document.getElementById('set-lowpriority');
   if (lowPriority) lowPriority.checked = settings.lowPriorityMultiInstance !== false;
   const lockChannel = document.getElementById('set-lockchannel');
@@ -796,6 +1580,23 @@ function toggleAutoRelaunch() {
   api.saveSettings({ autoRelaunch: on });
   toast(on ? 'Relaunch on disconnect on' : 'Relaunch on disconnect off', on ? 'ok' : 'err');
 }
+function toggleKillOnClose() {
+  const el = document.getElementById('set-killonclose');
+  const on = el.checked;
+  settings.killOnClose = on;
+  api.saveSettings({ killOnClose: on });
+  toast(on ? t('settings.killOnCloseOn') : t('settings.killOnCloseOff'), 'ok');
+}
+// Tiles the KNT-managed Roblox windows into a grid after launches/closes.
+// On enable it arranges the currently open instances right away.
+function toggleAutoArrange() {
+  const el = document.getElementById('set-autoarrange');
+  const on = el.checked;
+  settings.autoArrangeWindows = on;
+  api.saveSettings({ autoArrangeWindows: on });
+  toast(on ? t('settings.autoArrangeOn') : t('settings.autoArrangeOff'), 'ok');
+  if (on && api.arrangeRobloxWindows) api.arrangeRobloxWindows().catch(() => {});
+}
 // Releasing/re-acquiring the mutex happens inside the helper and isn't
 // instant, so re-read the real state afterwards instead of assuming the badge
 // can be derived from the checkbox.
@@ -904,7 +1705,7 @@ document.addEventListener('click', e => { if (!e.target.closest('.cdd')) closeAl
 
 // Called after any navigation/tab switch so slider fills are always correct.
 function refreshAllSliderFills() {
-  document.querySelectorAll('.fps-slider').forEach(updateSliderFill);
+  document.querySelectorAll('input[type="range"]').forEach(updateSliderFill);
 }
 
 // Segments aren't equal width, so the pill's left/width are computed in
@@ -980,6 +1781,17 @@ function settingsTab(tab) {
   });
   if (tab === 'performance') renderEngineInit();
   if (tab === 'privacy') renderBackupHistory();
+  if (tab === 'themes') {
+    renderThemePage();
+    const radiusEl = document.getElementById('set-radius');
+    const radiusVal = document.getElementById('radius-val');
+    if (radiusEl) radiusEl.value = _savedRadius();
+    if (radiusVal) radiusVal.textContent = _savedRadius() + 'px';
+    const hcEl = document.getElementById('set-highcontrast');
+    if (hcEl) hcEl.checked = _highContrast();
+    const atEl = document.getElementById('set-autotheme');
+    if (atEl) atEl.checked = _autoThemeEnabled();
+  }
   refreshAllSliderFills();
   positionTabSlider(document.getElementById('stab-general')?.closest('.tab-bar'));
 }
@@ -999,9 +1811,15 @@ function goTo(p) {
     positionTabSlider(document.getElementById('stab-general')?.closest('.tab-bar'));
   }
   if (p === 'logs') renderLogs();
+  if (p === 'history') renderHistory();
   if (p === 'charts') {
-    if (!chartsLoaded) loadCharts();
-    positionTabSlider(document.getElementById('ctab-popular')?.closest('.tab-bar'));
+    if (typeof chartTab !== 'undefined' && chartTab === 'private') {
+      renderPrivateServers();
+      positionTabSlider(document.getElementById('ctab-private')?.closest('.tab-bar'));
+    } else {
+      if (!chartsLoaded) loadCharts();
+      positionTabSlider(document.getElementById('ctab-popular')?.closest('.tab-bar'));
+    }
   }
   if (p === 'packages') renderPackages();
   if (p === 'mixer') mixInit();
@@ -1044,17 +1862,23 @@ function ensureCardUp(card, id) {
 // Moves the rendered cards so running instances float to the top, without a
 // full re-render (no entrance-animation replay / grid flicker). Stable sort:
 // non-running cards keep their relative order, so drag reorder survives.
+// With folders each folder body sorts internally; the flat grid sorts at root.
 function reorderCardsByStatus() {
   const grid = document.getElementById('grid');
   if (!grid) return;
-  const addCard = grid.querySelector('.card-add');
-  const cards = Array.from(grid.querySelectorAll('.card[data-id]'));
-  if (cards.length < 2) return;
-  cards.sort((a, b) => (_launchedIds.has(a.dataset.id) ? 0 : 1) - (_launchedIds.has(b.dataset.id) ? 0 : 1));
-  const frag = document.createDocumentFragment();
-  cards.forEach(c => frag.appendChild(c));
-  if (addCard) grid.insertBefore(frag, addCard);
-  else grid.appendChild(frag);
+  const bodies = Array.from(grid.querySelectorAll('.folder-body'));
+  const scopes = bodies.length ? bodies : [grid];
+  const addCard = grid.querySelector(':scope > .card-add');
+  scopes.forEach(scope => {
+    const cards = Array.from(scope.querySelectorAll(':scope > .card[data-id]'));
+    if (cards.length < 2) return;
+    cards.sort((a, b) => (_launchedIds.has(a.dataset.id) ? 0 : 1) - (_launchedIds.has(b.dataset.id) ? 0 : 1));
+    const frag = document.createDocumentFragment();
+    cards.forEach(c => frag.appendChild(c));
+    if (scope === grid && addCard) grid.insertBefore(frag, addCard);
+    else scope.appendChild(frag);
+  });
+  updateFolderCounts();
 }
 
 function markLaunched(id) {
@@ -1136,7 +1960,8 @@ function showCardMenu(id, x, y) {
     <button class="ctx-item" onclick="ctxCopyId('${id}')"><span class="material-icons-round">tag</span>Copy user ID</button>
     <button class="ctx-item" onclick="ctxCopyUser('${id}')"><span class="material-icons-round">person</span>Copy username</button>
     <button class="ctx-item" onclick="ctxCopyCookie('${id}')"><span class="material-icons-round">cookie</span>Copy cookie</button>
-    ${a?.password ? `<button class="ctx-item" onclick="ctxCopyPassword('${id}')"><span class="material-icons-round">lock</span>Copy password</button>` : ''}
+    <button class="ctx-item" onclick="ctxCopyPassword('${id}')"><span class="material-icons-round">lock</span>Copy password</button>
+    <button class="ctx-item" onclick="ctxCopyCombo('${id}')"><span class="material-icons-round">content_copy</span>Copy combo</button>
     <button class="ctx-item" onclick="ctxOpenBrowser('${id}')"><span class="material-icons-round">open_in_browser</span>Open in browser</button>
   `;
   document.body.appendChild(menu);
@@ -1229,8 +2054,42 @@ function ctxLaunch(id) { closeCardMenu(); const a = accounts.find(x => x.id === 
 function ctxEdit(id) { closeCardMenu(); openEdit(id); }
 function ctxCopyId(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.userId) navigator.clipboard.writeText(a.userId).then(() => toast(t('acct.copyId'), 'ok')); else toast(t('acct.noId'), 'err'); }
 function ctxCopyUser(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.username) navigator.clipboard.writeText(a.username).then(() => toast(t('acct.copyUser'), 'ok')); else toast(t('acct.noUser'), 'err'); }
-function ctxCopyCookie(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.cookie) navigator.clipboard.writeText(a.cookie).then(() => toast(t('acct.copyCookie'), 'ok')); else toast(t('acct.noCookie'), 'err'); }
-function ctxCopyPassword(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.password) navigator.clipboard.writeText(a.password).then(() => toast(t('acct.copyPassword'), 'ok')); else toast(t('acct.noPassword'), 'err'); }
+function _copySecretWithClear(text, okKey, vars) {
+  const val = text;
+  try { navigator.clipboard.writeText(val).then(() => toast(t(okKey, vars), 'ok')); } catch { toast(t(okKey, vars), 'ok'); }
+  clearTimeout(_copySecretWithClear._t);
+  _copySecretWithClear._t = setTimeout(() => {
+    try {
+      // Only clear if clipboard still holds our secret (best-effort).
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(cur => {
+          if (cur === val) navigator.clipboard.writeText('').then(() => toast(t('acct.clipCleared'), 'ok')).catch(() => {});
+        }).catch(() => {});
+      }
+    } catch {}
+  }, 30000);
+}
+function ctxCopyCookie(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a?.cookie) { closeCardMenu(); toast(t('acct.noCookie'), 'err'); return; }
+  const label = a.nickname || a.username || 'account';
+  closeCardMenu();
+  confirmAction(t('acct.copyCookieConfirm', { name: label }), () => _copySecretWithClear(a.cookie, 'acct.copyCookie'), { confirmLabel: t('common.copy'), danger: false });
+}
+function ctxCopyPassword(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a?.password) { closeCardMenu(); toast(t('acct.noPassword'), 'err'); return; }
+  const label = a.nickname || a.username || 'account';
+  closeCardMenu();
+  confirmAction(t('acct.copyPasswordConfirm', { name: label }), () => _copySecretWithClear(a.password, 'acct.copyPassword'), { confirmLabel: t('common.copy'), danger: false });
+}
+function ctxCopyCombo(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a?.username || !a?.password) { closeCardMenu(); toast(t('acct.noCombo'), 'err'); return; }
+  const label = a.nickname || a.username || 'account';
+  closeCardMenu();
+  confirmAction(t('acct.copyComboConfirm', { name: label }), () => _copySecretWithClear(a.username + ':' + a.password, 'acct.copyCombo'), { confirmLabel: t('common.copy'), danger: false });
+}
 async function ctxOpenBrowser(id) {
   closeCardMenu();
   const a = accounts.find(x => x.id === id);
@@ -1259,7 +2118,6 @@ function refreshPkgAvatarStatus() {
     const trimBtn = card.querySelector('.pkg-trim-btn');
     if (trimBtn) trimBtn.disabled = !st.running;
     const pct = st.total ? Math.round((st.running + st.home) / st.total * 100) : 0;
-    const pkgPlace = _extractPlaceId(p.link);
     const fill = card.querySelector('.pkg-progress-fill');
     if (fill) fill.style.width = pct + '%';
     const txt = card.querySelector('.pkg-status-text');
@@ -1273,6 +2131,7 @@ function refreshPkgAvatarStatus() {
       const downedBlock = txt.querySelector('.pkg-status-downed-sep');
       if (downedBlock) downedBlock.style.display = st.downed ? '' : 'none';
     }
+    // Expanded member list status dots
     card.querySelectorAll('.pkg-member').forEach(row => {
       const id = row.dataset.accId;
       if (!id) return;
@@ -1293,25 +2152,113 @@ function _catTagHtml(a) {
   return `<div class="card-cat" style="--cc:${col}"><span class="cat-dot" style="background:${col}"></span>${esc(c.name)}</div>`;
 }
 
-function render() {
-  const grid = document.getElementById('grid'), empty = document.getElementById('empty'), sub = document.getElementById('acct-sub');
-  const savedTxt = accounts.length ? t('accounts.savedCount', { n: accounts.length, s: accounts.length !== 1 ? 's' : '' }) : t('accounts.none');
-  sub.textContent = savedTxt;
-  const savedCount = document.getElementById('sb-saved-count');
-  if (savedCount) savedCount.textContent = savedTxt;
-  const savedTime = document.getElementById('sb-saved-time'); if (savedTime) savedTime.textContent = t('nav.savedTime');
-  if (!accounts.length) { grid.innerHTML = ''; empty.style.display = 'flex'; return; }
-  empty.style.display = 'none';
-  const list = visibleAccounts();
-  grid.classList.toggle('list-view', _acctView === 'list');
-  grid.classList.toggle('compact-view', _acctView === 'compact');
-  if (!list.length) {
-    grid.classList.remove('list-view');
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--t3);font-size:12.5px;padding:40px 0">' + esc(t('accounts.noMatch')) + '</div>';
+// ── Folders (accounts grouped by category) ─────────────────────────────────
+// Nível 1: reuses the existing categories as collapsible folder sections.
+// No data migration: moving a card across folders just changes categoryId.
+function getCollapsedFolders() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('mr-folder-collapsed') || '[]');
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch { return new Set(); }
+}
+function toggleFolder(key) {
+  const set = getCollapsedFolders();
+  if (set.has(key)) set.delete(key); else set.add(key);
+  try { localStorage.setItem('mr-folder-collapsed', JSON.stringify([...set])); } catch {}
+  const f = document.querySelector(`#grid .folder[data-cat="${CSS.escape(key)}"]`);
+  if (f) f.classList.toggle('collapsed', set.has(key));
+}
+// Groups the visible list by category (settings order, uncategorized last).
+// Orphaned categoryIds (category deleted but account kept it) fall back to
+// the uncategorized group instead of vanishing.
+function groupAccountsByFolder(list) {
+  const groups = [];
+  const byKey = new Map();
+  for (const a of list) {
+    let key = a.categoryId || 'none';
+    if (key !== 'none' && !categories.some(c => c.id === key)) key = 'none';
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, cat: key === 'none' ? null : categories.find(c => c.id === key), cards: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.cards.push(a);
+  }
+  groups.sort((x, y) => {
+    if (x.key === 'none') return 1;
+    if (y.key === 'none') return -1;
+    return categories.findIndex(c => c.id === x.key) - categories.findIndex(c => c.id === y.key);
+  });
+  return groups;
+}
+function folderHtml(g, viewCls) {
+  const collapsed = getCollapsedFolders().has(g.key);
+  const run = g.cards.filter(a => _launchedIds.has(a.id)).length;
+  const color = g.cat ? (g.cat.color || catColor(g.cat.id)) : 'var(--t3)';
+  const name = g.cat ? g.cat.name : t('accounts.noCategory');
+  return `<div class="folder${collapsed ? ' collapsed' : ''}" data-cat="${esc(g.key)}">
+    <div class="folder-head" onclick="toggleFolder('${esc(g.key)}')">
+      <span class="material-icons-round folder-chev">expand_more</span>
+      <span class="folder-dot" style="background:${esc(color)}"></span>
+      <span class="folder-name">${esc(name)}</span>
+      <span class="folder-count"><b>${run}</b> / ${g.cards.length}</span>
+      <span class="folder-sp"></span>
+      <button class="btn btn-ghost folder-launch" onclick="event.stopPropagation();folderLaunch('${esc(g.key)}')" title="${esc(t('folders.launch'))}" aria-label="${esc(t('folders.launch'))}">
+        <span class="material-icons-round" style="font-size:14px">play_arrow</span><span>${esc(t('folders.launch'))}</span>
+      </button>
+    </div>
+    <div class="grid folder-body${viewCls}" data-cat="${esc(g.key)}">${g.cards.map((a, i) => cardHtml(a, i)).join('')}</div>
+  </div>`;
+}
+// Recomputes the running/total pills after live status changes (the push
+// handlers move cards without a full render).
+function updateFolderCounts() {
+  document.querySelectorAll('#grid .folder').forEach(f => {
+    const cards = f.querySelectorAll('.card[data-id]');
+    let run = 0;
+    cards.forEach(c => { if (_launchedIds.has(c.dataset.id)) run++; });
+    const el = f.querySelector('.folder-count');
+    if (el) el.innerHTML = '<b>' + run + '</b> / ' + cards.length;
+  });
+}
+let _folderLaunchBusy = false;
+async function folderLaunch(key) {
+  if (_folderLaunchBusy) return;
+  const inFolder = a => {
+    let k = a.categoryId || 'none';
+    if (k !== 'none' && !categories.some(c => c.id === k)) k = 'none';
+    return k === key;
+  };
+  const idle = accounts.filter(a => inFolder(a) && !_launchedIds.has(a.id) && a.cookie);
+  if (!idle.length) { toast(t('folders.nothingToLaunch'), 'err'); return; }
+  if (settings.multiInstance === false && (idle.length > 1 || _launchedIds.size > 0)) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
     return;
   }
-  grid.innerHTML = list.map((a, i) => `
-    <div class="card${_launchedIds.has(a.id) ? ' is-live' : ''}${_homeIds.has(a.id) ? ' is-home' : ''}${_cookieStatus[a.id] === 'dead' ? ' cookie-dead' : ''}${_selectMode && _selectedIds.has(a.id) ? ' is-selected' : ''}${_selectMode ? ' select-mode' : ''}" data-id="${a.id}" style="animation-delay:${i * 18}ms" onclick="${_selectMode ? `if(!event.target.closest('button'))toggleSelectCard('${a.id}')` : ''}">
+  _folderLaunchBusy = true;
+  let ok = 0;
+  for (const a of idle) {
+    const target = a.gameTarget || null;
+    logEntry('info', 'launch', `Launching Roblox for ${a.username || a.id} (folder)...`, { accountId: a.id, username: a.username || null, userId: a.userId || null, target: target || 'Roblox home' });
+    let res = null;
+    try { res = await api.launchRoblox(a.id, a.cookie, target); } catch (e) { res = { success: false, error: e?.message || String(e) }; }
+    if (res && res.success) {
+      ok++;
+      logEntry('ok', 'launch', `Roblox launched successfully as ${a.username || a.id} (folder)`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
+      markLaunched(a.id);
+    } else if (res && !res.cancelled) {
+      logEntry('err', 'launch', `Launch failed for ${a.username || a.id} (folder): ${res.error}`, { accountId: a.id });
+      _flagCookieMaybeDead(a.id, res.error);
+    }
+  }
+  _folderLaunchBusy = false;
+  pollRunningCount();
+  toast(t('folders.launchedN', { ok, total: idle.length }), ok > 0 ? 'ok' : 'err');
+}
+function cardHtml(a, i) {
+  return `
+    <div class="card${_launchedIds.has(a.id) ? ' is-live' : ''}${_homeIds.has(a.id) ? ' is-home' : ''}${_cookieStatus[a.id] === 'dead' ? ' cookie-dead' : ''}${_selectMode && _selectedIds.has(a.id) ? ' is-selected' : ''}${_selectMode ? ' select-mode' : ''}" data-id="${a.id}" style="animation-delay:${Math.min(i, 20) * 18}ms" onclick="${_selectMode ? `if(!event.target.closest('button'))toggleSelectCard('${a.id}')` : ''}">
       ${_selectMode ? `<div class="card-check${_selectedIds.has(a.id) ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelectCard('${a.id}')"><span class="material-icons-round">check</span></div>` : ''}
       <div class="card-dot${_launchedIds.has(a.id) ? ' launched' : ''}${_homeIds.has(a.id) ? ' home' : ''}" title="${_homeIds.has(a.id) ? esc(t('accounts.home')) : (_launchedIds.has(a.id) ? esc(t('accounts.launched')) : esc(t('accounts.notLaunched')))}"></div>
       <span class="material-icons-round drag-handle">drag_indicator</span>
@@ -1341,7 +2288,39 @@ function render() {
           <span class="material-icons-round">delete_outline</span>
         </button>
       </div>
-    </div>`).join('') + `<div class="card-add" onclick="openLogin()"><span class="material-icons-round card-add-icon">add</span><span class="card-add-label">Add account</span></div>`;
+    </div>`;
+}
+function render() {
+  const grid = document.getElementById('grid'), empty = document.getElementById('empty'), sub = document.getElementById('acct-sub');
+  const savedTxt = accounts.length ? t('accounts.savedCount', { n: accounts.length, s: accounts.length !== 1 ? 's' : '' }) : t('accounts.none');
+  sub.textContent = savedTxt;
+  const savedCount = document.getElementById('sb-saved-count');
+  if (savedCount) savedCount.textContent = savedTxt;
+  const savedTime = document.getElementById('sb-saved-time'); if (savedTime) savedTime.textContent = t('nav.savedTime');
+  if (!accounts.length) { grid.innerHTML = ''; empty.style.display = 'flex'; return; }
+  empty.style.display = 'none';
+  const list = visibleAccounts();
+  grid.classList.toggle('list-view', _acctView === 'list');
+  grid.classList.toggle('compact-view', _acctView === 'compact');
+  if (!list.length) {
+    grid.classList.remove('list-view');
+    grid.classList.remove('has-folders');
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--t3);font-size:12.5px;padding:40px 0">' + esc(t('accounts.noMatch')) + '</div>';
+    return;
+  }
+  const viewCls = _acctView === 'list' ? ' list-view' : _acctView === 'compact' ? ' compact-view' : '';
+  const groups = groupAccountsByFolder(list);
+  const addTile = `<div class="card-add" onclick="openLogin()"><span class="material-icons-round card-add-icon">add</span><span class="card-add-label">Add account</span></div>`;
+  // Folder mode when there is anything to group by: several groups, or a
+  // single categorized one. A lone uncategorized list keeps the classic flat
+  // grid so users without categories see zero visual change.
+  if (groups.length > 1 || (groups.length === 1 && groups[0].cat)) {
+    grid.classList.add('has-folders');
+    grid.innerHTML = groups.map(g => folderHtml(g, viewCls)).join('') + addTile;
+  } else {
+    grid.classList.remove('has-folders');
+    grid.innerHTML = list.map((a, i) => cardHtml(a, i)).join('') + addTile;
+  }
   loadAvatarsBatch(list);
   list.forEach(a => { if (a.gameTarget && !_gameNameCache[a.id]) fetchGameName(a.id, a.gameTarget); });
   checkCookieHealth(list);
@@ -1387,13 +2366,71 @@ function updateBatchBar() {
 async function batchKill() {
   const ids = [..._selectedIds];
   if (!ids.length) { toast(t('batch.none'), 'err'); return; }
-  let ok = 0;
-  for (const id of ids) {
-    const res = await api.killOneRoblox(id).catch(() => null);
-    if (res && res.ok) ok++;
+  confirmAction(t('batch.killConfirm', { n: ids.length }), async () => {
+    let ok = 0;
+    for (const id of ids) {
+      const res = await api.killOneRoblox(id).catch(() => null);
+      if (res && res.ok) ok++;
+    }
+    toast(t('batch.killedN', { ok, total: ids.length }), ok === ids.length ? 'ok' : 'err');
+    clearSelection();
+  }, { confirmLabel: t('batch.kill') });
+}
+let _batchLaunchBusy = false;
+async function batchLaunch() {
+  if (_batchLaunchBusy) return;
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  if (settings.multiInstance === false && (ids.length > 1 || _launchedIds.size > 0)) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
+    return;
   }
-  toast(t('batch.killedN', { ok, total: ids.length }), ok === ids.length ? 'ok' : 'err');
-  clearSelection();
+  _batchLaunchBusy = true;
+  let ok = 0, skipped = 0;
+  for (const id of ids) {
+    const a = accounts.find(x => x.id === id);
+    if (!a) continue;
+    if (_launchedIds.has(id)) { skipped++; continue; }
+    if (!a.cookie) { logEntry('warn', 'launch', `Skipped ${a.username || id}: no cookie`, { accountId: id }); continue; }
+    const target = a.gameTarget || null;
+    logEntry('info', 'launch', `Launching Roblox for ${a.username || id} (selection)...`, { accountId: id, username: a.username || null, userId: a.userId || null, target: target || 'Roblox home' });
+    let res = null;
+    try { res = await api.launchRoblox(a.id, a.cookie, target); } catch (e) { res = { success: false, error: e?.message || String(e) }; }
+    if (res && res.success) {
+      ok++;
+      logEntry('ok', 'launch', `Roblox launched successfully as ${a.username || id} (selection)`, { accountId: id, username: a.username || null, userId: a.userId || null });
+      markLaunched(a.id);
+    } else if (res && !res.cancelled) {
+      logEntry('err', 'launch', `Launch failed for ${a.username || id} (selection): ${res.error}`, { accountId: id });
+      _flagCookieMaybeDead(a.id, res.error);
+    }
+  }
+  _batchLaunchBusy = false;
+  pollRunningCount();
+  reorderCardsByStatus();
+  const parts = t('batch.launchedN', { ok, total: ids.length });
+  toast(skipped ? parts + ' ' + t('batch.skippedRunning', { n: skipped }) : parts, ok > 0 ? 'ok' : 'err');
+}
+function batchCopyLogins() {
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  const list = ids.map(id => accounts.find(x => x.id === id)).filter(Boolean);
+  const valid = list.filter(a => a.username && a.password);
+  const missing = list.filter(a => !(a.username && a.password));
+  if (!valid.length) {
+    const names = missing.map(a => a.nickname || a.username || 'account').slice(0, 5).join(', ');
+    toast(t('batch.missingPw', { names: names || '-' }), 'err');
+    return;
+  }
+  const label = t('batch.copyConfirm', { n: valid.length });
+  confirmAction(label, () => {
+    const text = valid.map(a => a.username + ':' + a.password).join('\n');
+    _copySecretWithClear(text, 'batch.copiedN', { ok: valid.length, total: list.length });
+    if (missing.length) {
+      const names = missing.map(a => a.nickname || a.username || 'account').slice(0, 5).join(', ');
+      setTimeout(() => toast(t('batch.missingPw', { names }), 'err'), 600);
+    }
+  }, { confirmLabel: t('common.copy'), danger: false });
 }
 async function batchTrim() {
   const ids = [..._selectedIds];
@@ -1410,6 +2447,7 @@ function batchToGroup() {
   const ids = [..._selectedIds];
   if (!ids.length) { toast(t('batch.none'), 'err'); return; }
   openCreatePackage();
+  // Pre-check the selected accounts in the new group's picker.
   const picker = document.getElementById('pkg-account-picker');
   if (picker) {
     picker.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = ids.includes(c.value); });
@@ -1441,9 +2479,41 @@ async function batchSetCategory(catId) {
   toast(t('batch.categorySet', { n: ids.length }), 'ok');
   clearSelection();
 }
+function openBatchTarget() {
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  const inp = document.getElementById('batch-target-input');
+  if (inp) { inp.value = ''; }
+  const sub = document.getElementById('batch-target-sub');
+  if (sub) sub.textContent = t('batch.gameDescN', { n: ids.length, s: ids.length === 1 ? '' : 's' });
+  openModal('m-batch-target');
+  setTimeout(() => inp && inp.focus(), 60);
+}
+async function submitBatchTarget() {
+  const ids = [..._selectedIds];
+  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
+  const inp = document.getElementById('batch-target-input');
+  const btn = document.getElementById('batch-target-save');
+  const target = (inp ? inp.value : '').trim();
+  if (!target) { toast(t('batch.gameEmpty'), 'err'); if (inp) inp.focus(); return; }
+  if (btn) btn.disabled = true;
+  let ok = 0;
+  for (const id of ids) {
+    const a = accounts.find(x => x.id === id);
+    if (!a) continue;
+    a.gameTarget = target;
+    try { delete _gameNameCache[id]; } catch {}
+    try { await api.updateAccount(id, { gameTarget: target }); ok++; } catch {}
+  }
+  if (btn) btn.disabled = false;
+  closeModal('m-batch-target');
+  render();
+  toast(t('batch.gameSet', { ok, total: ids.length }), ok === ids.length ? 'ok' : 'err');
+}
 
 // Double-click the card nickname (or the pencil icon) to rename it inline.
 function inlineEditNickname(id, el) {
+  if (_selectMode) return;
   if (!el || el.dataset.editing) return;
   const a = accounts.find(x => x.id === id);
   if (!a) return;
@@ -1461,6 +2531,8 @@ function inlineEditNickname(id, el) {
   const finish = async (save) => {
     if (done) return; done = true;
     const val = input.value.trim();
+    // Save even when empty: clearing the nickname returns the card to the
+    // account's real username (a.nickname || a.username).
     if (save && val !== current) {
       try {
         await api.updateAccount(id, { nickname: val });
@@ -1477,8 +2549,10 @@ function inlineEditNickname(id, el) {
   });
 }
 
-// ── Dashboard activity feed ──────────────────────────────────────────────
-const _activityFeed = [];
+// ── Dashboard activity feed ────────────────────────────────────────────────
+// Tiny in-memory timeline of what happened (launch, home, close, kill,
+// group, backup). Rendered on the dashboard "Activity" panel.
+const _activityFeed = []; // { icon, tone, text, ts }
 function pushActivity(icon, tone, text) {
   _activityFeed.unshift({ icon, tone, text, ts: Date.now() });
   if (_activityFeed.length > 20) _activityFeed.length = 20;
@@ -1512,8 +2586,6 @@ function _acctLabel(id) {
   const a = accounts.find(x => x.id === id);
   return a ? (a.nickname || a.username || id) : id;
 }
-
-// ── Dashboard ────────────────────────────────────────────────────────────────
 // All numbers below come from state the app already holds (accounts, packages,
 // categories, launch tracking, cookie checks) or from backend calls already
 // being polled -- nothing is invented. Each card/row navigates to the exact
@@ -1594,6 +2666,7 @@ function applyCookieStatus(id) {
 // flip the badge, not rate-limits or transient HTTP errors.
 function _flagCookieMaybeDead(id, error) {
   if (id && error && /cookie|expired|\b403\b/i.test(error)) {
+    if (_cookieStatus[id] !== 'dead') pushStatusHistory(id, 'cookie-dead', _cookieStatus[id] || '');
     _cookieStatus[id] = 'dead';
     applyCookieStatus(id);
   }
@@ -1624,7 +2697,7 @@ async function checkCookieHealth(list) {
         const res = await api.validateCookie(a.cookie);
         const st = (res && res.ok) ? 'ok' : 'dead';
         _cookieStatus[a.id] = st;
-        if (st === 'dead') logEntry('warn', 'cookie', `Cookie invalid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
+        if (st === 'dead') { pushStatusHistory(a.id, 'cookie-dead', ''); logEntry('warn', 'cookie', `Cookie invalid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null }); }
         else logEntry('info', 'cookie', `Cookie valid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
       } catch { _cookieStatus[a.id] = 'unknown'; logEntry('warn', 'cookie', `Cookie check failed for ${a.username || a.id}`, { accountId: a.id }); }
       applyCookieStatus(a.id);
@@ -1661,8 +2734,8 @@ async function recheckAllCookies(force) {
         _cookieStatus[a.id] = next;
         applyCookieStatus(a.id); // toggles .cookie-dead on the card (badge + ring)
         changed = true;
-        if (next === 'dead') logEntry('warn', 'cookie', `Cookie expired for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId });
-        else if (prev === 'dead' && next === 'ok') logEntry('ok', 'cookie', `Cookie re-validated for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId });
+        if (next === 'dead') { pushStatusHistory(a.id, 'cookie-dead', prev || ''); logEntry('warn', 'cookie', `Cookie expired for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId }); }
+        else if (prev === 'dead' && next === 'ok') { pushStatusHistory(a.id, 'cookie-ok', prev); logEntry('ok', 'cookie', `Cookie re-validated for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId }); }
       } else {
         _cookieStatus[a.id] = next;
       }
@@ -1742,7 +2815,7 @@ function updateGameLabel(accountId) {
 function truncate(s, n) { return s.length > n ? s.slice(0, n) + '\u2026' : s; }
 
 let _dragSaveTimer = null;
-let _dragging = null, _dragClone = null, _dragOffX = 0, _dragOffY = 0, _dragOverId = null;
+let _dragging = null, _dragClone = null, _dragOffX = 0, _dragOffY = 0, _dragOverId = null, _dragFromCat = null;
 
 function initDrag() {
   const grid = document.getElementById('grid');
@@ -1757,6 +2830,7 @@ function initDrag() {
       e.preventDefault();
 
       _dragging = card;
+      _dragFromCat = card.closest('.folder')?.dataset.cat || null;
       const rect = card.getBoundingClientRect();
       _dragOffX = e.clientX - rect.left;
       _dragOffY = e.clientY - rect.top;
@@ -1807,13 +2881,14 @@ function onDragMove(e) {
   if (newId === _dragOverId) return; // already settled against this neighbour
   _dragOverId = newId;
 
-  // Move the dragged node in place instead of a full re-render.
+  // Move the dragged node in place instead of a full re-render. The drop
+  // container is the target's own parent, so cards can move across folders.
   const grid = document.getElementById('grid');
   const cards = Array.from(grid.querySelectorAll('.card[data-id]'));
   const srcPos = cards.indexOf(_dragging);
   const tgtPos = cards.indexOf(target);
   if (srcPos < 0 || tgtPos < 0) return;
-  grid.insertBefore(_dragging, srcPos < tgtPos ? target.nextSibling : target);
+  target.parentNode.insertBefore(_dragging, srcPos < tgtPos ? target.nextSibling : target);
   _syncAccountsOrderFromDom();
 }
 
@@ -1834,8 +2909,23 @@ function onDragEnd() {
   document.removeEventListener('mouseup', onDragEnd);
 
   if (_dragClone) { _dragClone.remove(); _dragClone = null; }
-  if (_dragging) { _dragging.style.opacity = ''; _dragging = null; }
+  // Dropped into another folder: adopt the target folder's category.
+  if (_dragging) {
+    _dragging.style.opacity = '';
+    const toCat = _dragging.closest('.folder')?.dataset.cat || null;
+    if (toCat !== _dragFromCat) {
+      const id = _dragging.dataset.id;
+      const a = accounts.find(x => x.id === id);
+      const newCat = toCat && toCat !== 'none' ? toCat : null;
+      if (a && (a.categoryId || null) !== newCat) {
+        a.categoryId = newCat;
+        api.updateAccount(id, { categoryId: newCat }).catch(() => {});
+      }
+    }
+    _dragging = null;
+  }
   _dragOverId = null;
+  _dragFromCat = null;
 
   // settle the DOM and rebind the drag handlers with one render
   render();
@@ -2017,7 +3107,7 @@ async function startBrowserLogin() {
     }
     return;
   }
-  await finishLogin(res);
+  await finishLogin(res, { askPassword: true });
 }
 
 async function addByCookie() {
@@ -2043,7 +3133,7 @@ async function addByCookie() {
     setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>' + (res.reason || t('login.err')));
     return;
   }
-  await finishLogin({ success: true, cookie, username: res.username, userId: res.userId });
+  await finishLogin({ success: true, cookie, username: res.username, userId: res.userId }, { askPassword: true });
 }
 
 function cancelLogin() {
@@ -2051,16 +3141,28 @@ function cancelLogin() {
   api.cancelLogin && api.cancelLogin();
 }
 
-async function finishLogin(res) {
+async function finishLogin(res, opts) {
+  opts = opts || {};
   setStatus('login-status', 'ok', '<span class="material-icons-round">check_circle</span>' + esc(t('login.signedIn', { user: res.username })));
   const a = await api.addAccount({ username: res.username, userId: res.userId, cookie: res.cookie, gameTarget: '' });
   accounts.push(a); render();
   setTimeout(() => {
     closeModal('m-login');
     toast(t('login.added', { user: res.username }), 'ok');
-    const grid = document.getElementById('grid');
-    if (grid) grid.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Browser/cookie login never sees the password (Roblox page is isolated),
+    // so offer to complete it right away instead of hunting the card later.
+    if (opts.askPassword && a && !a.password) {
+      openEdit(a.id);
+      setTimeout(() => {
+        const pw = document.getElementById('in-password');
+        if (pw) { pw.focus(); pw.placeholder = t('edit.passwordPh') + ' — ' + t('login.passwordOptional'); }
+      }, 300);
+    } else {
+      const grid = document.getElementById('grid');
+      if (grid) grid.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }, 800);
+  return a;
 }
 
 function openEdit(id) {
@@ -2181,11 +3283,18 @@ async function refreshEditFromRoblox() {
   }
 }
 
-function confirmAction(message, onConfirm) {
+function confirmAction(message, onConfirm, opts) {
+  opts = opts || {};
   document.getElementById('m-confirm-delete-msg').textContent = message;
+  const titleEl = document.getElementById('m-confirm-delete-title');
+  if (titleEl) titleEl.textContent = opts.title || t('confirm.title');
   const btn = document.getElementById('m-confirm-delete-btn');
   const newBtn = btn.cloneNode(true); // clone to remove old listeners
   btn.parentNode.replaceChild(newBtn, btn);
+  // Reset every time: clone keeps the previous custom label/class.
+  newBtn.textContent = opts.confirmLabel || t('common.delete');
+  if (opts.danger === false) newBtn.classList.remove('btn-danger');
+  else newBtn.classList.add('btn-danger');
   newBtn.addEventListener('click', () => { closeModal('m-confirm-delete'); onConfirm(); });
   // All overlays share the same z-index, so equal-z stacking falls back to
   // DOM order -- moving this to the end of <body> guarantees it renders on
@@ -2412,7 +3521,7 @@ function renderCategories() {
   list.innerHTML = categories.map(c => {
     const n = accounts.filter(a => a.categoryId === c.id).length;
     return `<div class="trash-row" id="cat-row-${c.id}">
-      <span class="cat-dot cat-dot-cycle" data-i18n-title="cat.colorTip" title="Click to change color" onclick="catCycleColor('${c.id}')" style="background:${c.color || catColor(c.id)}"></span>
+      <input type="color" class="cat-dot" data-i18n-title="cat.colorTip" title="Click to change color" value="${_hexOrFallback(c.color || catColor(c.id))}" onchange="catSetColor('${c.id}', this.value)"/>
       <span class="trash-info">
         <span class="trash-name cat-name">${esc(c.name)}</span>
         <span class="trash-meta">${esc(t('cat.accountCount', { n: n, s: n !== 1 ? 's' : '' }))}</span>
@@ -2495,28 +3604,18 @@ function catDelete(id) {
   });
 }
 
-async function catCycleColor(id) {
+function _hexOrFallback(color) {
+  return /^#[0-9a-fA-F]{6}$/.test(color || '') ? color : '#5c5ce0';
+}
+async function catSetColor(id, color) {
   const c = categories.find(x => x.id === id);
   if (!c) return;
-  const idx = CAT_COLORS.indexOf(c.color || catColor(c.id));
-  c.color = CAT_COLORS[(idx + 1) % CAT_COLORS.length];
+  if (!/^#[0-9a-fA-F]{6}$/.test(color || '')) { renderCategories(); return; }
+  c.color = color;
   await api.saveSettings({ categories });
   renderCategories();
   renderFilterCategories();
   render();
-}
-
-// ── Slider fill (visual only) ────────────────────────────────────────────
-function _updateSliderFill(el) {
-  const min = parseFloat(el.min) || 0, max = parseFloat(el.max) || 100, val = parseFloat(el.value) || 0;
-  const pct = max > min ? Math.min(100, Math.max(0, ((val - min) / (max - min)) * 100)) : 0;
-  el.style.setProperty('--fill', pct + '%');
-}
-function _initSliderFills() {
-  document.querySelectorAll('input[type="range"]').forEach(el => {
-    _updateSliderFill(el);
-    el.addEventListener('input', function() { _updateSliderFill(this); });
-  });
 }
 
 // ── Backup / restore ───────────────────────────────────────────────────────
@@ -2570,7 +3669,7 @@ async function submitBackup() {
         await reloadAllData();
         toast(t('backup.restoredCount', { n: r.count, s: r.count === 1 ? '' : 's' }), 'ok');
         logEntry('ok', 'system', 'Backup restored with ' + r.count + ' account(s)');
-      });
+      }, { confirmLabel: t('backup.restore'), title: t('backup.titleRestore'), danger: false });
     }
   } catch (e) {
     if (err) { err.textContent = e?.message || 'Something went wrong.'; err.style.display = 'block'; }
@@ -2743,6 +3842,19 @@ async function reloadAllData() {
   trashedAccounts = loaded.filter(a => a.trashed);
   settings = await api.loadSettings();
   packages = await api.loadPackages();
+  // After a backup restore, settings.uiPrefs holds theme/language.
+  try {
+    if (settings && settings.uiPrefs) {
+      _restoreUiPrefsFromSettings();
+      _loadCustomThemes();
+      applyTheme(currentTheme());
+      _applyBorderRadius();
+      _applyTextureIntensity();
+      document.body.classList.toggle('high-contrast', _highContrast());
+      if (settings.language && LANG_META[settings.language]) setLanguage(settings.language, false);
+      renderThemePage();
+    }
+  } catch {}
   categories = Array.isArray(settings.categories) ? settings.categories : [];
   categories.forEach(c => { if (!c.color) c.color = catColor(c.id); }); // backfill color for categories saved before colors existed
   // A category filter pointing at a category the restore no longer has would
@@ -2767,6 +3879,8 @@ function openLaunch(id) {
   launchAcc = accounts.find(a => a.id === id); if (!launchAcc) return;
   const target = launchAcc.gameTarget || '';
   let gameName = _gameNameCache[launchAcc.id] || (target ? extractTargetLabel(target) : '');
+  // A specific-server target (from the picker or a pasted id) is shown in
+  // the preview so the user sees which server they're about to join.
   if (launchAcc._srvTarget && String(launchAcc._srvTarget).includes(':')) {
     const jobId = String(launchAcc._srvTarget).split(':').slice(1).join(':');
     gameName = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(jobId).slice(0, 8);
@@ -2800,6 +3914,7 @@ async function cancelLaunchOrClose() {
     try { await api.cancelLaunch(id); } catch {}
     logEntry('warn', 'launch', 'Launch cancelled', { accountId: id });
   }
+  // Drop any stale specific-server target from a cancelled launch.
   if (launchAcc) { launchAcc._srvTarget = null; launchAcc._srvPlaceId = null; }
   closeModal('m-launch');
 }
@@ -2808,6 +3923,7 @@ async function doLaunch() {
   if (!launchAcc) return;
   const btn = document.getElementById('btn-launch');
   if (btn.disabled) return;
+  // When multi-instance is off, refuse to launch a second account.
   if (settings.multiInstance === false && _launchedIds.size > 0) {
     toast(t('settings.multiInstanceBlocked'), 'err');
     closeModal('m-launch');
@@ -2863,9 +3979,9 @@ async function doLaunch() {
 }
 
 // ── Server list (pick a specific server to join) ────────────────────────
-let _srvCtx = null;
+let _srvCtx = null;   // { placeId, accountId }
 let _srvList = [];
-let _srvHideFull = false;
+let _srvHideFull = false;   // "hide full servers" filter
 let _srvSort = 'recommended';
 // Persisted recent-server highlights (settings.srvHighlights). Keyed by job
 // id so several servers can be highlighted at once and a server is never
@@ -2951,6 +4067,8 @@ function _srvPruneHighlighted(placeId, sample) {
 
 function toggleSrvFilter(el) {
   _srvHideFull = !!el && el.checked;
+  // Turning the filter ON re-fetches (needs more pages to find free
+  // slots); turning it OFF re-renders what we already have.
   if (_srvHideFull) {
     _fetchServers();
   } else {
@@ -2961,16 +4079,22 @@ function toggleSrvFilter(el) {
 
 function toggleSrvSort(el) {
   _srvSort = el ? el.value : 'recommended';
+  // least/most/recommended are sorted server-side via sortOrder, so a
+  // re-fetch is needed; ping is re-sorted client-side only.
   if (_srvSort === 'ping') {
     const list = document.getElementById('srv-list');
     if (list) _renderSrvList(list);
   } else {
+    // Force fresh: the API orders by occupancy (Asc/Desc) and the 20s cache
+    // is per-place — reusing it after a sort change would keep showing the
+    // previous sort's data (e.g. "most players" stuck on 1-person servers).
     _fetchServers(true);
   }
 }
 
 function _srvSortFn() {
   const fns = {
+    // least occupied first — the original "recommended" behaviour
     recommended: (a, b) => (a.s.playing / (a.s.maxPlayers || 1)) - (b.s.playing / (b.s.maxPlayers || 1)),
     least: (a, b) => a.s.playing - b.s.playing,
     most: (a, b) => b.s.playing - a.s.playing,
@@ -3028,6 +4152,9 @@ function _renderSrvList(list) {
   const sorted = servers.map((s, i) => ({ s, i, here: _srvHereCount(s) }))
     .sort((a, b) => (b.here - a.here) || _srvSortFn()(a, b))
     .filter(x => {
+      // "Most players": populated but not full — at least 2 players, still a
+      // free slot — sorted most -> least by the client sort. Empty and full
+      // servers stay in the general list under the other sorts.
       if (_srvSort === 'most') return x.s.playing >= 2 && x.s.playing < (x.s.maxPlayers || 1);
       return !(_srvHideFull && x.s.playing >= (x.s.maxPlayers || 1));
     });
@@ -3036,20 +4163,21 @@ function _renderSrvList(list) {
     return;
   }
   list.innerHTML = sorted.map((x, idx) => {
-    const s = x.s;
-    if (s._synthetic) {
-            const joinedBy = (s._joinedBy || []).map(aid => { const a = accounts.find(x => x.id === aid); return a ? (a.nickname || a.username || aid) : aid; }).join(', ');
-            return '<div class="srv-item srv-item-synthetic" style="animation-delay:' + (idx * 35) + 'ms">' +
-              '<div class="srv-item-left" style="display:flex;align-items:center;gap:10px;flex:1">' +
-                (joinedBy ? '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' : '') +
-                '<span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
-              '</div>' +
-              '<div class="srv-item-right">' +
-                          '<button class="btn btn-ghost srv-copy" onclick="copyServerId(\'' + s.id + '\')" title="' + esc(t('srv.copy')) + '"><span class="material-icons-round">content_copy</span></button>' +
-                          ((_srvCtx.accountId || _srvCtx.packageId) ? '<button class="btn btn-primary srv-enter" data-srv-job="' + s.id + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
-                      '</div>';
-          }
-    const max = s.maxPlayers || 1;
+      const s = x.s;
+      // Synthetic: server where another account is joined but not in the API sample
+      if (s._synthetic) {
+        const joinedBy = (s._joinedBy || []).map(aid => { const a = accounts.find(x => x.id === aid); return a ? (a.nickname || a.username || aid) : aid; }).join(', ');
+        return '<div class="srv-item srv-item-synthetic" style="animation-delay:' + (idx * 35) + 'ms">' +
+          '<div class="srv-item-left" style="display:flex;align-items:center;gap:10px;flex:1">' +
+            (joinedBy ? '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(joinedBy) + ' ' + esc(t('srv.isHere')) + '</span>' : '') +
+            '<span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
+          '</div>' +
+          '<div class="srv-item-right">' +
+            '<button class="btn btn-ghost srv-copy" onclick="copyServerId(\'' + s.id + '\')" title="' + esc(t('srv.copy')) + '"><span class="material-icons-round">content_copy</span></button>' +
+            ((_srvCtx.accountId || _srvCtx.packageId) ? '<button class="btn btn-primary srv-enter" data-srv-job="' + s.id + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button></div>' : '') +
+        '</div>';
+      }
+      const max = s.maxPlayers || 1;
     const playing = Math.min(s.playing, max);
     const full = s.playing >= max;
     const pct = Math.round((playing / max) * 100);
@@ -3058,12 +4186,13 @@ function _renderSrvList(list) {
     const statusCls = full ? 'srv-status-full' : 'srv-status-ok';
     const srvHere = _srvHereLabel(s);
     const act = (_srvCtx.accountId || _srvCtx.packageId)
-      ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" data-srv-job="' + s.id + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
-      : '';
+          ? '<button class="btn srv-enter' + (full ? ' btn-ghost' : ' btn-primary') + '" data-srv-job="' + s.id + '" onclick="' + (_srvCtx.packageId ? 'launchPkgToServer' : 'launchToServer') + '(\'' + s.id + '\')"><span class="material-icons-round" style="font-size:14px">play_arrow</span>' + esc(t('srv.enter')) + '</button>'
+          : '';
     return '<div class="srv-item' + (full ? ' srv-item-full' : '') + '" style="animation-delay:' + (idx * 35) + 'ms">' +
       '<div class="srv-item-left">' +
         '<div class="srv-item-top">' +
           '<span class="srv-item-id-wrap"><span class="srv-item-id">' + esc(t('srv.server')) + ' #' + esc(String(s.id).slice(0, 8)) + '</span>' +
+            // Highlight servers where other accounts are joined
             (srvHere ? '<span class="srv-here"><span class="material-icons-round">person_pin</span>' + esc(srvHere) + '</span>' : '') +
             '<button class="srv-copy" onclick="copyServerId(\'' + s.id + '\')" title="' + esc(t('srv.copyId')) + '" aria-label="' + esc(t('srv.copyId')) + '"><span class="material-icons-round">content_copy</span></button></span>' +
           '<span class="srv-item-ping"><span class="material-icons-round">speed</span>' + ping + '</span>' +
@@ -3115,9 +4244,14 @@ async function refreshServerList() {
 }
 
 function _srvSortOrder() {
+  // The API itself sorts servers by occupancy via sortOrder:
+  //   Asc  -> least occupied first (1/28, 2/28, ...)
+  //   Desc -> most occupied first (28/28, 27/28, ...)
+  // "recommended" maps to Asc too: showing free servers first is the
+  // useful default for someone who wants to join.
   if (_srvSort === 'least' || _srvSort === 'recommended') return 'Asc';
   if (_srvSort === 'most') return 'Desc';
-  return '';
+  return ''; // ping — the API has no ping sort; the client re-sorts
 }
 
 // Extracts a numeric placeId from any common format: a pure id, a
@@ -3151,6 +4285,9 @@ function _srvStabilityScore(s) {
 }
 
 // ── Central server data layer ─────────────────────────────────────────────
+// One cache per placeId so multiple accounts/groups using the same game
+// share the same fetch (no duplicate API calls). Entries expire after
+// SRV_TTL so the picker never shows stale servers for long.
 let _srvCache = {};    // placeId -> { at, servers }
 const SRV_TTL = 20000; // ms — how long a fetched list is considered fresh
 const SRV_POLL = 30000; // ms — auto-refresh while the picker is open
@@ -3161,7 +4298,12 @@ const SRV_POLL = 30000; // ms — auto-refresh while the picker is open
 const SRV_VALIDATE_ATTEMPTS = 2;    // fresh queries before declaring a server gone
 const SRV_VALIDATE_RETRY_MS = 2000; // pause between validation queries
 
-async function _srvFetchRaw(placeId, maxPages, forceFresh) {
+// Fetches the public server list for a placeId, reusing a short-lived
+// cache unless forceFresh. Always Asc (least occupied first) so free slots
+// are found fast; the visual sort is applied client-side when rendering.
+// When `full` is true, ALL requested pages are fetched (no early stop) —
+// used for validation, where the target jobId may live on a later page.
+async function _srvFetchRaw(placeId, maxPages, forceFresh, full) {
   const now = Date.now();
   if (!forceFresh && _srvCache[placeId] && now - _srvCache[placeId].at < SRV_TTL) {
     return _srvCache[placeId];
@@ -3182,9 +4324,10 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh) {
         const batch = (data.data) || [];
         allServers = allServers.concat(batch);
         cursor = data.nextPageCursor || '';
-        if (allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
+        if (!full && allServers.some(s => s.playing < (s.maxPlayers || 1))) break;
         if (!cursor) break;
       }
+      // Deduplicate by job id (a server can appear across pages).
       const seen = new Set();
       allServers = allServers.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
       _srvCache[placeId] = { at: Date.now(), servers: allServers };
@@ -3201,6 +4344,15 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh) {
   return _srvCache[placeId];
 }
 
+// Re-validates a single server RIGHT BEFORE joining, with fresh data, so we
+// never enter a dead/closed server or one that just filled up.
+// The public server list is eventually consistent: a live server can be
+// momentarily absent from it, so a single "not found" is NOT proof the
+// server is gone. We retry a bounded number of times with a short pause
+// before concluding. Outcomes:
+//   { ok:true, server }            — found with free slots (or API inconclusive)
+//   { ok:false, reason:'full' }    — found but full (definitive right now)
+//   { ok:false, reason:'gone' }    — not found across all attempts (definitive)
 async function _srvValidateServer(placeId, jobId) {
   // A highlighted server was used very recently (often another account is
   // still on it) — strong evidence it exists, so it gets the benefit of the
@@ -3247,6 +4399,8 @@ async function _srvValidateServer(placeId, jobId) {
   return { ok: true, server: null }; // defensive, unreachable
 }
 
+// Keeps the cache bounded: drops expired entries once it grows past a
+// sane size (placeIds accumulate as the user opens different games).
 function _srvCacheSweep() {
   const keys = Object.keys(_srvCache);
   if (keys.length > 12) {
@@ -3255,30 +4409,46 @@ function _srvCacheSweep() {
   }
 }
 
-async function _fetchServers(force) {
+// Overlapping fetches (30s poll vs manual refresh vs sort change) used to
+// race: an older response rendered last and the skeleton flashed on every
+// background tick. The seq guard drops stale responses; quiet background
+// ticks never wipe the list (no skeleton, no error screen on hiccup).
+let _srvFetchSeq = 0;
+async function _fetchServers(force, quiet) {
   const list = document.getElementById('srv-list');
   if (!_srvCtx) return false;
   const placeId = _srvCtx.placeId;
-  if (list) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
+  const seq = ++_srvFetchSeq;
+  if (list && !quiet) list.innerHTML = '<div class="srv-skeleton"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>';
   try {
+    // "Most players" needs deeper pages: Desc puts the fullest servers
+    // first, and the populated-but-not-full ones sit past the full pages —
+    // a single page would often return only full servers.
     const maxPages = _srvSort === 'most' ? 8 : (_srvHideFull ? 10 : 1);
-    const data = await _srvFetchRaw(placeId, maxPages, false);
+    const data = await _srvFetchRaw(placeId, maxPages, !!force, false);
+    if (seq !== _srvFetchSeq) return true; // a newer fetch started: ignore
+    // Empty sample on a background tick is almost always a hiccup/429, not
+    // a game that suddenly has zero servers: keep the old list.
+    if (!data.servers.length && quiet && _srvList.length) return true;
     _srvList = data.servers.slice();
     _srvInjectJoined();
     if (list) _renderSrvList(list);
     return true;
   } catch (e) {
+    if (seq !== _srvFetchSeq) return true;
+    if (quiet) return false; // background tick hiccup: keep the old list
     if (list) list.innerHTML = '<div class="srv-state"><span class="material-icons-round srv-state-ic srv-state-err">error_outline</span><div class="srv-state-title" data-i18n="srv.errTitle">Could not load servers</div><div class="srv-state-desc">' + esc(e.message || String(e)) + '</div><button class="btn btn-ghost" onclick="refreshServerList()" style="gap:6px"><span class="material-icons-round" style="font-size:14px">refresh</span><span data-i18n="srv.retry">Try again</span></button></div>';
     return false;
   }
 }
 
+// Keeps the open picker list fresh while the user is looking at it.
 let _srvPollTimer = null;
 function _srvStartPolling() {
   _srvStopPolling();
   _srvPollTimer = setInterval(() => {
     const modal = document.getElementById('m-servers');
-    if (modal && modal.classList.contains('open')) _fetchServers();
+    if (modal && modal.classList.contains('open')) _fetchServers(false, true);
   }, SRV_POLL);
 }
 function _srvStopPolling() {
@@ -3320,7 +4490,8 @@ async function launchToServer(jobId) {
     // re-check. Empty highlights (account left; kept as "recently used") are
     // re-validated so nobody tries to join a server that is already gone.
     // Any server an account is CURRENTLY on (runtime presence) is provably
-    // live, so skip the re-check there too — the launch modal opens instantly.
+    // live, so skip the re-check there too — the launch modal opens instantly
+    // instead of waiting on a fresh API fetch (which can lag a couple seconds).
     if (!(_srvPresence[s.id] || []).length) {
       const v = await _srvValidateServer(_srvCtx.placeId, s.id);
       if (!v.ok) {
@@ -3332,6 +4503,7 @@ async function launchToServer(jobId) {
     }
     const target = _srvCtx.placeId + ':' + s.id;
     closeModal('m-servers');
+    // Temporarily override the account's target for this single launch only.
     acc._srvTarget = target;
     acc._srvPlaceId = _srvCtx.placeId;
     openLaunch(id);
@@ -3341,6 +4513,8 @@ async function launchToServer(jobId) {
   }
 }
 
+// Opens the server picker for a group's game. Every server's "Enter" button
+// then launches ALL accounts of the group into that server.
 function openPkgServerList(pkgId) {
   const p = packages.find(x => x.id === pkgId);
   if (!p) return;
@@ -3403,8 +4577,10 @@ async function launchPkgToServer(jobId) {
   }
 }
 
-// Launches each account of a group into a DIFFERENT free server, so no two
-// accounts land in the same instance. Useful to spread a group across servers.
+// Launches each account of a group into its OWN server: the emptiest
+// servers that already have at least 1 player (so our account is never the
+// first one in — Roblox shuts down truly idle servers). Strictly one account
+// per server: if servers run out, the rest wait for the next round.
 async function distributePkg(pkgId) {
   const p = packages.find(x => x.id === pkgId);
   if (!p) return;
@@ -3417,104 +4593,97 @@ async function distributePkg(pkgId) {
   const link = String(p.link || '').trim();
   const placeId = _extractPlaceId(link);
   if (!placeId) { toast(t('srv.errResolve'), 'err'); return; }
-  // Collect enough servers with REAL headroom (2+ free slots when the game
-  // allows) so accounts don't land in a queue; stop as soon as we have
-  // enough — a short fetch means a short gap before launching.
+  // Lively = at least 1 player inside + REAL headroom (2+ free slots when
+  // the game allows) so accounts neither open an idle server nor queue up.
+  const isLively = (s) => (s.playing || 0) >= 1 && _hasGoodSlots(s);
   const acc = members[0];
   const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
-  const freeServers = [];
+  const seen = new Set();
+  const lively = [];
   let cursor = '';
-  for (let page = 0; page < 5 && freeServers.length < members.length; page++) {
-    const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-    const r = await fetcher(url);
-    const data = (r && r.data) || {};
-    const batch = (data.data) || [];
+  // Collect more than needed (2x): entries go stale between fetch and
+  // launch, and the fresh re-check below drops the dead ones.
+  for (let page = 0; page < 8 && lively.length < members.length * 2; page++) {
+    let batch = [];
+    try {
+      const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      const r = await fetcher(url);
+      const data = (r && r.data) || {};
+      batch = (data.data) || [];
+      cursor = data.nextPageCursor || '';
+    } catch (e) { break; }
     for (const s of batch) {
-      if (_hasGoodSlots(s)) freeServers.push(s);
-      if (freeServers.length >= members.length) break;
+      if (!s || !s.id || seen.has(s.id)) continue;
+      seen.add(s.id);
+      if (isLively(s)) lively.push(s);
     }
-    cursor = data.nextPageCursor || '';
     if (!cursor) break;
   }
-  if (!freeServers.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-    // Sort by stability: servers with 1-3 players first (stable, not idle),
-    // then fuller servers, then truly empty ones last (Roblox kills idle
-    // servers, so sending accounts there risks 'experiência terminou').
-    freeServers.sort((a, b) => _srvStabilityScore(a) - _srvStabilityScore(b));
-    // ONE fresh re-check of every candidate (a single fast fetch, not one per
-    // candidate) so servers that died/filled between listing and launch are
-    // dropped instead of joined.
-    let valid = freeServers;
-    try {
-      const fresh = await _srvFetchRaw(placeId, 5, true, true);
-      if (fresh.servers.length) {
-        // Keep the LIVE re-checked server objects (freshest player counts) so
-        // the capacity used for balancing matches the API as of the re-check.
-        valid = freeServers
-          .map(s => {
-            const live = fresh.servers.find(x => x.id === s.id);
-            return live && _hasGoodSlots(live) ? live : null;
-          })
-          .filter(Boolean);
-        valid.sort((a, b) => _srvStabilityScore(a) - _srvStabilityScore(b));
-      }
-    } catch (e) { /* keep the collected list if the re-check fails */ }
-    if (!valid.length) { toast(t('pkg.noFreeServers'), 'err'); return; }
-    const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
-    let ok = 0;
-    // Assignment state: how many accounts we have aimed at each server, and
-    // each server's real headroom (from the fresh re-check above).
-    const aimed = {};      // serverId -> accounts aimed here
-    const capacity = {};   // serverId -> free slots
-    for (const s of valid) capacity[s.id] = Math.max(0, (s.maxPlayers || 1) - (s.playing || 0));
-    const hasRoom = (s) => (aimed[s.id] || 0) < (capacity[s.id] || 0);
-    // Next candidate: first a server no other account was aimed at yet (each
-    // account gets its own server); when those run out, reuse the least-aimed
-    // server that still has room, spreading accounts evenly. Ties resolve to
-    // the stability order `valid` is already sorted in.
-    function nextServer() {
-      for (const s of valid) {
-        if (!(aimed[s.id] || 0) && hasRoom(s)) return s;
-      }
-      let best = null;
-      for (const s of valid) {
-        if (!hasRoom(s)) continue;
-        if (!best) { best = s; continue; }
-        if ((aimed[s.id] || 0) < (aimed[best.id] || 0)) best = s;
-      }
-      return best;
+  if (!lively.length) { toast(t('pkg.noLivelyServers'), 'err'); return; }
+  // Emptiest first (our account becomes #2, #3...), ping as tiebreak.
+  const emptiestFirst = (a, b) => ((a.playing || 0) - (b.playing || 0)) || ((a.ping ?? 99999) - (b.ping ?? 99999));
+  lively.sort(emptiestFirst);
+  // ONE fresh re-check so servers that died/filled between listing and
+  // launch are dropped instead of joined.
+  let valid = lively;
+  try {
+    const fresh = await _srvFetchRaw(placeId, 8, true, true);
+    if (fresh.servers.length) {
+      valid = lively
+        .map(s => {
+          const live = fresh.servers.find(x => x.id === s.id);
+          return live && isLively(live) ? live : null;
+        })
+        .filter(Boolean);
+      valid.sort(emptiestFirst);
     }
-    for (let i = 0; i < members.length; i++) {
-      const m = members[i];
-      // Try up to 2 servers for this account (the first may have been shut
-      // down by Roblox between the fetch and the launch, or filled up).
-      let launched = false;
-      for (let attempt = 0; attempt < 2 && !launched; attempt++) {
-        const s = nextServer();
-        if (!s) break;
-        aimed[s.id] = (aimed[s.id] || 0) + 1;
-        const target = placeId + ':' + s.id;
-        logEntry('info', 'launch', `Launching ${m.username || m.id} into separate server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
-        try {
-          const res = await api.launchRoblox(m.id, m.cookie, target);
-          if (res && res.success) {
-            ok++;
-            markLaunched(m.id);
-            _srvAddJoined(m.id, String(placeId), s.id);
-            launched = true; // launched ok, move to next account
-          } else if (res && res.error) {
-            _flagCookieMaybeDead(m.id, res.error);
-          }
-        } catch (e) { /* keep going */ }
-        // Brief pause before retrying with the next candidate server.
-        if (!launched && attempt === 0) await new Promise(r => setTimeout(r, Math.min(delay || 1000, 3000)));
-      }
-      if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
+  } catch (e) { /* keep the collected list if the re-check fails */ }
+  if (!valid.length) { toast(t('pkg.noLivelyServers'), 'err'); return; }
+  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+  let ok = 0;
+  const used = new Set(); // serverId already taken this round: 1 account each
+  const nextServer = (skip) => valid.find(s => !used.has(s.id) && !(skip && skip.has(s.id)) && isLively(s)) || null;
+  for (let i = 0; i < members.length; i++) {
+    const m = members[i];
+    // Try up to 2 fresh servers for this account (the first may have been
+    // shut down by Roblox between the fetch and the launch, or filled up).
+    // A failed server is never retried for the same account.
+    const failed = new Set();
+    let launched = false;
+    for (let attempt = 0; attempt < 2 && !launched; attempt++) {
+      const s = nextServer(failed);
+      if (!s) break;
+      used.add(s.id);
+      failed.add(s.id);
+      const target = placeId + ':' + s.id;
+      logEntry('info', 'launch', `Launching ${m.username || m.id} into server with ${s.playing} player(s) #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
+      try {
+        const res = await api.launchRoblox(m.id, m.cookie, target);
+        if (res && res.success) {
+          ok++;
+          markLaunched(m.id);
+          _srvAddJoined(m.id, String(placeId), s.id);
+          launched = true; // launched ok, move to next account
+        } else {
+          used.delete(s.id); // failed here: offer this server to the next account
+          if (res && res.error) _flagCookieMaybeDead(m.id, res.error);
+        }
+      } catch (e) { used.delete(s.id); /* keep going */ }
+      // Brief pause before retrying with the next candidate server.
+      if (!launched && attempt === 0) await new Promise(r => setTimeout(r, Math.min(delay || 1000, 3000)));
     }
-  toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
+    if (!launched) break; // out of lively servers: stop, report partial
+    if (delay > 0 && i < members.length - 1) await new Promise(r => setTimeout(r, delay));
+  }
+  if (ok < members.length) toast(t('pkg.distributedPartial', { ok: ok, total: members.length, name: p.name }), 'err');
+  else toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), 'ok');
   renderPackages();
 }
 
+// Picks a random server that is actually free: fetched fresh from the API,
+// not full, and never one where another of the user's accounts is currently
+// in (those live in _srvPresence). Bounded retries ride out a momentarily
+// stale or empty API answer before giving up.
 async function joinRandomServer() {
   if (!_srvCtx || (!_srvCtx.accountId && !_srvCtx.packageId)) return;
   // Visual-only: spinner + disable while fetching, so the API delay doesn't
@@ -3535,6 +4704,8 @@ async function joinRandomServer() {
       try {
         const pool = [];
         let cursor = '';
+        // Asc puts the least-occupied (free) servers first — exactly the pool
+        // we want; stop once we have enough candidates for a fair random pick.
         for (let page = 0; page < 3; page++) {
           const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
           const r = await fetcher(url);
@@ -3577,6 +4748,7 @@ async function joinPastedServer() {
     jobId = parts.slice(1).join(':');
   }
   if (!/^\d+$/.test(String(placeId)) || !jobId) { toast(t('srv.pasteBad'), 'err'); return; }
+  // Group mode: launch every account of the group into the pasted server.
   if (_srvCtx.packageId) {
     launchPkgToPasted(placeId, jobId);
     return;
@@ -3652,6 +4824,9 @@ async function copyServerId(jobId) {
 
 // ── Packages ──────────────────────────────────────────────────────────────
 let _pkgQuery = '', _pkgFilter = 'all', _pkgSort = 'manual', _pkgExpanded = new Set();
+// Accounts the app launched (or restored) at least once this session — used by
+// the group "relaunch downed" action so it only touches accounts that were
+// actually running before, never ones the user never started.
 const _sessionLaunched = new Set();
 
 function pkgMembers(p) {
@@ -3687,7 +4862,12 @@ function visiblePackages() {
 }
 
 function onPkgSearch(v) { _pkgQuery = v.trim(); renderPackages(); }
-function togglePkgFilter(e) { if (e) e.stopPropagation(); const m = document.getElementById('pkg-filter-menu'); if (m) m.classList.toggle('open'); }
+
+function togglePkgFilter(e) {
+  if (e) e.stopPropagation();
+  const m = document.getElementById('pkg-filter-menu');
+  if (m) m.classList.toggle('open');
+}
 function setPkgFilter(f) {
   _pkgFilter = f;
   document.querySelectorAll('#pkg-filter-menu button[data-f]').forEach(b => b.classList.toggle('active', b.dataset.f === f));
@@ -3695,8 +4875,16 @@ function setPkgFilter(f) {
   document.getElementById('pkg-filter-menu')?.classList.remove('open');
   renderPackages();
 }
-function togglePkgSort() { _pkgSort = _pkgSort === 'manual' ? 'alpha' : 'manual'; renderPackages(); }
-function togglePkgPin(id) { const p = packages.find(x => x.id === id); if (!p) return; p.pinned = !p.pinned; api.savePackages(packages); renderPackages(); }
+function togglePkgSort() {
+  _pkgSort = _pkgSort === 'manual' ? 'alpha' : 'manual';
+  renderPackages();
+}
+function togglePkgPin(id) {
+  const p = packages.find(x => x.id === id); if (!p) return;
+  p.pinned = !p.pinned;
+  api.savePackages(packages);
+  renderPackages();
+}
 function togglePkgExpand(id) {
   if (_pkgExpanded.has(id)) _pkgExpanded.delete(id); else _pkgExpanded.add(id);
   const body = document.querySelector(`.pkg-card[data-id="${id}"] .pkg-members`);
@@ -3706,41 +4894,59 @@ function togglePkgExpand(id) {
 }
 function duplicatePackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
-  packages.push({ id: crypto.randomUUID(), name: 'Copy of ' + (p.name || ''), accountIds: [...(p.accountIds || [])], link: p.link || '', color: p.color || '', pinned: false, launchOrder: p.launchOrder ? [...p.launchOrder] : undefined, launchDelay: p.launchDelay || 0 });
-  api.savePackages(packages); renderPackages(); toast('Duplicated', 'ok');
+  packages.push({ id: crypto.randomUUID(), name: t('groups.copyOf', { name: p.name }), accountIds: [...(p.accountIds || [])], link: p.link || '', color: p.color || '', pinned: false, launchOrder: p.launchOrder ? [...p.launchOrder] : undefined, launchDelay: p.launchDelay || 0 });
+  api.savePackages(packages);
+  renderPackages();
+  toast(t('pkg.duplicated'), 'ok');
 }
 function exportPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
-  navigator.clipboard?.writeText(JSON.stringify({ name: p.name, accountIds: p.accountIds || [], link: p.link || '', color: p.color || '', launchDelay: p.launchDelay || 0 }, null, 2)).then(() => toast('Copied', 'ok'), () => toast('Copy failed', 'err'));
+  const data = { name: p.name, accountIds: p.accountIds || [], link: p.link || '', color: p.color || '', launchDelay: p.launchDelay || 0 };
+  navigator.clipboard?.writeText(JSON.stringify(data, null, 2)).then(
+    () => toast(t('pkg.exported'), 'ok'),
+    () => toast(t('pkg.exportFail'), 'err')
+  );
 }
 function importPackage() {
-  const raw = prompt('Paste the group JSON here:');
+  const raw = prompt(t('groups.importPrompt'));
   if (!raw) return;
   try {
     const data = JSON.parse(raw);
-    if (!data || typeof data.name !== 'string') throw new Error();
-    packages.push({ id: crypto.randomUUID(), name: data.name, accountIds: Array.isArray(data.accountIds) ? data.accountIds.filter(id => accounts.some(a => a.id === id)) : [], link: typeof data.link === 'string' ? data.link : '', color: typeof data.color === 'string' ? data.color : '', pinned: false, launchOrder: undefined, launchDelay: Number(data.launchDelay) || 0 });
-    api.savePackages(packages); renderPackages(); toast('Imported', 'ok');
-  } catch { toast('Invalid JSON', 'err'); }
+    if (!data || typeof data.name !== 'string') throw new Error('bad json');
+    const ids = Array.isArray(data.accountIds) ? data.accountIds.filter(id => accounts.some(a => a.id === id)) : [];
+    packages.push({ id: crypto.randomUUID(), name: data.name, accountIds: ids, link: typeof data.link === 'string' ? data.link : '', color: typeof data.color === 'string' ? data.color : '', pinned: false, launchOrder: undefined, launchDelay: Number(data.launchDelay) || 0 });
+    api.savePackages(packages);
+    renderPackages();
+    toast(t('pkg.imported'), 'ok');
+  } catch {
+    toast(t('pkg.importFail'), 'err');
+  }
 }
 async function relaunchDownedPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
-  const downed = pkgMembers(p).filter(m => m.gameTarget && _sessionLaunched.has(m.id) && !_launchedIds.has(m.id) && !_homeIds.has(m.id) && !(_cookieStatus[m.id] === 'dead' || m._cookieInvalid));
-  if (!downed.length) { toast('No downed', 'ok'); return; }
-  let ok = 0;
+  const members = pkgMembers(p);
+  const downed = members.filter(m => m.gameTarget && _sessionLaunched.has(m.id) && !_launchedIds.has(m.id) && !_homeIds.has(m.id) && !(_cookieStatus[m.id] === 'dead' || m._cookieInvalid));
+  if (!downed.length) { toast(t('pkg.noDowned'), 'ok'); return; }
+  const link = (p.link || '').trim();
+  let okCount = 0;
   await Promise.all(downed.map(async (m) => {
-    const res = await api.launchRoblox(m.id, m.cookie, (p.link || '').trim() || m.gameTarget || null);
-    if (res.success) { ok++; markLaunched(m.id); }
+    const target = link || m.gameTarget || null;
+    logEntry('info', 'launch', `Relaunching downed ${m.username || m.id} (package)...`, { accountId: m.id, username: m.username || null, userId: m.userId || null, target: target || 'Roblox home' });
+    const res = await api.launchRoblox(m.id, m.cookie, target);
+    if (res.success) { okCount++; markLaunched(m.id); }
   }));
-  toast(ok + '/' + downed.length + ' relaunched', ok === downed.length ? 'ok' : 'err');
+  toast(t('pkg.relaunchedN', { ok: okCount, total: downed.length, name: p.name }), okCount === downed.length ? 'ok' : 'err');
 }
 async function trimPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
   const running = pkgMembers(p).filter(m => _launchedIds.has(m.id));
-  if (!running.length) { toast('No running', 'err'); return; }
-  let ok = 0;
-  await Promise.all(running.map(m => api.trimAccountMemory(m.id).then(r => { if (r && r.ok) ok++; })));
-  toast(ok + '/' + running.length + ' trimmed', ok === running.length ? 'ok' : 'err');
+  if (!running.length) { toast(t('pkg.noRunning'), 'err'); return; }
+  let okCount = 0;
+  await Promise.all(running.map(async (m) => {
+    const res = await api.trimAccountMemory(m.id);
+    if (res && res.ok) okCount++;
+  }));
+  toast(t('pkg.trimmedN', { ok: okCount, total: running.length, name: p.name }), okCount === running.length ? 'ok' : 'err');
 }
 
 function renderPackages() {
@@ -3841,6 +5047,7 @@ function openCreatePackage() {
   document.getElementById('in-pkg-delay').value = 0;
   document.getElementById('pkg-picker-search').value = '';
   document.getElementById('pkg-order-row').innerHTML = '';
+  document.querySelector('#pkg-color-row .pkg-color-swatch[data-custom="1"]')?.remove();
   setPkgColorSel('');
   renderPackagePicker([]);
   openModal('m-package');
@@ -3855,6 +5062,7 @@ function openEditPackage(id) {
   document.getElementById('in-pkg-delay').value = p.launchDelay || 0;
   document.getElementById('pkg-picker-search').value = '';
   setPkgColorSel(p.color || '');
+  // Load the saved launch order (fall back to the account list order).
   _pkgOrderIds = (p.launchOrder && p.launchOrder.length) ? [...p.launchOrder] : (p.accountIds || []);
   renderPackagePicker(p.accountIds || []);
   renderPkgOrder();
@@ -3862,7 +5070,30 @@ function openEditPackage(id) {
 }
 
 function setPkgColorSel(color) {
-  document.querySelectorAll('#pkg-color-row .pkg-color-swatch').forEach(b => b.classList.toggle('sel', b.dataset.color === color));
+  if (color && /^#[0-9a-fA-F]{6}$/.test(color)) pkgEnsureCustomSwatch(color);
+  document.querySelectorAll('#pkg-color-row .pkg-color-swatch').forEach(b => b.classList.toggle('sel', (b.dataset.color || '').toLowerCase() === String(color || '').toLowerCase()));
+  const customInput = document.getElementById('pkg-color-custom');
+  if (customInput && /^#[0-9a-fA-F]{6}$/.test(color || '')) customInput.value = color;
+}
+function pkgEnsureCustomSwatch(color) {
+  const row = document.getElementById('pkg-color-row');
+  if (!row) return;
+  let custom = row.querySelector('.pkg-color-swatch[data-custom="1"]');
+  if (!custom) {
+    custom = document.createElement('button');
+    custom.type = 'button';
+    custom.className = 'pkg-color-swatch';
+    custom.dataset.custom = '1';
+    row.appendChild(custom);
+  }
+  custom.dataset.color = color;
+  custom.style.background = color;
+  custom.title = color;
+}
+function pkgCustomColor(v) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(v || '')) return;
+  pkgEnsureCustomSwatch(v);
+  setPkgColorSel(v);
 }
 
 function collectPkgChecked() {
@@ -3875,6 +5106,8 @@ function pkgPickAll(sel) {
   renderPkgOrder();
 }
 
+// The picker shows accounts filtered by the search box; the launch-order row
+// always reflects the currently selected set.
 function renderPackagePicker(selectedIds) {
   const wrap = document.getElementById('pkg-account-picker');
   if (!wrap) return;
@@ -3901,11 +5134,17 @@ function renderPackagePicker(selectedIds) {
   renderPkgOrder();
 }
 
+// Editable launch order: shows the selected accounts in sequence with
+// up/down arrows. Defaults to the picker selection order.
 function renderPkgOrder() {
   const wrap = document.getElementById('pkg-order-row');
   if (!wrap) return;
   const checked = collectPkgChecked();
   const byId = new Map(accounts.filter(a => checked.includes(a.id)).map(a => [a.id, a]));
+  // Keep the existing order for accounts still checked, then append any
+  // newly checked accounts at the end (they were never in _pkgOrderIds, so a
+  // plain filter would silently drop them — the bug where only the first
+  // selected account made it into the group).
   let current;
   if (_pkgOrderIds && _pkgOrderIds.length) {
     current = _pkgOrderIds.filter(id => checked.includes(id));
@@ -3932,6 +5171,7 @@ function movePkgOrder(i, dir) {
   renderPkgOrder();
 }
 
+// Color swatch selection (delegated — the swatches are static in the modal).
 document.addEventListener('click', e => {
   const sw = e.target.closest('#pkg-color-row .pkg-color-swatch');
   if (!sw) return;
@@ -3979,11 +5219,17 @@ function setPackageLink(id, value) {
   p.link = value.trim();
   api.savePackages(packages);
   loadPkgCover(id, p.link);
+  // Re-render so the server-picker (🖥️) and distribute (↗️) buttons show
+  // up as soon as a numeric placeId is present.
   renderPackages();
 }
 
-const _pkgCoverCache = {};
-const _pkgPlaceCache = {};
+// ── Game cover images ─────────────────────────────────────────────────────
+// Each group's link (place ID, roblox.com/games/<id> URL, or private-server
+// link) resolves to a place → universe → thumbnail cover, shown as a banner
+// on the group card.
+const _pkgCoverCache = {}; // placeId -> imageUrl
+const _pkgPlaceCache = {}; // placeId -> { universeId, name }
 function extractPlaceId(link) {
   if (!link) return null;
   const s = String(link).trim();
@@ -4010,6 +5256,8 @@ async function loadPkgCover(pkgId, link) {
   try {
     let uni = _pkgPlaceCache[placeId];
     if (!uni) {
+      // games.roblox.com/v1/games/multiget-place-details requires an auth
+      // token (error 9002) — the public universes API does not.
       const res = await api.robloxGet('https://apis.roblox.com/universes/v1/places/' + placeId + '/universe');
       const d = res && res.data;
       if (!d || !d.universeId) return;
@@ -4023,7 +5271,7 @@ async function loadPkgCover(pkgId, link) {
       _pkgCoverCache[placeId] = url;
       renderPkgCover(pkgId, url);
     }
-  } catch { }
+  } catch { /* offline / rate-limited — card just keeps the default icon */ }
 }
 
 async function launchPackage(id) {
@@ -4054,11 +5302,17 @@ async function launchPackage(id) {
   const link = (p.link || '').trim();
   let okCount = 0;
   const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
+  // Auto-pick ONE free server for the group's game (plain numeric link) so
+  // every account lands in the same instance and the joined-server
+  // highlight gets registered for all of them.
   let autoTarget = null;
   const linkPlace = _extractPlaceId(link);
   if (linkPlace && !link.includes(':')) {
     try {
       const fetcher = members[0] && members[0].cookie ? (u) => api.robloxGetAuth(u, members[0].cookie) : (u) => api.robloxGet(u);
+      // Search a few pages for a server with REAL headroom (2+ free slots).
+      // Never fall back to a 1-slot server (queue) and never launch blind
+      // into a random server (accounts land in full ones).
       let servers = [];
       let cursor = '';
       for (let page = 0; page < 5; page++) {
@@ -4073,6 +5327,7 @@ async function launchPackage(id) {
       if (good) {
         autoTarget = linkPlace + ':' + good.id;
       } else {
+        // No server with real headroom right now — don't launch blind.
         toast(t('pkg.noGoodServers'), 'err');
         if (btn) { btn.disabled = false; btn.innerHTML = 'Start All'; delete btn.dataset.busy; }
         if (killBtn && killBtn.dataset.busy !== '1') killBtn.disabled = false;
@@ -4260,10 +5515,109 @@ function switchChartTab(tab) {
   chartTab = tab;
   document.querySelectorAll('#page-charts .tab-btn').forEach(t => t.classList.remove('active'));
   document.getElementById('ctab-' + tab).classList.add('active');
+  const isPriv = tab === 'private';
+  const searchWrap = document.querySelector('#page-charts .chart-search-wrap');
+  if (searchWrap) searchWrap.style.display = isPriv ? 'none' : '';
+  document.getElementById('charts-private').style.display = isPriv ? '' : 'none';
+  const grid = document.getElementById('charts-grid');
+  const loading = document.getElementById('charts-loading');
+  const empty = document.getElementById('charts-empty');
+  if (isPriv) {
+    // Hide the games surfaces so only the private panel shows.
+    if (grid) grid.style.display = 'none';
+    if (loading) loading.style.display = 'none';
+    if (empty) empty.style.display = 'none';
+    renderPrivateServers();
+    positionTabSlider(document.getElementById('ctab-' + tab).closest('.tab-bar'));
+    return;
+  }
   const s = document.getElementById('chart-search'); if (s) s.value = '';
   _searchMode = false;
   if (chartsLoaded) renderCharts(allCharts[tab] || [], false);
+  else loadCharts();
   positionTabSlider(document.getElementById('ctab-' + tab).closest('.tab-bar'));
+}
+
+// ── Saved private/VIP servers ──────────────────────────────────────────
+// Roblox exposes no API listing other people's private servers, so links
+// are saved here once and joined in one click. Stored in settings.json,
+// which means they ride along with encrypted backups.
+function _savedServers() {
+  if (typeof settings === 'undefined' || !settings) return [];
+  if (!Array.isArray(settings.savedServers)) settings.savedServers = [];
+  return settings.savedServers;
+}
+function _privLooksLikeGameLink(link) {
+  if (!link) return false;
+  return /(\d{6,})|roblox\.com|privateServerLinkCode|share|code=|placeId=/i.test(link);
+}
+function privAdd() {
+  const nameEl = document.getElementById('priv-name');
+  const linkEl = document.getElementById('priv-link');
+  const name = (nameEl ? nameEl.value : '').trim().slice(0, 40) || t('priv.untitled');
+  const link = (linkEl ? linkEl.value : '').trim();
+  if (!_privLooksLikeGameLink(link)) { toast(t('priv.invalid'), 'err'); if (linkEl) linkEl.focus(); return; }
+  const list = _savedServers();
+  list.unshift({ id: 'ps_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), name, link });
+  if (list.length > 50) list.length = 50;
+  try { api.saveSettings({ savedServers: list }).catch(() => {}); } catch {}
+  if (nameEl) nameEl.value = '';
+  if (linkEl) linkEl.value = '';
+  renderPrivateServers();
+  toast(t('priv.added', { name }), 'ok');
+}
+function privRemove(id) {
+  const list = _savedServers();
+  const e = list.find(x => x.id === id);
+  confirmAction(t('priv.removeConfirm', { name: e ? e.name : '' }), () => {
+    settings.savedServers = _savedServers().filter(x => x.id !== id);
+    try { api.saveSettings({ savedServers: settings.savedServers }).catch(() => {}); } catch {}
+    renderPrivateServers();
+  });
+}
+function privCopy(id) {
+  const e = _savedServers().find(x => x.id === id);
+  if (!e) return;
+  navigator.clipboard.writeText(e.link).then(() => toast(t('priv.copied'), 'ok')).catch(() => {});
+}
+async function privJoin(id) {
+  const e = _savedServers().find(x => x.id === id);
+  if (!e) return;
+  const sel = document.getElementById('priv-acc-' + id);
+  const acc = accounts.find(a => a.id === (sel ? sel.value : ''));
+  if (!acc) { toast(t('priv.noAccounts'), 'err'); return; }
+  if (!acc.cookie) { toast(t('acct.noCookie'), 'err'); return; }
+  logEntry('info', 'launch', `Launching ${acc.username || acc.id} into saved server "${e.name}"...`, { accountId: acc.id, target: e.link });
+  let res = null;
+  try { res = await api.launchRoblox(acc.id, acc.cookie, e.link); } catch (err) { res = { success: false, error: err?.message || String(err) }; }
+  if (res && res.success) {
+    markLaunched(acc.id);
+    toast(t('priv.launched', { u: acc.nickname || acc.username || '', name: e.name }), 'ok');
+  } else if (!(res && res.cancelled)) {
+    if (res && res.error) _flagCookieMaybeDead(acc.id, res.error);
+    toast((res && res.error) || t('priv.failed'), 'err');
+  }
+}
+function renderPrivateServers() {
+  const wrap = document.getElementById('priv-list');
+  if (!wrap) return;
+  const list = _savedServers();
+  if (!list.length) {
+    wrap.innerHTML = '<div class="logs-empty"><span class="material-icons-round">lock</span>' + esc(t('priv.empty')) + '</div>';
+    return;
+  }
+  const accOpts = accounts.map(a => '<option value="' + a.id + '">' + esc(a.nickname || a.username || a.id) + '</option>').join('');
+  wrap.innerHTML = '<div class="dash-feed">' + list.map(e => {
+    const shortLink = e.link.length > 46 ? e.link.slice(0, 46) + '…' : e.link;
+    return '<div class="dash-feed-row" style="align-items:center">' +
+      '<span class="dash-ic purple" style="width:22px;height:22px;font-size:12px"><span class="material-icons-round" style="font-size:13px">lock</span></span>' +
+      '<span class="dash-feed-text" style="min-width:0"><b>' + esc(e.name) + '</b><br/><span style="opacity:.65;font-size:11px;word-break:break-all">' + esc(shortLink) + '</span></span>' +
+      (accounts.length ? '<select class="sr-input" id="priv-acc-' + e.id + '" style="height:30px;max-width:150px;font-size:11.5px">' + accOpts + '</select>' : '') +
+      '<button class="btn btn-primary btn-sm" onclick="privJoin(\'' + e.id + '\')" title="' + esc(t('priv.join')) + '"><span class="material-icons-round">play_arrow</span></button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="privCopy(\'' + e.id + '\')" title="' + esc(t('priv.copyLink')) + '"><span class="material-icons-round">content_copy</span></button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="privRemove(\'' + e.id + '\')" title="' + esc(t('priv.remove')) + '"><span class="material-icons-round">delete_outline</span></button>' +
+      '</div>';
+  }).join('') + '</div>';
 }
 
 async function loadCharts() {
@@ -4333,6 +5687,8 @@ async function fetchRobloxGames(sortId) {
 }
 
 let _chartGameMap = {};
+// Favorited games (by universe/place id) — pinned to the top of every chart
+// tab. Persisted in localStorage so the stars survive restarts.
 let _favGames = new Set();
 try { _favGames = new Set(JSON.parse(localStorage.getItem('mr_fav_games') || '[]')); } catch {}
 function _gameKey(g) { return g.universeId || g.placeId || g.id || g.name || ''; }
@@ -4360,11 +5716,13 @@ function renderCharts(games, searchMode) {
     grid.style.display = 'none';
     return;
   }
-  emptyEl.style.display = 'none';
-  grid.style.display = 'grid';
+  // Pinned favourites float to the top of the chart (search results keep
+  // their own ordering).
   if (!searchMode && _favGames.size) {
     games = [...games.filter(g => _favGames.has(_gameKey(g))), ...games.filter(g => !_favGames.has(_gameKey(g)))];
   }
+  emptyEl.style.display = 'none';
+  grid.style.display = 'grid';
   grid.innerHTML = games.map((g, i) => {
     _chartGameMap[i] = g;
     const players = typeof g.playerCount === 'number' ? Number(g.playerCount).toLocaleString() + ' playing' : '';
@@ -4590,6 +5948,7 @@ function updateWindowTitle(n) {
 }
 
 let _statusPoll = null;
+let _uptimeTimer = null;
 let _lastCountPushAt = 0;
 async function pollRunningCount() {
   // Skip if a push from the backend landed recently.
@@ -4645,40 +6004,40 @@ async function pollWatchedIds() {
     }
   });
   // Live status changed → keep the running-first order in real time, no
-  // manual Sync needed.
-  if (changed) reorderCardsByStatus();
+    // manual Sync needed.
+    if (changed) reorderCardsByStatus();
 
-  // Reconcile home state (accounts that went to the Roblox tray)
-  try {
-    const homeIds = await api.getHomeIds();
-    const homeSet = new Set(homeIds);
-    const prevHome = new Set(_homeIds);
-    _homeIds.clear();
-    for (const id of homeIds) _homeIds.add(id);
-    document.querySelectorAll('.card[data-id]').forEach(card => {
-      const id = card.dataset.id;
-      const wasHome = prevHome.has(id);
-      const isNowHome = homeSet.has(id);
-      if (wasHome !== isNowHome) {
-        changed = true;
-        card.classList.toggle('is-home', isNowHome);
-        const dot = card.querySelector('.card-dot');
-        if (dot) {
-          dot.classList.toggle('home', isNowHome);
-          const isLive = watched.has(id);
-          dot.title = isNowHome ? t('accounts.home') : (isLive ? 'Launched' : 'Not launched');
+    // Reconcile home state (accounts that went to the Roblox tray)
+    try {
+      const homeIds = await api.getHomeIds();
+      const homeSet = new Set(homeIds);
+      const prevHome = new Set(_homeIds);
+      _homeIds.clear();
+      for (const id of homeIds) _homeIds.add(id);
+      document.querySelectorAll('.card[data-id]').forEach(card => {
+        const id = card.dataset.id;
+        const wasHome = prevHome.has(id);
+        const isNowHome = homeSet.has(id);
+        if (wasHome !== isNowHome) {
+          changed = true;
+          card.classList.toggle('is-home', isNowHome);
+          const dot = card.querySelector('.card-dot');
+          if (dot) {
+            dot.classList.toggle('home', isNowHome);
+            const isLive = watched.has(id);
+            dot.title = isNowHome ? t('accounts.home') : (isLive ? 'Launched' : 'Not launched');
+          }
+          const badge = card.querySelector('.card-home-badge');
+          if (isNowHome && !badge) {
+            const uid = card.querySelector('.card-uid');
+            if (uid) uid.insertAdjacentHTML('afterend', `<div class="card-home-badge">${esc(t('accounts.home'))}</div>`);
+          } else if (!isNowHome && badge) badge.remove();
         }
-        const badge = card.querySelector('.card-home-badge');
-        if (isNowHome && !badge) {
-          const uid = card.querySelector('.card-uid');
-          if (uid) uid.insertAdjacentHTML('afterend', `<div class="card-home-badge">${esc(t('accounts.home'))}</div>`);
-        } else if (!isNowHome && badge) badge.remove();
-      }
-    });
-  } catch {}
-  updateCloseHomeBtn();
-}
-function pollStatus() {
+        });
+        } catch {}
+        updateCloseHomeBtn();
+        }
+  function pollStatus() {
   pollRunningCount();
   pollWatchedIds();
 }
@@ -4686,13 +6045,54 @@ function startStatusPoll() {
   if (_statusPoll) return;
   pollStatus();
   _statusPoll = setInterval(pollStatus, 3000);
-  setInterval(() => {
+  // Refresh uptime labels in place (no re-render) while the Accounts page is
+  // visible, so "há 2h 34min" keeps ticking without flashing the grid.
+  if (_uptimeTimer) return;
+  _uptimeTimer = setInterval(() => {
     if (!document.getElementById('page-accounts')?.classList.contains('active')) return;
     document.querySelectorAll('.card.is-live .card-up').forEach(el => {
       const id = el.closest('.card')?.dataset.id;
       if (id && _launchedAt[id]) el.textContent = fmtUptime(_launchedAt[id]);
     });
   }, 30000);
+}
+
+// ── Sync instances ────────────────────────────────────────────────────────
+// Reloads the running count and watched IDs from the backend
+let _syncInFlight = false;
+async function syncInstances(src) {
+  if (_syncInFlight) return;
+  _syncInFlight = true;
+  const btnDash = document.getElementById('dash-sync-btn');
+  const btnAcct = document.getElementById('acct-sync-btn');
+  const btns = [btnDash, btnAcct].filter(Boolean);
+  const origLabels = btns.map(b => b ? b.textContent : '');
+  btns.forEach(b => {
+    if (b) {
+      b.disabled = true;
+      b.textContent = 'Syncing...';
+      b.style.opacity = '0.6';
+    }
+  });
+  try {
+    await api.syncInstances();
+    await pollRunningCount();
+    await pollWatchedIds();
+    renderDashboard();
+    render();
+    logEntry('info', 'system', 'Instances synced with reality');
+  } catch (e) {
+    logEntry('warn', 'system', `Sync failed: ${e}`);
+  } finally {
+    btns.forEach((b, i) => {
+      if (b) {
+        b.disabled = false;
+        b.textContent = origLabels[i] || 'Sync';
+        b.style.opacity = '';
+      }
+    });
+    _syncInFlight = false;
+  }
 }
 
 async function mixRefreshRunning() {
@@ -4706,12 +6106,16 @@ async function mixRefreshRunning() {
 }
 
 // Merge a single key into the on-disk Fast Flags without disturbing others.
+let _fflagWriteLock = Promise.resolve();
 async function mixWriteFlag(key, value) {
-  let flags = {};
-  try { flags = (await api.readFFlags()) || {}; } catch {}
-  if (value === null) delete flags[key];
-  else flags[key] = String(value);
-  try { await api.writeFFlags(flags); } catch {}
+  _fflagWriteLock = _fflagWriteLock.then(async () => {
+    let flags = {};
+    try { flags = (await api.readFFlags()) || {}; } catch {}
+    if (value === null) delete flags[key];
+    else flags[key] = String(value);
+    try { await api.writeFFlags(flags); } catch {}
+  });
+  await _fflagWriteLock;
 }
 
 // ── Rendering engine (Settings > Performance) ────────────────────────────
@@ -4774,22 +6178,20 @@ function saveLauncherPath() {
   const v = el ? el.value.trim() : '';
   settings.launcherPath = v;
   api.saveSettings({ launcherPath: v }).catch(() => {});
+  logEntry('info', 'settings', v ? 'Custom launcher set: ' + v : 'Custom launcher cleared');
 }
 async function pickLauncherPath() {
-  // Browser demo: native dialog unavailable — use a hidden file input.
   try {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.exe';
-    input.onchange = () => {
-      const p = input.files && input.files[0];
-      if (p) {
-        const el = document.getElementById('set-launcher-path');
-        if (el) { el.value = p.name; saveLauncherPath(); }
-      }
-    };
-    input.click();
-  } catch (e) { /* noop */ }
+    const pick = window.__TAURI__ && window.__TAURI__.dialog
+      ? await window.__TAURI__.dialog.open({ title: 'Select Roblox launcher', filters: [{ name: 'Executable', extensions: ['exe'] }], multiple: false })
+      : null;
+    const path = typeof pick === 'string' && pick ? pick : null;
+    if (path) {
+      const el = document.getElementById('set-launcher-path');
+      if (el) el.value = path;
+      saveLauncherPath();
+    }
+  } catch (e) { logEntry('err', 'settings', 'Launcher picker failed: ' + (e?.message || e)); }
 }
 
 function setRobloxChannel(channel) {
@@ -4802,16 +6204,19 @@ function setRobloxChannel(channel) {
 }
 
 // Smoothly fill the slider track up to the current value.
+// Single system: the track is painted from the --fill var (see styles.css).
+// The old inline-background gradient is cleared so the two never fight.
 function updateSliderFill(el) {
-  if (!el) return;
-  const min = parseFloat(el.min) || 0, max = parseFloat(el.max) || 100, v = parseFloat(el.value);
-  const pct = max > min ? ((v - min) / (max - min)) * 100 : 0;
-  el.style.background = 'linear-gradient(90deg, var(--ac) ' + pct + '%, var(--s4) ' + pct + '%)';
+  if (!el || !el.style) return;
+  const min = parseFloat(el.min) || 0, max = parseFloat(el.max) || 100, v = parseFloat(el.value) || 0;
+  const pct = max > min ? Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100)) : 0;
+  el.style.setProperty('--fill', pct + '%');
+  el.style.background = '';
 }
 
 // Delegated listener so slider fill stays correct without every call site remembering to update it.
 document.addEventListener('input', e => {
-  if (e.target.matches && e.target.matches('.fps-slider')) updateSliderFill(e.target);
+  if (e.target.matches && e.target.matches('input[type="range"]')) updateSliderFill(e.target);
 });
 
 // Graphics
@@ -4819,22 +6224,22 @@ function mixGfxInput(v) {
   document.getElementById('mix-gfx-val').textContent = v;
   updateSliderFill(document.getElementById('mix-gfx'));
 }
-function mixGfxAutoToggle() {
+async function mixGfxAutoToggle() {
   const auto = document.getElementById('mix-gfx-auto').checked;
   document.getElementById('mix-gfx').disabled = auto;
   if (auto) {
     document.getElementById('mix-gfx-val').textContent = 'Auto';
-    mixWriteFlag(FF_GFX, null);
+    await mixWriteFlag(FF_GFX, null);
     toast(t('mixer.gfxAuto'), 'ok');
   } else {
-    mixGfxCommit();
+    await mixGfxCommit();
   }
 }
-function mixGfxCommit() {
+async function mixGfxCommit() {
   if (document.getElementById('mix-gfx-auto').checked) return;
   const v = document.getElementById('mix-gfx').value;
   document.getElementById('mix-gfx-val').textContent = v;
-  mixWriteFlag(FF_GFX, v);
+  await mixWriteFlag(FF_GFX, v);
   toast(t('mixer.gfxQuality', { v: v }), 'ok');
 }
 
@@ -4934,18 +6339,32 @@ async function doKillAll() {
   if (!btns.length || btns[0].disabled) return;
   btns.forEach(b => { b.disabled = true; });
   const res = await api.killAllRoblox();
-  // Reset all dots / launched state.
-  _launchedIds.clear();
-  _homeIds.clear();
-  document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live'));
-  document.querySelectorAll('.card.is-home').forEach(c => c.classList.remove('is-home'));
-  document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched'); d.title = 'Not launched'; });
-  document.querySelectorAll('.card-dot.home').forEach(d => { d.classList.remove('home'); d.title = 'Not launched'; });
-  document.querySelectorAll('.card-home-badge').forEach(b => b.remove());
-  refreshPkgAvatarStatus();
-  await mixRefreshRunning();
+  // Only wipe the UI-side running state if the backend actually confirmed
+  // the processes are gone. The Rust side now clears watched_accounts /
+  // account_pids only after verification, so a successful ok:true means the
+  // count is truly zero. If it failed, leave the UI alone so the user can
+  // retry or kill per-account.
+  if (res && res.ok) {
+    _launchedIds.clear();
+    _homeIds.clear();
+    document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live'));
+    document.querySelectorAll('.card.is-home').forEach(c => c.classList.remove('is-home'));
+    document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched'); d.title = 'Not launched'; });
+    document.querySelectorAll('.card-dot.home').forEach(d => { d.classList.remove('home'); d.title = 'Not launched'; });
+    document.querySelectorAll('.card-home-badge').forEach(b => b.remove());
+    refreshPkgAvatarStatus();
+    await mixRefreshRunning();
+    // Sync tracking state after killing
+    await pollWatchedIds();
+    render();
+    renderDashboard();
+  }
   btns.forEach(b => { b.disabled = false; });
   if (res && res.ok) {
+    // `killed` is computed by the backend after verifying each target PID is
+    // actually gone (targets minus survivors), so it is the real count of
+    // instances this run managed to close. Always show that count, even when
+    // it is 0, and keep the toast red (kill operation message).
     const n = res.killed || 0;
     const msg = n === 1 ? t('mixer.closedOne', { n }) : t('mixer.closedN', { n });
     toast(msg, 'err');
@@ -4960,9 +6379,10 @@ async function mixApply() {
   btn.disabled = true;
   const orig = btn.innerHTML;
 
-  mixGfxCommit();
-  mixFpsCommit();
-  try { await api.setRobloxVolume(document.getElementById('mix-vol').value); } catch {}
+  await mixGfxCommit();
+  await mixFpsCommit();
+  const volValue = parseInt(document.getElementById('mix-vol').value, 10);
+  try { await api.setRobloxVolume(volValue); } catch {}
 
   btn.disabled = false;
   btn.innerHTML = orig;
@@ -5011,9 +6431,22 @@ let _genType = 'alt';
 // tiers in what this app sends it), so the row hides itself for an Altgen
 // key instead of showing a control that does nothing.
 function genOnKeyInput() {
-  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  const inp = document.getElementById('gen-apikey');
+  const apiKey = ((inp && inp.value) || '').trim();
+  const k = genActiveKey();
+  if (k && (k.key || '') !== (inp ? inp.value : '')) { k.key = inp ? inp.value : ''; genKeysSave(); genRenderKeySelect(); }
   const row = document.getElementById('gen-type-row');
   if (row) row.style.display = apiKey.startsWith('BLOX-') ? '' : 'none';
+  genKeysTick();
+  // Debounced stock readout while typing a key (not on every keystroke).
+  try { clearTimeout(window._genStockT); } catch {}
+  try {
+    window._genStockT = setTimeout(() => {
+      const cur = ((document.getElementById('gen-apikey') || {}).value || '').trim();
+      if (cur.startsWith('BLOX-') && cur.length > 10) genRefreshStock();
+      else { const l = document.getElementById('gen-stock-label'); if (l) l.textContent = ''; }
+    }, 1000);
+  } catch {}
 }
 
 // Value -> i18n key pairs for the account-type dropdown; the passed label/desc
@@ -5026,6 +6459,7 @@ const GEN_TYPE_I18N = {
   'dump': ['gen.dump', 'gen.dumpDesc'],
 };
 function genSetType(value, label, desc) {
+  if (_genWatch && value !== _genWatch.type) genStopWatch(false);
   _genType = value;
   const keys = GEN_TYPE_I18N[value] || ['gen.alt', 'gen.altDesc'];
   const lbl = document.getElementById('cdd-gentype-label');
@@ -5037,13 +6471,97 @@ function genSetType(value, label, desc) {
   });
   try { localStorage.setItem('bloxgen_type', value); } catch {}
   closeAllCdd();
+  genRefreshStock();
+}
+
+// Live stock readout from the server (GET /api/stock): shows whether the
+// selected type is actually available before spending a generate call.
+// Free accounts only ever see `alt` here; regions stay empty below Ultra.
+async function genBloxgenStock(apiKey) {
+  try {
+    const resp = await fetch('https://core.bloxgen.net/api/stock?apiKey=' + encodeURIComponent(apiKey));
+    const j = await resp.json();
+    if (j && j.success && j.data) return j.data;
+  } catch {}
+  return null;
+}
+async function genRefreshStock() {
+  const lbl = document.getElementById('gen-stock-label');
+  if (!lbl) return;
+  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  if (!apiKey.startsWith('BLOX-')) { lbl.textContent = ''; return; }
+  lbl.style.color = '';
+  lbl.textContent = t('gen.stockChecking');
+  const data = await genBloxgenStock(apiKey);
+  // Key or type changed while fetching -- drop the stale answer.
+  const cur = (document.getElementById('gen-apikey').value || '').trim();
+  if (cur !== apiKey) return;
+  if (!data || !data[_genType]) { lbl.textContent = ''; return; }
+  const ok = data[_genType].available === true;
+  lbl.textContent = ok ? t('gen.stockYes', { type: _genType }) : t('gen.stockNo', { type: _genType });
+  lbl.style.color = ok ? 'var(--ok, #22c55e)' : 'var(--warn, #f59e0b)';
+}
+
+// ── Stock watch: auto-generate the moment a wave restocks ──────────────────
+// Free API stock arrives in waves ("Restocks on Discord") and is consumed in
+// seconds, so clicking Generate manually almost always loses. Arming the watch
+// polls /api/stock every 30s and fires one generate with the armed key+type
+// when it turns available. Session-only: it never survives a restart.
+let _genWatch = null; // { keyId, type, started, timer }
+function genToggleWatch() {
+  if (_genWatch) { genStopWatch(false); return; }
+  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  if (!apiKey.startsWith('BLOX-')) { toast(t('gen.apiKeyBad'), 'err'); return; }
+  const prof = genActiveKey();
+  _genWatch = { keyId: prof ? prof.id : null, type: _genType, started: Date.now(), timer: null };
+  genWatchUi();
+  toast(t('gen.watchOn', { type: _genType }), 'ok');
+  genWatchPoll();
+  _genWatch.timer = setInterval(genWatchPoll, 30000);
+}
+async function genWatchPoll() {
+  if (!_genWatch) return;
+  const prof = genActiveKey();
+  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  // Key switched or cleared mid-watch: stand down instead of ever firing a
+  // generate on a credential the user didn't arm.
+  if (!prof || prof.id !== _genWatch.keyId || apiKey !== (prof.key || '').trim()) { genStopWatch(false); return; }
+  if (_genType !== _genWatch.type) { genStopWatch(false); return; }
+  const stock = await genBloxgenStock(apiKey);
+  if (!_genWatch) return;
+  if (stock && stock[_genWatch.type] && stock[_genWatch.type].available === true) {
+    _genWatch = null;
+    genWatchUi();
+    toast(t('gen.stockFound'), 'ok');
+    genCombo();
+  }
+}
+function genStopWatch(silent) {
+  if (!_genWatch) return;
+  clearInterval(_genWatch.timer);
+  _genWatch = null;
+  genWatchUi();
+  if (!silent) toast(t('gen.watchOff'), 'warn');
+}
+function genWatchUi() {
+  const btn = document.getElementById('gen-watch-btn');
+  if (!btn) return;
+  btn.classList.toggle('btn-primary', !!_genWatch);
+  btn.classList.toggle('btn-ghost', !_genWatch);
+  const lbl = document.getElementById('gen-watch-label');
+  if (lbl) lbl.textContent = _genWatch
+    ? t('gen.watching', { t: genElapsed(Date.now() - _genWatch.started) })
+    : t('gen.watch');
+}
+function genElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 }
 
 // Provider is auto-detected from the key's prefix so the single API-key field
 // works for either service: BLOX- = BloxGen, MG_ = Altgen (altgen.me/docs).
 async function genCombo() {
   const apiKey = (document.getElementById('gen-apikey').value || '').trim();
-  try { localStorage.setItem('bloxgen_apikey', document.getElementById('gen-apikey').value); } catch {}
 
   let provider;
   if (apiKey.startsWith('BLOX-')) provider = 'bloxgen';
@@ -5051,6 +6569,42 @@ async function genCombo() {
   else {
     toast(t('gen.apiKeyBad'), 'err');
     return;
+  }
+  const prof = genActiveKey();
+
+  // Pre-check: a key still inside its cooldown fails immediately with the
+  // exact remaining time instead of spending an API call to get a 429.
+  if (provider === 'bloxgen' && prof) {
+    const left = genCdLeft(prof.id);
+    if (left > 0) {
+      const msg = t('gen.keyInCooldown', { label: prof.label, t: genFmtMs(left) });
+      if (_genClearPromise) await _genClearPromise;
+      _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, key: prof.label, error: msg });
+      if (_genHistory.length > 500) _genHistory.length = 500;
+      api.writeGenHistory(_genHistory).catch(() => {});
+      _ghPrepend();
+      toast(msg, 'err');
+      return;
+    }
+  }
+
+  // Stock pre-check: ask the server if this type is available at all. A
+  // confirmed "out of stock" fails immediately with an exact message instead
+  // of spending a generate call to get a 404. If the stock endpoint itself
+  // fails, generation proceeds normally (telemetry must never block it).
+  if (provider === 'bloxgen') {
+    const stock = await genBloxgenStock(apiKey);
+    if (stock && stock[_genType] && stock[_genType].available === false) {
+      const msg = t('gen.stockNo', { type: _genType }) + ' — ' + t('gen.noStock');
+      if (_genClearPromise) await _genClearPromise;
+      _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, key: prof ? prof.label : null, error: msg });
+      if (_genHistory.length > 500) _genHistory.length = 500;
+      api.writeGenHistory(_genHistory).catch(() => {});
+      _ghPrepend();
+      genRefreshStock();
+      toast(msg, 'err');
+      return;
+    }
   }
 
   const btn = document.getElementById('gen-btn');
@@ -5068,39 +6622,76 @@ async function genCombo() {
     if (counter) counter.textContent = d.type ? ('Generated: ' + d.type + (d.cost != null ? ' · cost ' + d.cost : '')) : '';
 
     // Store in history
-    if (_genClearPromise) await _genClearPromise;
+    if (_genClearPromise) await _genClearPromise; // let a pending Clear's disk write land first
     _lastGenData = d;
-    _genHistory.unshift({ username: d.username, password: d.password, cookie: d.cookie, ts: Date.now(), ok: true, provider, type: _genType });
-    if (_genHistory.length > 500) _genHistory.length = 500;
+    _genHistory.unshift({ username: d.username, password: d.password, cookie: d.cookie, ts: Date.now(), ok: true, provider, type: _genType, key: prof ? prof.label : null });
+    if (_genHistory.length > 500) _genHistory.length = 500; // bound the persisted history
     api.writeGenHistory(_genHistory).catch(() => {});
     _ghPrepend();
 
-    // Copy cookie to clipboard if available, else username:password
-    const toCopy = d.cookie || (d.username + ':' + d.password);
+    // A fresh free-tier alt costs a 30-minute cooldown on this key, so arm
+    // the exact deadline now instead of waiting for the next 429 to tell us.
+    if (provider === 'bloxgen' && prof && _genType === 'alt') {
+      genCdSet(prof.id, Date.now() + FREE_ALT_CD_MS);
+      genKeysTick();
+    }
+    // A manual success supersedes any armed watch for this key.
+    if (typeof _genWatch !== 'undefined' && _genWatch) genStopWatch(true);
+    const toCopy = d.cookie || (d.username + ':' + d.password); // copy cookie if available, else username:password
     navigator.clipboard.writeText(toCopy).catch(() => {});
+    genRefreshStock();
 
     if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'Generate'; }
 
   } catch (e) {
+    // Failed generations land in the history too so the status filter and the
+    // error messages make sense for mass runs.
     if (_genClearPromise) await _genClearPromise;
-    _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, error: e.message || t('gen.genFailed') });
+    _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, key: prof ? prof.label : null, error: e.message || t('gen.genFailed') });
     if (_genHistory.length > 500) _genHistory.length = 500;
     api.writeGenHistory(_genHistory).catch(() => {});
     _ghPrepend();
     toast(e.message || t('gen.genFailed'), 'err');
+    genRefreshStock();
     if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = t('gen.generate'); }
   }
 }
 
 async function genBloxgen(apiKey) {
-  const resp = await fetch('https://core.bloxgen.net/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey, type: _genType })
-  });
-  const data = await resp.json();
-  if (!data.success) throw new Error(data.message || data.error || t('gen.genFailed'));
-  return data.data;
+  // 503 "inventory is syncing" is transient -- retry briefly instead of
+  // surfacing it as a failure.
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 3000));
+    const resp = await fetch('https://core.bloxgen.net/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body: JSON.stringify({ apiKey, type: _genType })
+    });
+    let data = null;
+    try { data = await resp.json(); } catch { lastErr = new Error(t('gen.genFailed')); continue; }
+    if (data.success) return data.data;
+    if (resp.status === 503 && /syncing/i.test(data.message || '')) {
+      lastErr = new Error(data.message);
+      continue;
+    }
+    // Cooldown is HTTP 429 with timeRemaining in ms -- arm the exact deadline
+    // on this key so selecting it later shows precisely how long is left.
+    const prof = genActiveKey();
+    const wait = data.timeRemaining != null ? +data.timeRemaining : NaN;
+    if (resp.status === 429 && prof && !isNaN(wait)) {
+      genCdSet(prof.id, Date.now() + wait);
+      genKeysTick();
+      throw new Error(t('gen.keyInCooldown', { label: prof.label, t: genFmtMs(wait) }));
+    }
+    // Empty stock for this type: the key is valid (the API answered), there
+    // is just nothing to pull right now. Say so plainly instead of showing
+    // the raw API text alone.
+    const raw = data.message || data.error || t('gen.genFailed');
+    if (/no accounts available/i.test(raw)) throw new Error(raw + ' — ' + t('gen.noStock'));
+    throw new Error(raw);
+  }
+  throw lastErr || new Error(t('gen.genFailed'));
 }
 
 async function genAltgen(apiKey) {
@@ -5123,10 +6714,31 @@ async function genAltgen(apiKey) {
 let _manualCreds = null;
 let _manualResult = null;
 
-const MAN_WORDS = [
-  'Wolf','Dragon','Falcon','Tiger','Shark','Eagle','Storm','Blaze','Frost','Shadow',
-  'Thunder','Viper','Panther','Cobra','Raptor','Comet','Nova','Pulse','Bolt','Stealth',
-  'Neon','Cosmo','Turbo','Quantum','Cipher','Phantom','Raven','Onyx','Ember','Gale',
+// ASCII-only on purpose: Roblox usernames allow letters/numbers/underscore.
+const MAN_ADJ = [
+  'Swift','Brave','Clever','Silent','Rapid','Golden','Silver','Iron','Stormy','Frosty',
+  'Shadow','Neon','Cosmic','Turbo','Quantum','Mighty','Sneaky','Lucky','Wild','Bold',
+  'Crimson','Azure','Jade','Amber','Onyx','Solar','Lunar','Aero','Blaze','Vivid',
+  'Prime','Ultra','Mega','Hyper','Alpha','Omega','Pixel','Ninja','Samurai','Viking',
+  'Pirate','Astro','Retro','Magic','Dark','Light','Rapid','Feroz','Veloz','Astuto',
+];
+const MAN_NOUN = [
+  'Wolf','Dragon','Falcon','Tiger','Shark','Eagle','Storm','Frost','Thunder','Viper',
+  'Panther','Cobra','Raptor','Comet','Nova','Pulse','Bolt','Raven','Ember','Gale',
+  'Fox','Bear','Lion','Panda','Koala','Otter','Hawk','Crow','Frog','Crab',
+  'Knight','Wizard','Ranger','Hunter','Scout','Pilot','Captain','Sniper','Reaper','Ghost',
+  'Robot','Cyborg','Ninja','Pirate','Titan','Golem','Phoenix','Griffin','Hydra','Kraken',
+  'Castle','Tower','Bridge','River','Ocean','Desert','Forest','Mountain','Valley','Canyon',
+  'Rocket','Satellite','Meteor','Planet','Galaxy','Engine','Circuit','Radar','Laser','Drift',
+  'Blast','Surge','Dash','Flip','Spin','Jump','Rush','Storm','Flame','Wave',
+];
+// Readable password words: short, unambiguous spelling (no l/1/I/O/0 traps).
+const MAN_PASS_WORDS = [
+  'Lobo','Tigre','Falcao','Urso','Raposa','Aguia','Tubarao','Coruja','Gaviao','Panda',
+  'Verde','Azul','Vermelho','Amarelo','Roxo','Cinza','Preto','Branco','Dourado','Prata',
+  'Ninja','Pirata','Mago','Cacador','Piloto','Capitao','Escudo','Espada','Flecha','Martelo',
+  'Solar','Lunar','Vento','Chuva','Neve','Ondas','Areia','Pedra','Fogo','Gelo',
+  'Turbo','Pixel','Laser','Radar','Motor','Foguete','Meteoro','Planeta','Orbita','Sinal',
 ];
 
 function manRandomInt(max) {
@@ -5136,30 +6748,47 @@ function manRandomInt(max) {
 }
 
 function manRandomUsername() {
+  // Keep generating until the username doesn't collide with an existing
+  // account (the user asked for this to avoid wasting signup attempts).
   const existing = new Set(accounts.map(a => (a.username || '').toLowerCase()));
+  const pickNoun = () => MAN_NOUN[manRandomInt(MAN_NOUN.length)];
+  const pickAdj = () => MAN_ADJ[manRandomInt(MAN_ADJ.length)];
+  const digits = n => {
+    let s = '';
+    for (let i = 0; i < n; i++) s += String(manRandomInt(10));
+    return s;
+  };
   let tries = 0;
   while (tries++ < 200) {
-    const word = MAN_WORDS[manRandomInt(MAN_WORDS.length)];
-    const username = word + String(10000 + manRandomInt(90000));
+    const style = manRandomInt(4);
+    let username;
+    if (style === 0) {
+      username = pickNoun() + String(10000 + manRandomInt(90000)); // Wolf48392
+    } else if (style === 1) {
+      username = (pickAdj() + pickNoun() + digits(2 + manRandomInt(2))).slice(0, 20); // SwiftWolf42
+    } else if (style === 2) {
+      username = pickNoun() + '_' + digits(3 + manRandomInt(2)); // Wolf_482
+    } else {
+      username = (pickAdj() + digits(3 + manRandomInt(2)) + pickNoun()).slice(0, 20); // Swift482Wolf
+    }
+    if (username.length < 3 || username.length > 20) continue;
     if (!existing.has(username.toLowerCase())) return username;
   }
-  return MAN_WORDS[manRandomInt(MAN_WORDS.length)] + Date.now().toString(36);
+  // Fallback: extremely unlikely, but if every possible combo collides (e.g.
+  // tens of thousands of accounts), append a counter.
+  return MAN_NOUN[manRandomInt(MAN_NOUN.length)] + Date.now().toString(36);
 }
 
 function manRandomPassword() {
-  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const lower = 'abcdefghjkmnpqrstuvwxyz';
-  const digits = '23456789';
-  const special = '!@#$%*_-+=?';
-  const all = upper + lower + digits + special;
-  const pick = set => set[manRandomInt(set.length)];
-  const chars = [pick(upper), pick(lower), pick(digits), pick(special)];
-  while (chars.length < 12) chars.push(pick(all));
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = manRandomInt(i + 1);
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-  }
-  return chars.join('');
+  // Readable but strong: Word-Word-NN! — always has upper, lower, digits and
+  // symbols, ~13-16 chars, easy to read and type (no more alphabet soup).
+  const w = () => MAN_PASS_WORDS[manRandomInt(MAN_PASS_WORDS.length)];
+  const seps = ['-', '_', '.', '#'];
+  const end = ['!', '?', '*', '#'];
+  let a = w(), b = w();
+  if (a === b) b = MAN_PASS_WORDS[(MAN_PASS_WORDS.indexOf(a) + 1 + manRandomInt(MAN_PASS_WORDS.length - 1)) % MAN_PASS_WORDS.length];
+  const num = String(10 + manRandomInt(90));
+  return a + seps[manRandomInt(seps.length)] + b + seps[manRandomInt(seps.length)] + num + end[manRandomInt(end.length)];
 }
 
 function manRenderCreds() {
@@ -5183,15 +6812,18 @@ async function manGen() {
   const genBtn = document.getElementById('man-gen-btn');
   if (genBtn) genBtn.disabled = true;
   manSetStatus('load', '<div class="spin"></div>' + esc(t('gen.man.checking')));
+  // Generate a username that is BOTH unused locally and free on Roblox itself
+  // (the Roblox username-validation endpoint: code 0 = available, code 1 =
+  // already in use, other codes = invalid format).
   let username = manRandomUsername();
   for (let i = 0; i < 20; i++) {
     try {
       const res = await api.robloxGet('https://auth.roblox.com/v1/usernames/validate?Username=' + encodeURIComponent(username) + '&Birthday=2000-01-01');
       const code = res && res.data && res.data.code;
-      if (code === 0) break;
-      username = manRandomUsername();
+      if (code === 0) break; // free on Roblox → done
+      username = manRandomUsername(); // taken or invalid → try another
     } catch {
-      break;
+      break; // offline / rate-limited → accept the generated one rather than block
     }
   }
   _manualCreds = { username, password: manRandomPassword() };
@@ -5275,7 +6907,7 @@ function manDiscard() {
 let _genHistory = [];
 let _lastGenData = null;
 let _ghQuery = '';
-let _ghFilter = 'all';
+let _ghFilter = 'all'; // all | ok | err
 
 const GH_ITEM_H = 36;
 const GH_VISIBLE = 4;
@@ -5313,12 +6945,14 @@ function ghTime(ts) {
 function ghRowHtml(h, i) {
   if (h.ok === false) {
     return '<div class="gen-hist-item err" data-idx="' + i + '">' +
-      '<span class="gh-user"><span class="gh-badge err">' + esc(t('gen.histErr')) + '</span> ' + esc(h.error || t('gen.genFailed')) + '</span>' +
+      '<span class="gh-user"><span class="gh-badge err">' + esc(t('gen.histErr')) + '</span> ' + esc(h.error || t('gen.genFailed')) + (h.key ? ' <span style="color:var(--t3)">· ' + esc(h.key) + '</span>' : '') + '</span>' +
       '<span class="gh-time">' + esc(ghTime(h.ts)) + '</span>' +
-      '<div class="gh-actions"><button class="btn btn-ghost" onclick="genHistRegen(' + i + ')"><span class="material-icons-round" style="font-size:15px">refresh</span></button></div></div>';
+      '<div class="gh-actions">' +
+        '<button class="btn btn-ghost" onclick="genHistRegen(' + i + ')"><span class="material-icons-round" style="font-size:15px">refresh</span></button>' +
+      '</div></div>';
   }
   return '<div class="gen-hist-item" data-idx="' + i + '">' +
-    '<span class="gh-user"><span style="color:var(--t3)">' + esc(t('gen.user')) + '</span> ' + esc(h.username) + '  <span style="color:var(--t3)">' + esc(t('gen.pass')) + '</span> ' + esc(h.password) + '</span>' +
+    '<span class="gh-user"><span style="color:var(--t3)">' + esc(t('gen.user')) + '</span> ' + esc(h.username) + '  <span style="color:var(--t3)">' + esc(t('gen.pass')) + '</span> ' + esc(h.password) + (h.key ? ' <span style="color:var(--t3)">· ' + esc(h.key) + '</span>' : '') + '</span>' +
     '<span class="gh-time">' + esc(ghTime(h.ts)) + '</span>' +
     '<div class="gh-actions">' +
       '<button class="btn btn-ghost" onclick="genHistCopy(' + i + ')"><span class="material-icons-round" style="font-size:15px">content_copy</span></button>' +
@@ -5374,6 +7008,7 @@ function _ghPrepend() {
   if (!list || !sc) return;
   sc.style.display = '';
   if (genHistVisible().length > GH_VISIBLE) list.style.maxHeight = (GH_ITEM_H * GH_VISIBLE) + 'px';
+  // Re-index existing rows so their onclick indices stay correct
   list.querySelectorAll('.gen-hist-item').forEach(row => {
     const old = +row.dataset.idx;
     const ni = old + 1;
@@ -5410,15 +7045,25 @@ async function genHistAdd(i) {
   } catch(e) { toast(t('acct.addFailed', { msg: e.message }), 'err'); }
 }
 
+// Switches to a saved key of the given provider prefix (BLOX-/MG_) when the
+// active one doesn't match. Returns false when no such key exists.
+function genEnsureProvider(prefix) {
+  const cur = (document.getElementById('gen-apikey').value || '').trim();
+  if (cur.startsWith(prefix)) return true;
+  const found = _genKeys.find(k => (k.key || '').trim().startsWith(prefix));
+  if (!found) return false;
+  genSelectKey(found.id);
+  return true;
+}
+
+// Re-runs the same provider + account type as the stored generation.
 function genHistRegen(i) {
   const h = genHistVisible()[i];
   if (!h) return;
   if (h.provider === 'altgen') {
-    const key = (document.getElementById('gen-apikey').value || '').trim();
-    if (!key.startsWith('MG_')) { toast(t('gen.needAltgenKey'), 'err'); return; }
+    if (!genEnsureProvider('MG_')) { toast(t('gen.needAltgenKey'), 'err'); return; }
   } else if (h.provider === 'bloxgen') {
-    const key = (document.getElementById('gen-apikey').value || '').trim();
-    if (!key.startsWith('BLOX-')) { toast(t('gen.needBloxgenKey'), 'err'); return; }
+    if (!genEnsureProvider('BLOX-')) { toast(t('gen.needBloxgenKey'), 'err'); return; }
     if (h.type && GEN_TYPE_I18N[h.type]) genSetType(h.type, null, null);
   }
   genCombo();
@@ -5804,7 +7449,7 @@ async function installUpdate() {
 
 // ── Exploits page (WEAO directory) ────────────────────────────────────────
 let _exploits = null;
-let _exploitsTab = 'all';
+let _exploitsTab = 'exec';
 
 function exploitsTab(tab) {
   _exploitsTab = tab;
@@ -5844,6 +7489,8 @@ function renderExploits() {
   if (platform) items = items.filter(e => e.platform === platform);
   if (statusF === 'updated') items = items.filter(e => !!e.updateStatus);
   if (statusF === 'notupdated') items = items.filter(e => !e.updateStatus);
+  // Hierarchy: the most-used/stable executors are pinned on top (in order),
+  // then the rest ranked by highest sUNC% first, then by name.
   const PRIORITY = ['Wave', 'Madium', 'Potassium', 'Volt', 'Real'];
   items = items.slice().sort((a, b) => {
     const ia = PRIORITY.indexOf(a.title);

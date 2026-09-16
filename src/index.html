@@ -337,6 +337,19 @@
           <!-- ══ Section 1: automatic generator (paid APIs) ══ -->
           <div class="sc gen-sec">
             <div class="sc-head"><span class="material-icons-round">bolt</span><span data-i18n="gen.autoHead">Automatic generator</span></div>
+            <div class="sr" id="gen-keys-row">
+              <div class="sr-left"><div class="sr-label" data-i18n="gen.keyProfile">Active key</div><div class="sr-desc" id="gen-cooldown-label"></div></div>
+              <select id="gen-key-select" class="srv-select" onchange="genSelectKey(this.value)" style="flex:1;width:auto" aria-label="Active API key"></select>
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genAddKey()" data-i18n-title="gen.keyAdd" title="Add API key">
+                <span class="material-icons-round" style="font-size:15px">add</span>
+              </button>
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genRenameKey()" data-i18n-title="gen.keyRename" title="Rename key">
+                <span class="material-icons-round" style="font-size:15px">edit</span>
+              </button>
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genRemoveKey()" data-i18n-title="gen.keyRemove" title="Remove key">
+                <span class="material-icons-round" style="font-size:15px">delete</span>
+              </button>
+            </div>
             <div class="sr">
               <div class="sr-left"><div class="sr-label" data-i18n="gen.apiKey">API key</div></div>
               <input type="password" id="gen-apikey" class="sr-input" data-i18n-ph="gen.apiKeyPh" data-i18n-aria="gen.apiKey" placeholder="BLOX-XXXX... or MG_XXXX..." aria-label="BloxGen or Altgen API key" oninput="genOnKeyInput()" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1)"/>
@@ -345,7 +358,7 @@
               </button>
             </div>
             <div class="sr" id="gen-type-row" style="display:none">
-              <div class="sr-left"><div class="sr-label" data-i18n="gen.type">Account type</div><div class="sr-desc" id="gen-type-desc" data-i18n="gen.altDesc">Fresh alt accounts</div></div>
+              <div class="sr-left"><div class="sr-label" data-i18n="gen.type">Account type</div><div class="sr-desc" id="gen-type-desc" data-i18n="gen.altDesc">Fresh alt accounts</div><div class="sr-desc" id="gen-stock-label"></div></div>
               <div class="cdd" id="cdd-gentype" style="width:170px">
                 <div class="cdd-trigger" id="cdd-gentype-trigger" onclick="toggleCdd('gentype')" role="button" tabindex="0" data-i18n-aria="gen.type" aria-label="Account type">
                   <span class="cdd-label" id="cdd-gentype-label" data-i18n="gen.alt">Alt</span>
@@ -370,7 +383,10 @@
                 </div>
               </div>
             </div>
-            <div style="display:flex;justify-content:flex-end;padding:12px 14px">
+            <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 14px">
+            <button id="gen-watch-btn" class="btn btn-ghost" style="height:34px;font-size:12.5px" onclick="genToggleWatch()" data-i18n-title="gen.watch" title="Watch stock">
+              <span class="material-icons-round" style="font-size:15px">notifications</span><span id="gen-watch-label" data-i18n="gen.watch">Watch stock</span>
+            </button>
             <button id="gen-btn" class="btn btn-primary" style="height:34px;font-size:12.5px" onclick="genCombo()">
                           <span class="material-icons-round" style="font-size:15px">bolt</span><span data-i18n="gen.generate">Generate</span>
                         </button>

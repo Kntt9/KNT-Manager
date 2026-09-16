@@ -52,7 +52,7 @@ Requirements: [Rust](https://rustup.rs) (stable), [Node.js](https://nodejs.org),
 build.bat
 ```
 
-That produces `dist\KNT-Manager.exe` (plus `dist\MultiRoblox.exe` for compatibility). The frontend lives in `src/` and is embedded at compile time — rebuild after any UI change.
+That produces `dist\KNT-Manager.exe`. The frontend lives in `src/` and is embedded at compile time — rebuild after any UI change.
 
 ## 📁 Project structure
 

@@ -449,7 +449,7 @@ async function continueInit() {
   if (settings.autoBackup) { settings.autoBackup.enabled = false; }
   renderBackupHistory();
   logEntry('info', 'system', 'KNT Manager started', { version: 'v1', accounts: accounts.length, platform: navigator.platform });
-  try { const k = localStorage.getItem('bloxgen_apikey'); if (k) { const el = document.getElementById('gen-apikey'); if (el) el.value = k; } } catch {}
+  try { genKeysInit(); } catch {}
   genOnKeyInput();
   try {
     const saved = localStorage.getItem('mr_manual_creds');
@@ -1208,20 +1208,140 @@ function openDiscord() {
   document.body.classList.toggle('high-contrast', _highContrast());
 })();
 
-// ── BloxGen API key persistence ────────────────────────────────────────────
+// ── API key profiles + per-key cooldown ────────────────────────────────────
+// Multiple BloxGen/Altgen keys can be saved (e.g. 4 free BloxGen accounts to
+// rotate around the 30-minute cooldown). Profiles live in localStorage; the
+// old single-key value is migrated into "Conta 1" on first run.
+const FREE_ALT_CD_MS = 30 * 60 * 1000;
+let _genKeys = [];
+let _genKeysReady = false;
+
+function _genUid() { return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function genKeysLoad() { try { const raw = localStorage.getItem('bloxgen_keys'); const arr = raw ? JSON.parse(raw) : null; if (Array.isArray(arr)) return arr.filter(k => k && typeof k.key === 'string'); } catch {} return null; }
+function genKeysSave() { try { localStorage.setItem('bloxgen_keys', JSON.stringify(_genKeys)); } catch {} }
+function genActiveId() { try { return localStorage.getItem('bloxgen_active') || null; } catch { return null; } }
+function genSetActiveId(id) { try { localStorage.setItem('bloxgen_active', id); } catch {} }
+function genActiveKey() { let k = _genKeys.find(x => x.id === genActiveId()); if (!k && _genKeys.length) k = _genKeys[0]; return k || null; }
+function genMask(key) { const s = (key || '').trim(); if (s.length <= 4) return s ? '····' : '—'; return '···' + s.slice(-4); }
+
+function genKeysInit() {
+  if (_genKeysReady) return;
+  _genKeysReady = true;
+  const stored = genKeysLoad();
+  if (stored && stored.length) { _genKeys = stored; }
+  else {
+    let old = '';
+    try { old = localStorage.getItem('bloxgen_apikey') || ''; } catch {}
+    _genKeys = [{ id: _genUid(), label: 'Conta 1', key: old }];
+    genKeysSave();
+    if (old) { try { localStorage.removeItem('bloxgen_apikey'); } catch {} }
+  }
+  if (!genActiveId() || !_genKeys.some(k => k.id === genActiveId())) genSetActiveId(_genKeys[0].id);
+  genRenderKeySelect();
+  const inp = document.getElementById('gen-apikey');
+  const act = genActiveKey();
+  if (inp && act && !inp.value) inp.value = act.key || '';
+  genOnKeyInput();
+  genKeysTick();
+  // Immediate stock readout for the active key (genOnKeyInput only schedules
+  // a debounced one for typing, so cancel it and fetch now).
+  try { clearTimeout(window._genStockT); } catch {}
+  genRefreshStock();
+  try { if (!window._genCdTimer) window._genCdTimer = setInterval(genKeysTick, 1000); } catch {}
+}
+
+function genRenderKeySelect() {
+  const sel = document.getElementById('gen-key-select');
+  if (!sel) return;
+  const aid = genActiveId();
+  sel.innerHTML = '';
+  _genKeys.forEach(k => {
+    const o = document.createElement('option');
+    o.value = k.id;
+    o.textContent = (k.label || 'Conta') + ' (' + genMask(k.key) + ')';
+    if (k.id === aid) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function genSelectKey(id) {
+  if (_genWatch && id !== _genWatch.keyId) genStopWatch(false);
+  genSetActiveId(id);
+  const k = genActiveKey();
+  const inp = document.getElementById('gen-apikey');
+  if (inp) inp.value = (k && k.key) || '';
+  genOnKeyInput();
+  genRefreshStock();
+}
+
+function genAddKey() {
+  const k = { id: _genUid(), label: 'Conta ' + (_genKeys.length + 1), key: '' };
+  _genKeys.push(k); genKeysSave(); genSetActiveId(k.id);
+  genRenderKeySelect();
+  const inp = document.getElementById('gen-apikey');
+  if (inp) { inp.value = ''; inp.focus(); }
+  genOnKeyInput();
+}
+function genRenameKey() {
+  const k = genActiveKey(); if (!k) return;
+  const name = prompt(t('gen.keyName'), k.label || '');
+  if (name === null) return;
+  if (name.trim()) k.label = name.trim();
+  genKeysSave(); genRenderKeySelect(); genKeysTick();
+}
+function genRemoveKey() {
+  const k = genActiveKey(); if (!k) return;
+  _genKeys = _genKeys.filter(x => x.id !== k.id);
+  if (!_genKeys.length) _genKeys = [{ id: _genUid(), label: 'Conta 1', key: '' }];
+  genKeysSave(); genSetActiveId(_genKeys[0].id);
+  genRenderKeySelect();
+  const inp = document.getElementById('gen-apikey');
+  if (inp) inp.value = genActiveKey().key || '';
+  genOnKeyInput();
+}
+
+// Cooldown deadlines per profile id (persisted so they survive restarts).
+function genCdMap() { try { return JSON.parse(localStorage.getItem('bloxgen_cooldowns') || '{}') || {}; } catch { return {}; } }
+function genCdGet(id) { const m = genCdMap(); return m[id] || 0; }
+function genCdSet(id, deadline) { try { const m = genCdMap(); m[id] = deadline; localStorage.setItem('bloxgen_cooldowns', JSON.stringify(m)); } catch {} }
+function genCdLeft(id) { return Math.max(0, genCdGet(id) - Date.now()); }
+function genFmtMs(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60), r = s % 60;
+  if (m < 60) return m + 'm ' + String(r).padStart(2, '0') + 's';
+  return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+}
+// Live countdown under the active key: selecting a key that was used minutes
+// ago immediately shows exactly how long is left.
+function genKeysTick() {
+  const lbl = document.getElementById('gen-cooldown-label');
+  if (!lbl) return;
+  const k = genActiveKey();
+  if (!k || !(k.key || '').trim()) { lbl.textContent = ''; return; }
+  const left = genCdLeft(k.id);
+  lbl.textContent = left > 0
+    ? t('gen.keyInCooldown', { label: k.label, t: genFmtMs(left) })
+    : t('gen.keyReady', { label: k.label });
+  // Watch armed: refresh its elapsed timer on the same 1s tick.
+  if (typeof _genWatch !== 'undefined' && _genWatch) genWatchUi();
+}
 (function() {
-  try {
-    const saved = localStorage.getItem('bloxgen_apikey');
-    if (saved) {
-      const el = document.getElementById('gen-apikey');
-      if (el) el.value = saved;
-    }
-  } catch {}
+  const boot = () => { try { genKeysInit(); } catch {} };
+  if (document.readyState === 'complete' || document.readyState === 'interactive') boot();
+  else document.addEventListener('DOMContentLoaded', boot);
 })();
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('gen-apikey');
   if (el) el.addEventListener('input', () => {
-    try { localStorage.setItem('bloxgen_apikey', el.value); } catch {}
+    try {
+      if (_genKeys.length) {
+        const k = genActiveKey();
+        if (k) { k.key = el.value; genKeysSave(); }
+      } else {
+        localStorage.setItem('bloxgen_apikey', el.value);
+      }
+    } catch {}
   });
 });
 
@@ -1742,17 +1862,23 @@ function ensureCardUp(card, id) {
 // Moves the rendered cards so running instances float to the top, without a
 // full re-render (no entrance-animation replay / grid flicker). Stable sort:
 // non-running cards keep their relative order, so drag reorder survives.
+// With folders each folder body sorts internally; the flat grid sorts at root.
 function reorderCardsByStatus() {
   const grid = document.getElementById('grid');
   if (!grid) return;
-  const addCard = grid.querySelector('.card-add');
-  const cards = Array.from(grid.querySelectorAll('.card[data-id]'));
-  if (cards.length < 2) return;
-  cards.sort((a, b) => (_launchedIds.has(a.dataset.id) ? 0 : 1) - (_launchedIds.has(b.dataset.id) ? 0 : 1));
-  const frag = document.createDocumentFragment();
-  cards.forEach(c => frag.appendChild(c));
-  if (addCard) grid.insertBefore(frag, addCard);
-  else grid.appendChild(frag);
+  const bodies = Array.from(grid.querySelectorAll('.folder-body'));
+  const scopes = bodies.length ? bodies : [grid];
+  const addCard = grid.querySelector(':scope > .card-add');
+  scopes.forEach(scope => {
+    const cards = Array.from(scope.querySelectorAll(':scope > .card[data-id]'));
+    if (cards.length < 2) return;
+    cards.sort((a, b) => (_launchedIds.has(a.dataset.id) ? 0 : 1) - (_launchedIds.has(b.dataset.id) ? 0 : 1));
+    const frag = document.createDocumentFragment();
+    cards.forEach(c => frag.appendChild(c));
+    if (scope === grid && addCard) grid.insertBefore(frag, addCard);
+    else scope.appendChild(frag);
+  });
+  updateFolderCounts();
 }
 
 function markLaunched(id) {
@@ -2026,24 +2152,112 @@ function _catTagHtml(a) {
   return `<div class="card-cat" style="--cc:${col}"><span class="cat-dot" style="background:${col}"></span>${esc(c.name)}</div>`;
 }
 
-function render() {
-  const grid = document.getElementById('grid'), empty = document.getElementById('empty'), sub = document.getElementById('acct-sub');
-  const savedTxt = accounts.length ? t('accounts.savedCount', { n: accounts.length, s: accounts.length !== 1 ? 's' : '' }) : t('accounts.none');
-  sub.textContent = savedTxt;
-  const savedCount = document.getElementById('sb-saved-count');
-  if (savedCount) savedCount.textContent = savedTxt;
-  const savedTime = document.getElementById('sb-saved-time'); if (savedTime) savedTime.textContent = t('nav.savedTime');
-  if (!accounts.length) { grid.innerHTML = ''; empty.style.display = 'flex'; return; }
-  empty.style.display = 'none';
-  const list = visibleAccounts();
-  grid.classList.toggle('list-view', _acctView === 'list');
-  grid.classList.toggle('compact-view', _acctView === 'compact');
-  if (!list.length) {
-    grid.classList.remove('list-view');
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--t3);font-size:12.5px;padding:40px 0">' + esc(t('accounts.noMatch')) + '</div>';
+// ── Folders (accounts grouped by category) ─────────────────────────────────
+// Nível 1: reuses the existing categories as collapsible folder sections.
+// No data migration: moving a card across folders just changes categoryId.
+function getCollapsedFolders() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('mr-folder-collapsed') || '[]');
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch { return new Set(); }
+}
+function toggleFolder(key) {
+  const set = getCollapsedFolders();
+  if (set.has(key)) set.delete(key); else set.add(key);
+  try { localStorage.setItem('mr-folder-collapsed', JSON.stringify([...set])); } catch {}
+  const f = document.querySelector(`#grid .folder[data-cat="${CSS.escape(key)}"]`);
+  if (f) f.classList.toggle('collapsed', set.has(key));
+}
+// Groups the visible list by category (settings order, uncategorized last).
+// Orphaned categoryIds (category deleted but account kept it) fall back to
+// the uncategorized group instead of vanishing.
+function groupAccountsByFolder(list) {
+  const groups = [];
+  const byKey = new Map();
+  for (const a of list) {
+    let key = a.categoryId || 'none';
+    if (key !== 'none' && !categories.some(c => c.id === key)) key = 'none';
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, cat: key === 'none' ? null : categories.find(c => c.id === key), cards: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.cards.push(a);
+  }
+  groups.sort((x, y) => {
+    if (x.key === 'none') return 1;
+    if (y.key === 'none') return -1;
+    return categories.findIndex(c => c.id === x.key) - categories.findIndex(c => c.id === y.key);
+  });
+  return groups;
+}
+function folderHtml(g, viewCls) {
+  const collapsed = getCollapsedFolders().has(g.key);
+  const run = g.cards.filter(a => _launchedIds.has(a.id)).length;
+  const color = g.cat ? (g.cat.color || catColor(g.cat.id)) : 'var(--t3)';
+  const name = g.cat ? g.cat.name : t('accounts.noCategory');
+  return `<div class="folder${collapsed ? ' collapsed' : ''}" data-cat="${esc(g.key)}">
+    <div class="folder-head" onclick="toggleFolder('${esc(g.key)}')">
+      <span class="material-icons-round folder-chev">expand_more</span>
+      <span class="folder-dot" style="background:${esc(color)}"></span>
+      <span class="folder-name">${esc(name)}</span>
+      <span class="folder-count"><b>${run}</b> / ${g.cards.length}</span>
+      <span class="folder-sp"></span>
+      <button class="btn btn-ghost folder-launch" onclick="event.stopPropagation();folderLaunch('${esc(g.key)}')" title="${esc(t('folders.launch'))}" aria-label="${esc(t('folders.launch'))}">
+        <span class="material-icons-round" style="font-size:14px">play_arrow</span><span>${esc(t('folders.launch'))}</span>
+      </button>
+    </div>
+    <div class="grid folder-body${viewCls}" data-cat="${esc(g.key)}">${g.cards.map((a, i) => cardHtml(a, i)).join('')}</div>
+  </div>`;
+}
+// Recomputes the running/total pills after live status changes (the push
+// handlers move cards without a full render).
+function updateFolderCounts() {
+  document.querySelectorAll('#grid .folder').forEach(f => {
+    const cards = f.querySelectorAll('.card[data-id]');
+    let run = 0;
+    cards.forEach(c => { if (_launchedIds.has(c.dataset.id)) run++; });
+    const el = f.querySelector('.folder-count');
+    if (el) el.innerHTML = '<b>' + run + '</b> / ' + cards.length;
+  });
+}
+let _folderLaunchBusy = false;
+async function folderLaunch(key) {
+  if (_folderLaunchBusy) return;
+  const inFolder = a => {
+    let k = a.categoryId || 'none';
+    if (k !== 'none' && !categories.some(c => c.id === k)) k = 'none';
+    return k === key;
+  };
+  const idle = accounts.filter(a => inFolder(a) && !_launchedIds.has(a.id) && a.cookie);
+  if (!idle.length) { toast(t('folders.nothingToLaunch'), 'err'); return; }
+  if (settings.multiInstance === false && (idle.length > 1 || _launchedIds.size > 0)) {
+    toast(t('settings.multiInstanceBlocked'), 'err');
     return;
   }
-  grid.innerHTML = list.map((a, i) => `
+  _folderLaunchBusy = true;
+  let ok = 0;
+  for (const a of idle) {
+    const target = a.gameTarget || null;
+    logEntry('info', 'launch', `Launching Roblox for ${a.username || a.id} (folder)...`, { accountId: a.id, username: a.username || null, userId: a.userId || null, target: target || 'Roblox home' });
+    let res = null;
+    try { res = await api.launchRoblox(a.id, a.cookie, target); } catch (e) { res = { success: false, error: e?.message || String(e) }; }
+    if (res && res.success) {
+      ok++;
+      logEntry('ok', 'launch', `Roblox launched successfully as ${a.username || a.id} (folder)`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
+      markLaunched(a.id);
+    } else if (res && !res.cancelled) {
+      logEntry('err', 'launch', `Launch failed for ${a.username || a.id} (folder): ${res.error}`, { accountId: a.id });
+      _flagCookieMaybeDead(a.id, res.error);
+    }
+  }
+  _folderLaunchBusy = false;
+  pollRunningCount();
+  toast(t('folders.launchedN', { ok, total: idle.length }), ok > 0 ? 'ok' : 'err');
+}
+function cardHtml(a, i) {
+  return `
     <div class="card${_launchedIds.has(a.id) ? ' is-live' : ''}${_homeIds.has(a.id) ? ' is-home' : ''}${_cookieStatus[a.id] === 'dead' ? ' cookie-dead' : ''}${_selectMode && _selectedIds.has(a.id) ? ' is-selected' : ''}${_selectMode ? ' select-mode' : ''}" data-id="${a.id}" style="animation-delay:${Math.min(i, 20) * 18}ms" onclick="${_selectMode ? `if(!event.target.closest('button'))toggleSelectCard('${a.id}')` : ''}">
       ${_selectMode ? `<div class="card-check${_selectedIds.has(a.id) ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelectCard('${a.id}')"><span class="material-icons-round">check</span></div>` : ''}
       <div class="card-dot${_launchedIds.has(a.id) ? ' launched' : ''}${_homeIds.has(a.id) ? ' home' : ''}" title="${_homeIds.has(a.id) ? esc(t('accounts.home')) : (_launchedIds.has(a.id) ? esc(t('accounts.launched')) : esc(t('accounts.notLaunched')))}"></div>
@@ -2074,7 +2288,39 @@ function render() {
           <span class="material-icons-round">delete_outline</span>
         </button>
       </div>
-    </div>`).join('') + `<div class="card-add" onclick="openLogin()"><span class="material-icons-round card-add-icon">add</span><span class="card-add-label">Add account</span></div>`;
+    </div>`;
+}
+function render() {
+  const grid = document.getElementById('grid'), empty = document.getElementById('empty'), sub = document.getElementById('acct-sub');
+  const savedTxt = accounts.length ? t('accounts.savedCount', { n: accounts.length, s: accounts.length !== 1 ? 's' : '' }) : t('accounts.none');
+  sub.textContent = savedTxt;
+  const savedCount = document.getElementById('sb-saved-count');
+  if (savedCount) savedCount.textContent = savedTxt;
+  const savedTime = document.getElementById('sb-saved-time'); if (savedTime) savedTime.textContent = t('nav.savedTime');
+  if (!accounts.length) { grid.innerHTML = ''; empty.style.display = 'flex'; return; }
+  empty.style.display = 'none';
+  const list = visibleAccounts();
+  grid.classList.toggle('list-view', _acctView === 'list');
+  grid.classList.toggle('compact-view', _acctView === 'compact');
+  if (!list.length) {
+    grid.classList.remove('list-view');
+    grid.classList.remove('has-folders');
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--t3);font-size:12.5px;padding:40px 0">' + esc(t('accounts.noMatch')) + '</div>';
+    return;
+  }
+  const viewCls = _acctView === 'list' ? ' list-view' : _acctView === 'compact' ? ' compact-view' : '';
+  const groups = groupAccountsByFolder(list);
+  const addTile = `<div class="card-add" onclick="openLogin()"><span class="material-icons-round card-add-icon">add</span><span class="card-add-label">Add account</span></div>`;
+  // Folder mode when there is anything to group by: several groups, or a
+  // single categorized one. A lone uncategorized list keeps the classic flat
+  // grid so users without categories see zero visual change.
+  if (groups.length > 1 || (groups.length === 1 && groups[0].cat)) {
+    grid.classList.add('has-folders');
+    grid.innerHTML = groups.map(g => folderHtml(g, viewCls)).join('') + addTile;
+  } else {
+    grid.classList.remove('has-folders');
+    grid.innerHTML = list.map((a, i) => cardHtml(a, i)).join('') + addTile;
+  }
   loadAvatarsBatch(list);
   list.forEach(a => { if (a.gameTarget && !_gameNameCache[a.id]) fetchGameName(a.id, a.gameTarget); });
   checkCookieHealth(list);
@@ -2569,7 +2815,7 @@ function updateGameLabel(accountId) {
 function truncate(s, n) { return s.length > n ? s.slice(0, n) + '\u2026' : s; }
 
 let _dragSaveTimer = null;
-let _dragging = null, _dragClone = null, _dragOffX = 0, _dragOffY = 0, _dragOverId = null;
+let _dragging = null, _dragClone = null, _dragOffX = 0, _dragOffY = 0, _dragOverId = null, _dragFromCat = null;
 
 function initDrag() {
   const grid = document.getElementById('grid');
@@ -2584,6 +2830,7 @@ function initDrag() {
       e.preventDefault();
 
       _dragging = card;
+      _dragFromCat = card.closest('.folder')?.dataset.cat || null;
       const rect = card.getBoundingClientRect();
       _dragOffX = e.clientX - rect.left;
       _dragOffY = e.clientY - rect.top;
@@ -2634,13 +2881,14 @@ function onDragMove(e) {
   if (newId === _dragOverId) return; // already settled against this neighbour
   _dragOverId = newId;
 
-  // Move the dragged node in place instead of a full re-render.
+  // Move the dragged node in place instead of a full re-render. The drop
+  // container is the target's own parent, so cards can move across folders.
   const grid = document.getElementById('grid');
   const cards = Array.from(grid.querySelectorAll('.card[data-id]'));
   const srcPos = cards.indexOf(_dragging);
   const tgtPos = cards.indexOf(target);
   if (srcPos < 0 || tgtPos < 0) return;
-  grid.insertBefore(_dragging, srcPos < tgtPos ? target.nextSibling : target);
+  target.parentNode.insertBefore(_dragging, srcPos < tgtPos ? target.nextSibling : target);
   _syncAccountsOrderFromDom();
 }
 
@@ -2661,8 +2909,23 @@ function onDragEnd() {
   document.removeEventListener('mouseup', onDragEnd);
 
   if (_dragClone) { _dragClone.remove(); _dragClone = null; }
-  if (_dragging) { _dragging.style.opacity = ''; _dragging = null; }
+  // Dropped into another folder: adopt the target folder's category.
+  if (_dragging) {
+    _dragging.style.opacity = '';
+    const toCat = _dragging.closest('.folder')?.dataset.cat || null;
+    if (toCat !== _dragFromCat) {
+      const id = _dragging.dataset.id;
+      const a = accounts.find(x => x.id === id);
+      const newCat = toCat && toCat !== 'none' ? toCat : null;
+      if (a && (a.categoryId || null) !== newCat) {
+        a.categoryId = newCat;
+        api.updateAccount(id, { categoryId: newCat }).catch(() => {});
+      }
+    }
+    _dragging = null;
+  }
   _dragOverId = null;
+  _dragFromCat = null;
 
   // settle the DOM and rebind the drag handlers with one render
   render();
@@ -6168,9 +6431,22 @@ let _genType = 'alt';
 // tiers in what this app sends it), so the row hides itself for an Altgen
 // key instead of showing a control that does nothing.
 function genOnKeyInput() {
-  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  const inp = document.getElementById('gen-apikey');
+  const apiKey = ((inp && inp.value) || '').trim();
+  const k = genActiveKey();
+  if (k && (k.key || '') !== (inp ? inp.value : '')) { k.key = inp ? inp.value : ''; genKeysSave(); genRenderKeySelect(); }
   const row = document.getElementById('gen-type-row');
   if (row) row.style.display = apiKey.startsWith('BLOX-') ? '' : 'none';
+  genKeysTick();
+  // Debounced stock readout while typing a key (not on every keystroke).
+  try { clearTimeout(window._genStockT); } catch {}
+  try {
+    window._genStockT = setTimeout(() => {
+      const cur = ((document.getElementById('gen-apikey') || {}).value || '').trim();
+      if (cur.startsWith('BLOX-') && cur.length > 10) genRefreshStock();
+      else { const l = document.getElementById('gen-stock-label'); if (l) l.textContent = ''; }
+    }, 1000);
+  } catch {}
 }
 
 // Value -> i18n key pairs for the account-type dropdown; the passed label/desc
@@ -6183,6 +6459,7 @@ const GEN_TYPE_I18N = {
   'dump': ['gen.dump', 'gen.dumpDesc'],
 };
 function genSetType(value, label, desc) {
+  if (_genWatch && value !== _genWatch.type) genStopWatch(false);
   _genType = value;
   const keys = GEN_TYPE_I18N[value] || ['gen.alt', 'gen.altDesc'];
   const lbl = document.getElementById('cdd-gentype-label');
@@ -6194,13 +6471,97 @@ function genSetType(value, label, desc) {
   });
   try { localStorage.setItem('bloxgen_type', value); } catch {}
   closeAllCdd();
+  genRefreshStock();
+}
+
+// Live stock readout from the server (GET /api/stock): shows whether the
+// selected type is actually available before spending a generate call.
+// Free accounts only ever see `alt` here; regions stay empty below Ultra.
+async function genBloxgenStock(apiKey) {
+  try {
+    const resp = await fetch('https://core.bloxgen.net/api/stock?apiKey=' + encodeURIComponent(apiKey));
+    const j = await resp.json();
+    if (j && j.success && j.data) return j.data;
+  } catch {}
+  return null;
+}
+async function genRefreshStock() {
+  const lbl = document.getElementById('gen-stock-label');
+  if (!lbl) return;
+  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  if (!apiKey.startsWith('BLOX-')) { lbl.textContent = ''; return; }
+  lbl.style.color = '';
+  lbl.textContent = t('gen.stockChecking');
+  const data = await genBloxgenStock(apiKey);
+  // Key or type changed while fetching -- drop the stale answer.
+  const cur = (document.getElementById('gen-apikey').value || '').trim();
+  if (cur !== apiKey) return;
+  if (!data || !data[_genType]) { lbl.textContent = ''; return; }
+  const ok = data[_genType].available === true;
+  lbl.textContent = ok ? t('gen.stockYes', { type: _genType }) : t('gen.stockNo', { type: _genType });
+  lbl.style.color = ok ? 'var(--ok, #22c55e)' : 'var(--warn, #f59e0b)';
+}
+
+// ── Stock watch: auto-generate the moment a wave restocks ──────────────────
+// Free API stock arrives in waves ("Restocks on Discord") and is consumed in
+// seconds, so clicking Generate manually almost always loses. Arming the watch
+// polls /api/stock every 30s and fires one generate with the armed key+type
+// when it turns available. Session-only: it never survives a restart.
+let _genWatch = null; // { keyId, type, started, timer }
+function genToggleWatch() {
+  if (_genWatch) { genStopWatch(false); return; }
+  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  if (!apiKey.startsWith('BLOX-')) { toast(t('gen.apiKeyBad'), 'err'); return; }
+  const prof = genActiveKey();
+  _genWatch = { keyId: prof ? prof.id : null, type: _genType, started: Date.now(), timer: null };
+  genWatchUi();
+  toast(t('gen.watchOn', { type: _genType }), 'ok');
+  genWatchPoll();
+  _genWatch.timer = setInterval(genWatchPoll, 30000);
+}
+async function genWatchPoll() {
+  if (!_genWatch) return;
+  const prof = genActiveKey();
+  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  // Key switched or cleared mid-watch: stand down instead of ever firing a
+  // generate on a credential the user didn't arm.
+  if (!prof || prof.id !== _genWatch.keyId || apiKey !== (prof.key || '').trim()) { genStopWatch(false); return; }
+  if (_genType !== _genWatch.type) { genStopWatch(false); return; }
+  const stock = await genBloxgenStock(apiKey);
+  if (!_genWatch) return;
+  if (stock && stock[_genWatch.type] && stock[_genWatch.type].available === true) {
+    _genWatch = null;
+    genWatchUi();
+    toast(t('gen.stockFound'), 'ok');
+    genCombo();
+  }
+}
+function genStopWatch(silent) {
+  if (!_genWatch) return;
+  clearInterval(_genWatch.timer);
+  _genWatch = null;
+  genWatchUi();
+  if (!silent) toast(t('gen.watchOff'), 'warn');
+}
+function genWatchUi() {
+  const btn = document.getElementById('gen-watch-btn');
+  if (!btn) return;
+  btn.classList.toggle('btn-primary', !!_genWatch);
+  btn.classList.toggle('btn-ghost', !_genWatch);
+  const lbl = document.getElementById('gen-watch-label');
+  if (lbl) lbl.textContent = _genWatch
+    ? t('gen.watching', { t: genElapsed(Date.now() - _genWatch.started) })
+    : t('gen.watch');
+}
+function genElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 }
 
 // Provider is auto-detected from the key's prefix so the single API-key field
 // works for either service: BLOX- = BloxGen, MG_ = Altgen (altgen.me/docs).
 async function genCombo() {
   const apiKey = (document.getElementById('gen-apikey').value || '').trim();
-  try { localStorage.setItem('bloxgen_apikey', document.getElementById('gen-apikey').value); } catch {}
 
   let provider;
   if (apiKey.startsWith('BLOX-')) provider = 'bloxgen';
@@ -6208,6 +6569,42 @@ async function genCombo() {
   else {
     toast(t('gen.apiKeyBad'), 'err');
     return;
+  }
+  const prof = genActiveKey();
+
+  // Pre-check: a key still inside its cooldown fails immediately with the
+  // exact remaining time instead of spending an API call to get a 429.
+  if (provider === 'bloxgen' && prof) {
+    const left = genCdLeft(prof.id);
+    if (left > 0) {
+      const msg = t('gen.keyInCooldown', { label: prof.label, t: genFmtMs(left) });
+      if (_genClearPromise) await _genClearPromise;
+      _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, key: prof.label, error: msg });
+      if (_genHistory.length > 500) _genHistory.length = 500;
+      api.writeGenHistory(_genHistory).catch(() => {});
+      _ghPrepend();
+      toast(msg, 'err');
+      return;
+    }
+  }
+
+  // Stock pre-check: ask the server if this type is available at all. A
+  // confirmed "out of stock" fails immediately with an exact message instead
+  // of spending a generate call to get a 404. If the stock endpoint itself
+  // fails, generation proceeds normally (telemetry must never block it).
+  if (provider === 'bloxgen') {
+    const stock = await genBloxgenStock(apiKey);
+    if (stock && stock[_genType] && stock[_genType].available === false) {
+      const msg = t('gen.stockNo', { type: _genType }) + ' — ' + t('gen.noStock');
+      if (_genClearPromise) await _genClearPromise;
+      _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, key: prof ? prof.label : null, error: msg });
+      if (_genHistory.length > 500) _genHistory.length = 500;
+      api.writeGenHistory(_genHistory).catch(() => {});
+      _ghPrepend();
+      genRefreshStock();
+      toast(msg, 'err');
+      return;
+    }
   }
 
   const btn = document.getElementById('gen-btn');
@@ -6227,14 +6624,22 @@ async function genCombo() {
     // Store in history
     if (_genClearPromise) await _genClearPromise; // let a pending Clear's disk write land first
     _lastGenData = d;
-    _genHistory.unshift({ username: d.username, password: d.password, cookie: d.cookie, ts: Date.now(), ok: true, provider, type: _genType });
+    _genHistory.unshift({ username: d.username, password: d.password, cookie: d.cookie, ts: Date.now(), ok: true, provider, type: _genType, key: prof ? prof.label : null });
     if (_genHistory.length > 500) _genHistory.length = 500; // bound the persisted history
     api.writeGenHistory(_genHistory).catch(() => {});
     _ghPrepend();
 
-    // Copy cookie to clipboard if available, else username:password
-    const toCopy = d.cookie || (d.username + ':' + d.password);
+    // A fresh free-tier alt costs a 30-minute cooldown on this key, so arm
+    // the exact deadline now instead of waiting for the next 429 to tell us.
+    if (provider === 'bloxgen' && prof && _genType === 'alt') {
+      genCdSet(prof.id, Date.now() + FREE_ALT_CD_MS);
+      genKeysTick();
+    }
+    // A manual success supersedes any armed watch for this key.
+    if (typeof _genWatch !== 'undefined' && _genWatch) genStopWatch(true);
+    const toCopy = d.cookie || (d.username + ':' + d.password); // copy cookie if available, else username:password
     navigator.clipboard.writeText(toCopy).catch(() => {});
+    genRefreshStock();
 
     if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'Generate'; }
 
@@ -6242,24 +6647,51 @@ async function genCombo() {
     // Failed generations land in the history too so the status filter and the
     // error messages make sense for mass runs.
     if (_genClearPromise) await _genClearPromise;
-    _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, error: e.message || t('gen.genFailed') });
+    _genHistory.unshift({ username: null, password: null, cookie: null, ts: Date.now(), ok: false, provider, type: _genType, key: prof ? prof.label : null, error: e.message || t('gen.genFailed') });
     if (_genHistory.length > 500) _genHistory.length = 500;
     api.writeGenHistory(_genHistory).catch(() => {});
     _ghPrepend();
     toast(e.message || t('gen.genFailed'), 'err');
+    genRefreshStock();
     if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = t('gen.generate'); }
   }
 }
 
 async function genBloxgen(apiKey) {
-  const resp = await fetch('https://core.bloxgen.net/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey, type: _genType })
-  });
-  const data = await resp.json();
-  if (!data.success) throw new Error(data.message || data.error || t('gen.genFailed'));
-  return data.data;
+  // 503 "inventory is syncing" is transient -- retry briefly instead of
+  // surfacing it as a failure.
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 3000));
+    const resp = await fetch('https://core.bloxgen.net/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body: JSON.stringify({ apiKey, type: _genType })
+    });
+    let data = null;
+    try { data = await resp.json(); } catch { lastErr = new Error(t('gen.genFailed')); continue; }
+    if (data.success) return data.data;
+    if (resp.status === 503 && /syncing/i.test(data.message || '')) {
+      lastErr = new Error(data.message);
+      continue;
+    }
+    // Cooldown is HTTP 429 with timeRemaining in ms -- arm the exact deadline
+    // on this key so selecting it later shows precisely how long is left.
+    const prof = genActiveKey();
+    const wait = data.timeRemaining != null ? +data.timeRemaining : NaN;
+    if (resp.status === 429 && prof && !isNaN(wait)) {
+      genCdSet(prof.id, Date.now() + wait);
+      genKeysTick();
+      throw new Error(t('gen.keyInCooldown', { label: prof.label, t: genFmtMs(wait) }));
+    }
+    // Empty stock for this type: the key is valid (the API answered), there
+    // is just nothing to pull right now. Say so plainly instead of showing
+    // the raw API text alone.
+    const raw = data.message || data.error || t('gen.genFailed');
+    if (/no accounts available/i.test(raw)) throw new Error(raw + ' — ' + t('gen.noStock'));
+    throw new Error(raw);
+  }
+  throw lastErr || new Error(t('gen.genFailed'));
 }
 
 async function genAltgen(apiKey) {
@@ -6513,14 +6945,14 @@ function ghTime(ts) {
 function ghRowHtml(h, i) {
   if (h.ok === false) {
     return '<div class="gen-hist-item err" data-idx="' + i + '">' +
-      '<span class="gh-user"><span class="gh-badge err">' + esc(t('gen.histErr')) + '</span> ' + esc(h.error || t('gen.genFailed')) + '</span>' +
+      '<span class="gh-user"><span class="gh-badge err">' + esc(t('gen.histErr')) + '</span> ' + esc(h.error || t('gen.genFailed')) + (h.key ? ' <span style="color:var(--t3)">· ' + esc(h.key) + '</span>' : '') + '</span>' +
       '<span class="gh-time">' + esc(ghTime(h.ts)) + '</span>' +
       '<div class="gh-actions">' +
         '<button class="btn btn-ghost" onclick="genHistRegen(' + i + ')"><span class="material-icons-round" style="font-size:15px">refresh</span></button>' +
       '</div></div>';
   }
   return '<div class="gen-hist-item" data-idx="' + i + '">' +
-    '<span class="gh-user"><span style="color:var(--t3)">' + esc(t('gen.user')) + '</span> ' + esc(h.username) + '  <span style="color:var(--t3)">' + esc(t('gen.pass')) + '</span> ' + esc(h.password) + '</span>' +
+    '<span class="gh-user"><span style="color:var(--t3)">' + esc(t('gen.user')) + '</span> ' + esc(h.username) + '  <span style="color:var(--t3)">' + esc(t('gen.pass')) + '</span> ' + esc(h.password) + (h.key ? ' <span style="color:var(--t3)">· ' + esc(h.key) + '</span>' : '') + '</span>' +
     '<span class="gh-time">' + esc(ghTime(h.ts)) + '</span>' +
     '<div class="gh-actions">' +
       '<button class="btn btn-ghost" onclick="genHistCopy(' + i + ')"><span class="material-icons-round" style="font-size:15px">content_copy</span></button>' +
@@ -6613,16 +7045,25 @@ async function genHistAdd(i) {
   } catch(e) { toast(t('acct.addFailed', { msg: e.message }), 'err'); }
 }
 
+// Switches to a saved key of the given provider prefix (BLOX-/MG_) when the
+// active one doesn't match. Returns false when no such key exists.
+function genEnsureProvider(prefix) {
+  const cur = (document.getElementById('gen-apikey').value || '').trim();
+  if (cur.startsWith(prefix)) return true;
+  const found = _genKeys.find(k => (k.key || '').trim().startsWith(prefix));
+  if (!found) return false;
+  genSelectKey(found.id);
+  return true;
+}
+
 // Re-runs the same provider + account type as the stored generation.
 function genHistRegen(i) {
   const h = genHistVisible()[i];
   if (!h) return;
   if (h.provider === 'altgen') {
-    const key = (document.getElementById('gen-apikey').value || '').trim();
-    if (!key.startsWith('MG_')) { toast(t('gen.needAltgenKey'), 'err'); return; }
+    if (!genEnsureProvider('MG_')) { toast(t('gen.needAltgenKey'), 'err'); return; }
   } else if (h.provider === 'bloxgen') {
-    const key = (document.getElementById('gen-apikey').value || '').trim();
-    if (!key.startsWith('BLOX-')) { toast(t('gen.needBloxgenKey'), 'err'); return; }
+    if (!genEnsureProvider('BLOX-')) { toast(t('gen.needBloxgenKey'), 'err'); return; }
     if (h.type && GEN_TYPE_I18N[h.type]) genSetType(h.type, null, null);
   }
   genCombo();

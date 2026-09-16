@@ -22,12 +22,11 @@ if errorlevel 1 (echo Build failed & pause & exit /b 1)
 if not exist dist mkdir dist
 copy /y "src-tauri\target\release\MultiRoblox.exe" "dist\KNT-Manager.exe" >nul
 if errorlevel 1 (echo Could not copy KNT-Manager.exe & pause & exit /b 1)
-copy /y "src-tauri\target\release\MultiRoblox.exe" "dist\MultiRoblox.exe" >nul
-if errorlevel 1 (echo Could not copy MultiRoblox.exe compat copy & pause & exit /b 1)
+if exist "dist\MultiRoblox.exe" del "dist\MultiRoblox.exe"
 
 echo Copying assets...
 xcopy /y /i /q "src\assets" "dist\assets\" >nul 2>&1
 
 echo.
-echo Done. Executable: dist\KNT-Manager.exe (plus dist\MultiRoblox.exe for compatibility)
+echo Done. Executable: dist\KNT-Manager.exe
 pause

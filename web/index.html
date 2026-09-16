@@ -53,7 +53,7 @@
       <span class="material-icons-round">inventory_2</span><span data-i18n="nav.groups">Groups</span>
     </button>
     <button class="nav-item" id="nav-charts" onclick="goTo('charts')">
-      <span class="material-icons-round">bar_chart</span><span data-i18n="nav.charts">Charts</span>
+      <span class="material-icons-round">videogame_asset</span><span data-i18n="nav.charts">Games</span>
     </button>
     <div class="nav-label" data-i18n="nav.secTools">Tools</div>
     <button class="nav-item" id="nav-mixer" onclick="goTo('mixer')">
@@ -74,6 +74,9 @@
     </button>
     <button class="nav-item" id="nav-logs" onclick="goTo('logs')">
       <span class="material-icons-round">terminal</span><span data-i18n="nav.logs">Logs</span>
+    </button>
+    <button class="nav-item" id="nav-history" onclick="goTo('history')">
+      <span class="material-icons-round">history</span><span data-i18n="nav.history">History</span>
     </button>
     <button class="nav-item" id="nav-credits" onclick="goTo('credits')">
       <span class="material-icons-round">favorite</span><span data-i18n="nav.credits">Credits</span>
@@ -102,6 +105,8 @@
           <div>
             <div class="ph-title"><span class="material-icons-round" style="font-size:19px;color:var(--ac)">dashboard</span><span data-i18n="dash.title">Dashboard</span></div>
             <div class="ph-sub" id="dash-sub">—</div>
+          </div>
+          <div class="ph-actions">
           </div>
         </div>
         <div class="sw">
@@ -152,6 +157,9 @@
             <button class="btn-out" id="btn-trash" onclick="openTrash()" data-i18n-title="accounts.trashTitle" title="Trash — deleted accounts can be restored here">
               <span class="material-icons-round">delete</span><span data-i18n="accounts.trash">Trash</span>
               <span class="trash-count" id="trash-count" style="display:none">0</span>
+            </button>
+            <button class="btn-out" id="acct-sync-btn" onclick="syncInstances('accounts')" title="Sync running instances with reality">
+              <span class="material-icons-round">sync</span><span data-i18n="common.sync">Sync</span>
             </button>
             <button class="btn-out" id="acct-closehome-btn" onclick="closeHomeAll()" data-i18n-title="accounts.closeHomeTip" title="Close the Roblox home/tray launcher" style="display:none">
               <span class="material-icons-round">close</span><span data-i18n="accounts.closeHome">Close tray</span>
@@ -219,7 +227,7 @@
       <div class="page" id="page-charts">
         <div class="ph" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
           <div>
-            <div class="ph-title" data-i18n="charts.title">Charts</div>
+            <div class="ph-title" data-i18n="charts.title">Games</div>
             <div class="ph-sub" data-i18n="charts.sub">Trending &amp; top games on Roblox</div>
           </div>
           <button class="btn btn-ghost" style="font-size:11px;padding:7px 10px;flex-shrink:0" onclick="loadCharts()">
@@ -231,6 +239,7 @@
           <button class="tab-btn active" id="ctab-popular" onclick="switchChartTab('popular')" data-i18n="charts.topPlaying">Top Playing Now</button>
           <button class="tab-btn" id="ctab-trending" onclick="switchChartTab('trending')" data-i18n="charts.topRated">Top Rated</button>
           <button class="tab-btn" id="ctab-favorited" onclick="switchChartTab('favorited')" data-i18n="charts.topEarning">Top Earning</button>
+          <button class="tab-btn" id="ctab-private" onclick="switchChartTab('private')" data-i18n="charts.private">Private servers</button>
         </div>
         <div class="chart-search-wrap" style="padding:0 18px 8px">
           <div class="search" style="width:100%">
@@ -248,6 +257,15 @@
             <span class="material-icons-round">wifi_off</span>
             <div class="empty-title" data-i18n="charts.emptyTitle">Couldn't load games</div>
             <div class="empty-sub" data-i18n="charts.emptySub">Check your connection and press Refresh.</div>
+          </div>
+          <div id="charts-private" style="display:none;padding:0 18px 18px">
+            <div class="modal-sub" style="margin:4px 0 12px" data-i18n="priv.desc">Save private/VIP server links here. Roblox doesn't list other people's private servers, so paste the link once and join in one click.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+              <input type="text" id="priv-name" class="sr-input" data-i18n-ph="priv.namePh" data-i18n-aria="priv.namePh" placeholder="Name, e.g. farm do grupo" aria-label="Server name" style="flex:1;min-width:140px;width:auto" maxlength="40"/>
+              <input type="text" id="priv-link" class="sr-input" data-i18n-ph="priv.linkPh" data-i18n-aria="priv.linkPh" placeholder="Private server link…" aria-label="Private server link" style="flex:2;min-width:180px;width:auto" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')privAdd()"/>
+              <button class="btn btn-primary btn-sm" onclick="privAdd()"><span class="material-icons-round">add</span><span data-i18n="priv.add">Save</span></button>
+            </div>
+            <div id="priv-list"></div>
           </div>
         </div>
         </div>
@@ -330,6 +348,19 @@
           <!-- ══ Section 1: automatic generator (paid APIs) ══ -->
           <div class="sc gen-sec">
             <div class="sc-head"><span class="material-icons-round">bolt</span><span data-i18n="gen.autoHead">Automatic generator</span></div>
+            <div class="sr" id="gen-keys-row">
+              <div class="sr-left"><div class="sr-label" data-i18n="gen.keyProfile">Active key</div><div class="sr-desc" id="gen-cooldown-label"></div></div>
+              <select id="gen-key-select" class="srv-select" onchange="genSelectKey(this.value)" style="flex:1;width:auto" aria-label="Active API key"></select>
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genAddKey()" data-i18n-title="gen.keyAdd" title="Add API key">
+                <span class="material-icons-round" style="font-size:15px">add</span>
+              </button>
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genRenameKey()" data-i18n-title="gen.keyRename" title="Rename key">
+                <span class="material-icons-round" style="font-size:15px">edit</span>
+              </button>
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genRemoveKey()" data-i18n-title="gen.keyRemove" title="Remove key">
+                <span class="material-icons-round" style="font-size:15px">delete</span>
+              </button>
+            </div>
             <div class="sr">
               <div class="sr-left"><div class="sr-label" data-i18n="gen.apiKey">API key</div></div>
               <input type="password" id="gen-apikey" class="sr-input" data-i18n-ph="gen.apiKeyPh" data-i18n-aria="gen.apiKey" placeholder="BLOX-XXXX... or MG_XXXX..." aria-label="BloxGen or Altgen API key" oninput="genOnKeyInput()" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1)"/>
@@ -338,7 +369,7 @@
               </button>
             </div>
             <div class="sr" id="gen-type-row" style="display:none">
-              <div class="sr-left"><div class="sr-label" data-i18n="gen.type">Account type</div><div class="sr-desc" id="gen-type-desc" data-i18n="gen.altDesc">Fresh alt accounts</div></div>
+              <div class="sr-left"><div class="sr-label" data-i18n="gen.type">Account type</div><div class="sr-desc" id="gen-type-desc" data-i18n="gen.altDesc">Fresh alt accounts</div><div class="sr-desc" id="gen-stock-label"></div></div>
               <div class="cdd" id="cdd-gentype" style="width:170px">
                 <div class="cdd-trigger" id="cdd-gentype-trigger" onclick="toggleCdd('gentype')" role="button" tabindex="0" data-i18n-aria="gen.type" aria-label="Account type">
                   <span class="cdd-label" id="cdd-gentype-label" data-i18n="gen.alt">Alt</span>
@@ -363,9 +394,14 @@
                 </div>
               </div>
             </div>
-          </div>
-          <div class="sc">
-            <div class="sc-head" data-i18n="gen.output">Output</div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 14px">
+            <button id="gen-watch-btn" class="btn btn-ghost" style="height:34px;font-size:12.5px" onclick="genToggleWatch()" data-i18n-title="gen.watch" title="Watch stock">
+              <span class="material-icons-round" style="font-size:15px">notifications</span><span id="gen-watch-label" data-i18n="gen.watch">Watch stock</span>
+            </button>
+            <button id="gen-btn" class="btn btn-primary" style="height:34px;font-size:12.5px" onclick="genCombo()">
+                          <span class="material-icons-round" style="font-size:15px">bolt</span><span data-i18n="gen.generate">Generate</span>
+                        </button>
+            </div>
             <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
               <div style="width:100%;display:flex;align-items:stretch;gap:8px">
                 <input type="text" id="gen-output" class="sr-input" readonly data-i18n-ph="gen.outputPh" placeholder="click Generate to create an account" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1);cursor:default;border-radius:var(--r2)"/>
@@ -381,13 +417,9 @@
               <div id="gen-counter" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--t3);letter-spacing:.02em"></div>
             </div>
           </div>
-          <div style="display:flex;justify-content:flex-end;padding:12px 14px">
-                    <button id="gen-btn" class="btn btn-primary" style="height:34px;font-size:12.5px" onclick="genCombo()">
-                      <span class="material-icons-round" style="font-size:15px">bolt</span><span data-i18n="gen.generate">Generate</span>
-                    </button>
-                    </div>
+
           <!-- ══ Section 2: history ══ -->
-          <div class="sc gen-sec" id="gen-history-sc" style="display:none;margin-top:12px">
+          <div class="sc gen-sec" id="gen-history-sc" style="display:none">
             <div class="sc-head" style="display:flex;align-items:center;justify-content:space-between;padding-right:10px">
               <span class="material-icons-round">history</span><span data-i18n="gen.history">History</span>
               <button class="btn btn-ghost" onclick="genClearHistory()" data-i18n="gen.clear">Clear</button>
@@ -405,15 +437,13 @@
             </div>
             <div id="gen-history-list" style="display:flex;flex-direction:column;gap:1px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--s4) transparent"></div>
           </div>
+
           <!-- ══ Section 3: free manual generator ══ -->
-          <div class="sc gen-sec gen-manual" style="margin-top:18px;padding-top:14px;border-top:1px solid var(--s3)">
-            <div class="sc-head" style="display:flex;align-items:center;gap:4px">
-              <span class="material-icons-round" style="font-size:15px">casino</span>
-              <span data-i18n="gen.man.head">Create account manually</span>
-            </div>
+          <div class="sc gen-sec gen-manual">
+            <div class="sc-head"><span class="material-icons-round">casino</span><span data-i18n="gen.man.head">Free manual generator</span></div>
             <div class="sr" style="flex-direction:column;align-items:flex-start;gap:10px">
               <div class="sr-left">
-                <div class="sr-label" data-i18n="gen.man.free">Free — one account at a time</div>
+                <div class="sr-label" data-i18n="gen.man.free">Free — no API key needed</div>
                 <div class="sr-desc" data-i18n="gen.man.desc">Generates a username and password here, then opens the official Roblox signup page with them filled in automatically (plus a random birthday). You just solve the CAPTCHA and create the account — nothing else is automated.</div>
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -583,13 +613,6 @@
               </div>
             </div>
           </div>
-          <!-- Info row -->
-          <div class="sc">
-            <div class="sc-head" data-i18n="settings.about">About</div>
-            <div class="sr"><div class="sr-left"><div class="sr-label">KNT Manager</div><div class="sr-desc" id="stat-app-ver">Version -</div></div></div>
-            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.accountsSaved">Accounts saved</div></div><span class="badge" id="stat-count">0</span></div>
-            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.robloxVersion">Roblox version</div></div><span class="badge" id="stat-rblx-ver">-</span></div>
-          </div>
           <!-- Updates -->
           <div class="sc">
             <div class="sc-head" data-i18n="update.title">Updates</div>
@@ -626,6 +649,13 @@
           <div class="sc">
             <div class="sc-head" data-i18n="settings.relaunch">Relaunch on Disconnect</div>
             <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.relaunchLabel">Relaunch on disconnect</div><div class="sr-desc" data-i18n="settings.relaunchDesc">If a running instance disconnects unexpectedly, relaunch that same account back into the same game automatically.</div></div><label class="toggle"><input type="checkbox" id="set-autorelaunch" onchange="toggleAutoRelaunch()"/><span class="toggle-trk"></span></label></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.killOnCloseLabel">Kill Roblox on exit</div><div class="sr-desc" data-i18n="settings.killOnCloseDesc">When you close MultiRoblox, kill all running Roblox instances to prevent orphaned processes from causing issues on the next startup.</div></div><label class="toggle"><input type="checkbox" id="set-killonclose" onchange="toggleKillOnClose()"/><span class="toggle-trk"></span></label></div>
+          </div>
+          <!-- Background / windows -->
+          <div class="sc">
+            <div class="sc-head" data-i18n="settings.backgroundWindows">Background Processes &amp; Windows</div>
+
+            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.autoArrangeLabel">Organizar janelas do Roblox automaticamente após o lançamento</div><div class="sr-desc" data-i18n="settings.autoArrangeDesc">Organiza as janelas do Roblox em grade (2 = lado a lado, 4 = 2×2, etc.).</div></div><label class="toggle"><input type="checkbox" id="set-autoarrange" onchange="toggleAutoArrange()"/><span class="toggle-trk"></span></label></div>
           </div>
         </div>
         <div class="sw" id="stab-panel-performance" style="display:none">
@@ -735,60 +765,11 @@
               </div>
             </div>
           </div>
-          <!-- Automatic backup -->
-          <div class="sc">
-            <div class="sc-head" data-i18n="settings.autoBackup">Automatic backup</div>
-            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.autoBackupLabel">Enable automatic backups</div><div class="sr-desc" data-i18n="settings.autoBackupDesc">Automatically saves a password-protected backup of your accounts, groups and settings at the chosen interval.</div></div><label class="toggle"><input type="checkbox" id="set-autobackup" onchange="toggleAutoBackup()"/><span class="toggle-trk"></span></label></div>
-            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
-              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.autoBackupInterval">Frequency</div></div>
-              <div class="cdd" id="cdd-autofreq" style="width:100%">
-                <div class="cdd-trigger" id="cdd-autofreq-trigger" onclick="toggleCdd('autofreq')" role="button" tabindex="0" data-i18n-aria="settings.autoBackupInterval" aria-label="Backup frequency">
-                  <span class="cdd-label" id="cdd-autofreq-label">Daily</span>
-                  <span class="material-icons-round cdd-arrow">expand_more</span>
-                </div>
-                <div class="cdd-menu" id="cdd-autofreq-menu">
-                  <div class="cdd-option" data-value="1" onclick="setAutoBackupFreq(1)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.hourly">Hourly</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option" data-value="6" onclick="setAutoBackupFreq(6)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.hours6">Every 6 hours</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option" data-value="12" onclick="setAutoBackupFreq(12)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.hours12">Every 12 hours</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option selected" data-value="24" onclick="setAutoBackupFreq(24)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.daily">Daily</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option" data-value="168" onclick="setAutoBackupFreq(168)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name" data-i18n="ab.weekly">Weekly</div></div><span class="material-icons-round cdd-check">check</span></div>
-                </div>
-              </div>
-            </div>
-            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
-              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.autoBackupKeep">Backups kept</div><div class="sr-desc" data-i18n="settings.autoBackupKeepDesc">How many automatic backups are kept. Oldest are deleted first.</div></div>
-              <div class="cdd" id="cdd-autokeep" style="width:100%">
-                <div class="cdd-trigger" id="cdd-autokeep-trigger" onclick="toggleCdd('autokeep')" role="button" tabindex="0" data-i18n-aria="settings.autoBackupKeep" aria-label="Backups kept">
-                  <span class="cdd-label" id="cdd-autokeep-label">5</span>
-                  <span class="material-icons-round cdd-arrow">expand_more</span>
-                </div>
-                <div class="cdd-menu" id="cdd-autokeep-menu">
-                  <div class="cdd-option" data-value="3" onclick="setAutoBackupKeep(3)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">3</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option selected" data-value="5" onclick="setAutoBackupKeep(5)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">5</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option" data-value="10" onclick="setAutoBackupKeep(10)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">10</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option" data-value="20" onclick="setAutoBackupKeep(20)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">20</div></div><span class="material-icons-round cdd-check">check</span></div>
-                  <div class="cdd-option" data-value="50" onclick="setAutoBackupKeep(50)" role="button" tabindex="0"><div class="cdd-opt-left"><div class="cdd-opt-name">50</div></div><span class="material-icons-round cdd-check">check</span></div>
-                </div>
-              </div>
-            </div>
-            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
-              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.autoBackupPassword">Backup password</div><div class="sr-desc" data-i18n="settings.autoBackupPasswordDesc">Used for automatic backups. Save it somewhere safe — you need it to restore them on another PC.</div></div>
-              <div style="width:100%;display:flex;gap:8px;align-items:center">
-                <code class="inline-code" id="auto-backup-pw" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</code>
-                <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="copyAutoBackupPassword()"><span class="material-icons-round" style="font-size:14px">content_copy</span></button>
-              </div>
-            </div>
-            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.backupNow">Back up now</div><div class="sr-desc" data-i18n="settings.backupNowDesc">Create an automatic backup right away in the backups folder.</div></div><button class="btn btn-ghost" id="btn-backup-now" onclick="backupNow()"><span class="material-icons-round" style="font-size:15px">archive</span><span data-i18n="settings.backupNow">Back up now</span></button></div>
-          </div>
-          <!-- Backup -->
+          <!-- Backup (manual) -->
           <div class="sc">
             <div class="sc-head" data-i18n="settings.backup">Backup</div>
             <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.createBackup">Create backup</div><div class="sr-desc" data-i18n="settings.createBackupDesc">Save all accounts, groups and settings to a password-protected file. Restorable on this or another PC.</div></div><button class="btn btn-ghost" onclick="openBackupModal('create')"><span class="material-icons-round" style="font-size:15px">save</span><span data-i18n="settings.createBackup">Create backup</span></button></div>
             <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.restoreBackup">Restore backup</div><div class="sr-desc" data-i18n="settings.restoreBackupDesc">Replaces all current accounts, groups and settings with the contents of a backup file.</div></div><button class="btn btn-ghost" onclick="openBackupModal('restore')"><span class="material-icons-round" style="font-size:15px">restore</span><span data-i18n="settings.restoreBackup">Restore backup</span></button></div>
-            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:6px">
-              <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.backupHistory">History</div></div>
-              <div style="width:100%" id="auto-backup-list"></div>
-            </div>
           </div>
           <!-- Data -->
           <div class="sc">
@@ -799,161 +780,102 @@
         </div>
         <!-- Themes tab panel -->
         <div class="sw" id="stab-panel-themes" style="display:none">
-          <!-- Texture customization -->
-          <div class="sr" style="padding:8px 0;border:none">
-            <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.pattern">Background pattern</div></div>
-            <select class="sr-input" id="texture-pattern" onchange="setThemePattern(this.value)" style="height:32px;max-width:190px"></select>
-          </div>
-          <div class="sr" style="padding:8px 0;border:none">
-            <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.size">Pattern size</div><div class="sr-desc" style="font-size:11px" id="texture-size-val">Auto</div></div>
-            <input type="range" id="texture-size" min="0" max="300" step="4" value="0" oninput="setThemeTexSize(this.value)" style="width:150px;accent-color:var(--ac)">
-          </div>
-          <!-- Texture intensity control -->
-          <div class="sr" style="padding:8px 0;border:none">
-            <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.texture">Texture</div></div>
-            <div class="tex-seg" id="texture-seg">
-              <button class="vt" data-tex="off" onclick="setThemeTexture('off')" data-i18n="themes.off">Off</button>
-              <button class="vt active" data-tex="subtle" onclick="setThemeTexture('subtle')" data-i18n="themes.subtle">Subtle</button>
-              <button class="vt" data-tex="medium" onclick="setThemeTexture('medium')" data-i18n="themes.medium">Medium</button>
-            </div>
-          </div>
-          <div class="themes-grid" id="themes-grid-inner">
-            <div class="theme-card" data-theme="dark" onclick="setTheme('dark')" role="button" tabindex="0" aria-label="Dark theme">
-              <div class="tc-mini" style="--m-bg:#0e0e10;--m-panel:#18181d;--m-ac:#5c5ce0;--m-text:#f0f0f5;--m-dim:rgba(255,255,255,.18);--m-bd:rgba(255,255,255,.06)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeDark">Dark</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#0e0e10"></span><span class="tc-sw" style="background:#18181d"></span><span class="tc-sw" style="background:#5c5ce0"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="light" onclick="setTheme('light')" role="button" tabindex="0" aria-label="Light theme">
-              <div class="tc-mini" style="--m-bg:#f4f4f8;--m-panel:#ffffff;--m-ac:#5c5ce0;--m-text:#0e0e1a;--m-dim:rgba(0,0,0,.14);--m-bd:rgba(0,0,0,.08)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeLight">Light</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#f4f4f8"></span><span class="tc-sw" style="background:#ffffff"></span><span class="tc-sw" style="background:#5c5ce0"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="midnight" onclick="setTheme('midnight')" role="button" tabindex="0" aria-label="Midnight theme">
-              <div class="tc-mini" style="--m-bg:#0a0e1a;--m-panel:#141a2e;--m-ac:#4f7cff;--m-text:#eaf0ff;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(120,150,255,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeMidnight">Midnight</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#0a0e1a"></span><span class="tc-sw" style="background:#141a2e"></span><span class="tc-sw" style="background:#4f7cff"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="aurora" onclick="setTheme('aurora')" role="button" tabindex="0" aria-label="Aurora theme">
-              <div class="tc-mini" style="--m-bg:#07140f;--m-panel:#11221b;--m-ac:#2dd4bf;--m-text:#e6fff7;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(120,255,220,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeAurora">Aurora</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#07140f"></span><span class="tc-sw" style="background:#11221b"></span><span class="tc-sw" style="background:#2dd4bf"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="sunset" onclick="setTheme('sunset')" role="button" tabindex="0" aria-label="Sunset theme">
-              <div class="tc-mini" style="--m-bg:#170b12;--m-panel:#281320;--m-ac:#ff7a59;--m-text:#ffe9df;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,170,140,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeSunset">Sunset</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#170b12"></span><span class="tc-sw" style="background:#281320"></span><span class="tc-sw" style="background:#ff7a59"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="crimson" onclick="setTheme('crimson')" role="button" tabindex="0" aria-label="Crimson theme">
-              <div class="tc-mini" style="--m-bg:#160a0c;--m-panel:#271216;--m-ac:#f43f5e;--m-text:#ffe4e8;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,120,130,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeCrimson">Crimson</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#160a0c"></span><span class="tc-sw" style="background:#271216"></span><span class="tc-sw" style="background:#f43f5e"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="ocean" onclick="setTheme('ocean')" role="button" tabindex="0" aria-label="Ocean theme">
-              <div class="tc-mini" style="--m-bg:#07121a;--m-panel:#0f2030;--m-ac:#38bdf8;--m-text:#dff1ff;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(110,190,255,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeOcean">Ocean</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#07121a"></span><span class="tc-sw" style="background:#0f2030"></span><span class="tc-sw" style="background:#38bdf8"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="grape" onclick="setTheme('grape')" role="button" tabindex="0" aria-label="Grape theme">
-              <div class="tc-mini" style="--m-bg:#120a1c;--m-panel:#211333;--m-ac:#a855f7;--m-text:#f0e4ff;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(190,140,255,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeGrape">Grape</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#120a1c"></span><span class="tc-sw" style="background:#211333"></span><span class="tc-sw" style="background:#a855f7"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="forest" onclick="setTheme('forest')" role="button" tabindex="0" aria-label="Forest theme">
-              <div class="tc-mini" style="--m-bg:#0a1410;--m-panel:#13251c;--m-ac:#4ade80;--m-text:#e2ffec;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(140,220,160,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeForest">Forest</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#0a1410"></span><span class="tc-sw" style="background:#13251c"></span><span class="tc-sw" style="background:#4ade80"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="amber" onclick="setTheme('amber')" role="button" tabindex="0" aria-label="Amber theme">
-              <div class="tc-mini" style="--m-bg:#161106;--m-panel:#271e0d;--m-ac:#f59e0b;--m-text:#fff1d8;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,200,110,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeAmber">Amber</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#161106"></span><span class="tc-sw" style="background:#271e0d"></span><span class="tc-sw" style="background:#f59e0b"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="rose" onclick="setTheme('rose')" role="button" tabindex="0" aria-label="Rose theme">
-              <div class="tc-mini" style="--m-bg:#170b11;--m-panel:#29131f;--m-ac:#fb7185;--m-text:#ffe6ee;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(255,150,190,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeRose">Rose</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#170b11"></span><span class="tc-sw" style="background:#29131f"></span><span class="tc-sw" style="background:#fb7185"></span></span>
-              </div>
-            </div>
-            <div class="theme-card" data-theme="graphite" onclick="setTheme('graphite')" role="button" tabindex="0" aria-label="Graphite theme">
-              <div class="tc-mini" style="--m-bg:#0d0e10;--m-panel:#1a1c21;--m-ac:#94a3b8;--m-text:#eef1f6;--m-dim:rgba(255,255,255,.16);--m-bd:rgba(160,170,190,.14)">
-                <span class="tcm-bg"></span>
-                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
-                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
-              </div>
-              <div class="tc-foot">
-                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span><span data-i18n="settings.themeGraphite">Graphite</span>
-                <span class="tc-sws"><span class="tc-sw" style="background:#0d0e10"></span><span class="tc-sw" style="background:#1a1c21"></span><span class="tc-sw" style="background:#94a3b8"></span></span>
-              </div>
-            </div>
+          <!-- Category tabs -->
+          <div class="theme-cat-bar" id="theme-cat-bar">
+                      <button class="theme-cat-btn active" data-cat="all" onclick="setThemeCat('all')" data-i18n="themes.all">All</button>
+                      <button class="theme-cat-btn" data-cat="dark" onclick="setThemeCat('dark')" data-i18n="themes.dark">Dark</button>
+                      <button class="theme-cat-btn" data-cat="light" onclick="setThemeCat('light')" data-i18n="themes.light">Light</button>
+                      <button class="theme-cat-btn" data-cat="custom" onclick="setThemeCat('custom')" data-i18n="themes.myThemes">My Themes</button>
                     </div>
-        </div>
-      </div>
-      <!-- logs page -->
+                    <!-- Texture customization -->
+                    <div class="sr" style="padding:8px 0;border:none">
+                      <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.pattern">Background pattern</div><div class="sr-desc" style="font-size:11px" data-i18n="themes.patternDesc">Overrides the theme's default pattern</div></div>
+                      <select class="sr-input" id="texture-pattern" onchange="setThemePattern(this.value)" style="height:32px;max-width:190px"></select>
+                    </div>
+                    <div class="sr" style="padding:8px 0;border:none">
+                      <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.size">Pattern size</div><div class="sr-desc" style="font-size:11px" id="texture-size-val">Auto</div></div>
+                      <input type="range" id="texture-size" min="0" max="300" step="4" value="0" oninput="setThemeTexSize(this.value)" style="width:150px;accent-color:var(--ac)">
+                    </div>
+                    <!-- Texture intensity control -->
+                    <div class="sr" style="padding:8px 0;border:none">
+                      <div class="sr-left"><div class="sr-label" style="font-size:12px" data-i18n="themes.texture">Texture</div><div class="sr-desc" style="font-size:11px" data-i18n="themes.textureDesc">Background pattern intensity</div></div>
+                      <div class="tex-seg" id="texture-seg">
+                        <button class="vt" data-tex="off" onclick="setThemeTexture('off')" data-i18n="themes.off">Off</button>
+                        <button class="vt active" data-tex="subtle" onclick="setThemeTexture('subtle')" data-i18n="themes.subtle">Subtle</button>
+                        <button class="vt" data-tex="medium" onclick="setThemeTexture('medium')" data-i18n="themes.medium">Medium</button>
+                      </div>
+                    </div>
+          <!-- Import / Export -->
+          <div class="theme-ie-row">
+            <button class="btn btn-ghost btn-sm" onclick="exportTheme()"><span class="material-icons-round">file_download</span><span data-i18n="themes.export">Export</span></button>
+            <button class="btn btn-ghost btn-sm" onclick="importTheme()"><span class="material-icons-round">file_upload</span><span data-i18n="themes.import">Import</span></button>
+          </div>
+          <!-- Custom theme editor panel (hidden by default) -->
+          <div class="theme-custom-panel" id="theme-custom-panel" style="display:none">
+            <div class="theme-custom-title" id="theme-custom-title" data-i18n="themes.newTheme">New theme</div>
+            <div class="theme-custom-row">
+              <div class="theme-color-pick">
+                <label data-i18n="themes.nameTheme">Name</label>
+                <input class="sr-input" id="custom-theme-name" type="text" placeholder="e.g. My Theme" style="flex:1;max-width:220px">
+              </div>
+            </div>
+            <div class="theme-custom-row">
+              <div class="theme-color-pick">
+                <label data-i18n="themes.accentColor">Accent</label>
+                <div class="theme-color-input"><input type="color" id="custom-accent" value="#5c5ce0" oninput="onCustomColorChange()"></div>
+                <span class="theme-color-hex" id="custom-accent-hex">#5c5ce0</span>
+              </div>
+              <div class="theme-color-pick">
+                <label data-i18n="themes.bgColor">Background</label>
+                <div class="theme-color-input"><input type="color" id="custom-bg" value="#0b0c0f" oninput="onCustomColorChange()"></div>
+                <span class="theme-color-hex" id="custom-bg-hex">#0b0c0f</span>
+              </div>
+              <div class="theme-color-pick">
+                <label data-i18n="themes.surfaceColor">Surface</label>
+                <div class="theme-color-input"><input type="color" id="custom-surface" value="#141519" oninput="onCustomColorChange()"></div>
+                <span class="theme-color-hex" id="custom-surface-hex">#141519</span>
+              </div>
+            </div>
+            <div class="theme-custom-row">
+              <label class="toggle-row"><label class="toggle"><input type="checkbox" id="custom-isdark" checked onchange="onCustomColorChange()"><span class="toggle-trk"></span></label><span data-i18n="themes.darkMode">Dark mode</span></label>
+            </div>
+            <div class="theme-custom-actions">
+              <button class="btn btn-primary btn-sm" id="custom-theme-save" onclick="saveCustomTheme()"><span class="material-icons-round">save</span><span data-i18n="themes.saveTheme">Save theme</span></button>
+              <button class="btn btn-danger btn-sm" id="custom-theme-delete" style="display:none" onclick="deleteCustomTheme(this.dataset.editId)"><span class="material-icons-round">delete</span><span data-i18n="themes.deleteTheme">Delete</span></button>
+              <button class="btn btn-ghost btn-sm" onclick="closeCustomThemePanel()"><span data-i18n="common.cancel">Cancel</span></button>
+            </div>
+          </div>
+          <!-- Extras: border radius, high contrast, auto theme -->
+          <div class="theme-extras">
+            <div class="theme-extras-title" data-i18n="themes.extras">Extras</div>
+            <div class="theme-radius-row">
+              <label data-i18n="themes.borderRadius">Corner radius</label>
+              <input type="range" min="0" max="24" value="12" id="set-radius" oninput="setBorderRadius(this.value)">
+              <span class="theme-radius-val" id="radius-val">12px</span>
+            </div>
+            <div class="sr" style="border:none;margin:0;padding:0">
+              <div class="sr-left"><div class="sr-label" data-i18n="themes.highContrast">High contrast</div><div class="sr-desc" data-i18n="themes.highContrastDesc">Increase text readability</div></div>
+              <label class="toggle"><input type="checkbox" id="set-highcontrast" onchange="toggleHighContrast()"><span class="toggle-trk"></span></label>
+            </div>
+            <div class="sr" style="border:none;margin:0;padding:0">
+              <div class="sr-left"><div class="sr-label" data-i18n="themes.autoTheme">Auto theme (day/night)</div><div class="sr-desc" data-i18n="themes.autoThemeDesc">Light during the day, dark at night</div></div>
+              <label class="toggle"><input type="checkbox" id="set-autotheme" onchange="toggleAutoTheme()"><span class="toggle-trk"></span></label>
+            </div>
+          </div>
+          <!-- Theme cards grid (rendered by JS) -->
+          <div class="themes-grid" id="themes-grid-inner"></div>
+                  </div>
+                  <!-- About tab panel -->
+                  <div class="sw" id="stab-panel-about" style="display:none">
+                    <div class="sc">
+                      <div class="sc-head"><span class="material-icons-round" style="font-size:14px;margin-right:6px">info</span><span data-i18n="settings.about">About</span></div>
+                      <div class="sr"><div class="sr-left"><div class="sr-label">KNT Manager</div><div class="sr-desc" id="stat-app-ver">Version -</div></div></div>
+                      <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.accountsSaved">Accounts saved</div></div><span class="badge" id="stat-count">0</span></div>
+                      <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.robloxVersion">Roblox version</div></div><span class="badge" id="stat-rblx-ver">-</span></div>
+                    </div>
+                  </div>
+                </div>
+                <!-- logs page -->
       <div class="page" id="page-logs">
         <div class="ph">
           <div>
@@ -970,15 +892,21 @@
           <div class="logs-empty"><span class="material-icons-round">terminal</span><span data-i18n="logs.empty">No log entries yet.</span></div>
         </div>
       </div>
-        <!-- About tab panel -->
-        <div class="sw" id="stab-panel-about" style="display:none">
-          <div class="sc">
-            <div class="sc-head"><span class="material-icons-round" style="font-size:14px;margin-right:6px">info</span><span data-i18n="settings.about">About</span></div>
-            <div class="sr"><div class="sr-left"><div class="sr-label">KNT Manager</div><div class="sr-desc" id="stat-app-ver">Version -</div></div></div>
-            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.accountsSaved">Accounts saved</div></div><span class="badge" id="stat-count">0</span></div>
-            <div class="sr"><div class="sr-left"><div class="sr-label" data-i18n="settings.robloxVersion">Roblox version</div></div><span class="badge" id="stat-rblx-ver">-</span></div>
+      <!-- status history page -->
+      <div class="page" id="page-history">
+        <div class="ph">
+          <div>
+            <div class="ph-title" data-i18n="hist.title">Status history</div>
+            <div class="ph-sub" data-i18n="hist.sub">When each account started, stopped or lost its cookie. Kept across restarts.</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="clearHistory()"><span class="material-icons-round">delete_outline</span><span data-i18n="hist.clear">Clear</span></button>
           </div>
         </div>
+        <div id="hist-list" class="logs-text" tabindex="0">
+          <div class="logs-empty"><span class="material-icons-round">history</span><span data-i18n="hist.empty">No status changes yet.</span></div>
+        </div>
+      </div>
       <div class="page" id="page-credits">
         <div class="ph">
           <div class="ph-title" data-i18n="credits.title">Credits</div>
@@ -1015,9 +943,13 @@
     </div>
   </main>
 </div>
+<!-- Batch actions bar (multi-select mode) -->
 <div class="batch-bar" id="batch-bar" style="display:none">
   <span class="batch-count" id="batch-count">0 selected</span>
+  <button class="btn btn-primary" onclick="batchLaunch()" data-i18n="batch.launch"><span class="material-icons-round" style="font-size:15px">rocket_launch</span>Launch</button>
   <button class="btn btn-danger" onclick="batchKill()" data-i18n="batch.kill"><span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill</button>
+  <button class="btn btn-ghost" onclick="batchCopyLogins()" data-i18n="batch.copy"><span class="material-icons-round" style="font-size:15px">content_copy</span>Copy logins</button>
+  <button class="btn btn-ghost" onclick="openBatchTarget()" data-i18n="batch.setGame"><span class="material-icons-round" style="font-size:15px">sports_esports</span>Set game</button>
   <button class="btn btn-ghost" onclick="batchTrim()" data-i18n="batch.trim"><span class="material-icons-round" style="font-size:15px">memory</span>Trim</button>
   <button class="btn btn-ghost" onclick="batchToGroup()" data-i18n="batch.toGroup"><span class="material-icons-round" style="font-size:15px">inventory_2</span>To group…</button>
   <div class="filter-wrap">
@@ -1025,6 +957,18 @@
     <div class="filter-menu" id="batch-cat-menu" style="right:0;left:auto"></div>
   </div>
   <button class="btn btn-ghost" onclick="clearSelection()" data-i18n="common.cancel"><span class="material-icons-round" style="font-size:15px">close</span></button>
+</div>
+<!-- batch set game -->
+<div class="overlay" id="m-batch-target" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-batch-target')">
+  <div class="modal" onclick="event.stopPropagation()" style="width:400px;max-width:92vw">
+    <div class="modal-title" data-i18n="batch.gameTitle">Set game for selected</div>
+    <div class="modal-sub" id="batch-target-sub" data-i18n="batch.gameDesc">Paste the game ID, link or server. Applies to every selected account at once.</div>
+    <input type="text" id="batch-target-input" class="sr-input" data-i18n-ph="batch.gamePh" data-i18n-aria="batch.gamePh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..." aria-label="Game target" style="width:100%" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')submitBatchTarget()"/>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('m-batch-target')" data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-primary" id="batch-target-save" onclick="submitBatchTarget()" data-i18n="common.save">Save</button>
+    </div>
+  </div>
 </div>
 <!-- tracking region picker -->
 <div class="overlay" id="m-region-picker" data-backdrop-close="true" onclick="if(event.target===this)closeRegionPicker()">
@@ -1150,6 +1094,7 @@
             <button type="button" class="pkg-color-swatch" data-color="#3b82f6" style="background:#3b82f6"></button>
             <button type="button" class="pkg-color-swatch" data-color="#c084fc" style="background:#c084fc"></button>
             <button type="button" class="pkg-color-swatch" data-color="#22d3ee" style="background:#22d3ee"></button>
+            <label class="pkg-color-custom" data-i18n-title="groups.customColor" title="Custom color"><span class="material-icons-round">add</span><input type="color" id="pkg-color-custom" value="#5c5ce0" oninput="pkgCustomColor(this.value)"/></label>
           </div>
         </div>
         <div style="width:130px">
@@ -1187,59 +1132,65 @@
         <div class="edit-head-meta" id="edit-head-meta"></div>
       </div>
     </div>
-    <div class="field">
-      <label for="in-nickname" data-i18n="edit.alias">Alias</label>
-      <input type="text" id="in-nickname" data-i18n-ph="edit.aliasPh" placeholder="e.g. MainAlt or FarmBot"/>
-    </div>
-    <div class="field">
-      <label for="in-description" data-i18n="edit.description">Description</label>
-      <textarea id="in-description" data-i18n-ph="edit.descriptionPh" placeholder="Personal note..."></textarea>
-    </div>
-    <div class="field">
-      <label for="in-category" data-i18n="edit.category">Category</label>
-      <div class="cdd cat-cdd" id="cdd-in-category">
-        <div class="cdd-trigger" id="cdd-in-category-trigger" onclick="toggleCdd('in-category')" onkeydown="catTriggerKey(event)" role="button" tabindex="0" aria-label="Category">
-          <span class="cat-dot cdd-cat-dot" id="in-category-dot" style="background:var(--s4)"></span>
-          <span class="cdd-label" id="in-category-label" data-i18n="edit.noCategory">No category</span>
-          <span class="material-icons-round cdd-arrow">expand_more</span>
+    <div class="edit-cols">
+      <div class="edit-col">
+        <div class="field">
+          <label for="in-nickname" data-i18n="edit.alias">Alias</label>
+          <input type="text" id="in-nickname" data-i18n-ph="edit.aliasPh" placeholder="e.g. MainAlt or FarmBot"/>
         </div>
-        <div class="cdd-menu cat-menu" id="cdd-in-category-menu">
-          <div class="cdd-search" id="cat-search-wrap" style="display:none">
-            <span class="material-icons-round">search</span>
-            <input id="cat-search-input" data-i18n-ph="edit.searchCatsPh" placeholder="Search categories…" oninput="catSearchInput(this.value)" aria-label="Search categories"/>
+        <div class="field">
+          <label for="in-description" data-i18n="edit.description">Description</label>
+          <textarea id="in-description" data-i18n-ph="edit.descriptionPh" placeholder="Personal note..."></textarea>
+        </div>
+        <div class="field">
+          <label for="in-category" data-i18n="edit.category">Category</label>
+          <div class="cdd cat-cdd" id="cdd-in-category">
+            <div class="cdd-trigger" id="cdd-in-category-trigger" onclick="toggleCdd('in-category')" onkeydown="catTriggerKey(event)" role="button" tabindex="0" aria-label="Category">
+              <span class="cat-dot cdd-cat-dot" id="in-category-dot" style="background:var(--s4)"></span>
+              <span class="cdd-label" id="in-category-label" data-i18n="edit.noCategory">No category</span>
+              <span class="material-icons-round cdd-arrow">expand_more</span>
+            </div>
+            <div class="cdd-menu cat-menu" id="cdd-in-category-menu">
+              <div class="cdd-search" id="cat-search-wrap" style="display:none">
+                <span class="material-icons-round">search</span>
+                <input id="cat-search-input" data-i18n-ph="edit.searchCatsPh" placeholder="Search categories…" oninput="catSearchInput(this.value)" aria-label="Search categories"/>
+              </div>
+              <div class="cat-options" id="in-category-options"></div>
+            </div>
           </div>
-          <div class="cat-options" id="in-category-options"></div>
+          <div class="field-hint" data-i18n="edit.categoryHint">Organize accounts into groups. Create and manage categories with the Categories button in the Accounts toolbar.</div>
         </div>
       </div>
-      <div class="field-hint" data-i18n="edit.categoryHint">Organize accounts into groups. Create and manage categories with the Categories button in the Accounts toolbar.</div>
-    </div>
-    <div class="field">
-      <label for="in-target" data-i18n="edit.target">Game ID, Invite Link, or Private Server Link</label>
-      <input type="text" id="in-target" data-i18n-ph="edit.targetPh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..."/>
-    </div>
-    <div class="field">
-      <label for="in-password" data-i18n="edit.password">Password</label>
-      <div style="display:flex;gap:8px;align-items:stretch">
-        <input type="password" id="in-password" data-i18n-ph="edit.passwordPh" placeholder="Account password" style="flex:1;min-width:0" autocomplete="off" spellcheck="false"/>
-        <button class="btn btn-ghost" style="flex-shrink:0;height:34px;padding:0 8px" onclick="togglePassVis()" title="Show/hide"><span class="material-icons-round" style="font-size:16px" id="pass-vis-icon">visibility_off</span></button>
+      <div class="edit-col">
+        <div class="field">
+          <label for="in-target" data-i18n="edit.target">Game ID, Invite Link, or Private Server Link</label>
+          <input type="text" id="in-target" data-i18n-ph="edit.targetPh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..."/>
+        </div>
+        <div class="field">
+          <label for="in-password" data-i18n="edit.password">Password</label>
+          <div style="display:flex;gap:8px;align-items:stretch">
+            <input type="password" id="in-password" data-i18n-ph="edit.passwordPh" placeholder="Account password" style="flex:1;min-width:0" autocomplete="off" spellcheck="false"/>
+            <button class="btn btn-ghost" style="flex-shrink:0;height:34px;padding:0 8px" onclick="togglePassVis()" title="Show/hide"><span class="material-icons-round" style="font-size:16px" id="pass-vis-icon">visibility_off</span></button>
+          </div>
+          <div class="field-hint" data-i18n="edit.passwordHint">Optional. Stored encrypted on your PC only.</div>
+        </div>
+        <div class="field">
+          <button class="btn btn-ghost" id="edit-refresh-btn" style="width:100%;justify-content:center" onclick="refreshEditFromRoblox()">
+            <span class="material-icons-round" style="font-size:15px">refresh</span><span data-i18n="edit.refresh">Refresh from Roblox</span>
+          </button>
+          <div class="field-hint" data-i18n="edit.refreshHint">Re-fetches the username and user ID from the saved cookie.</div>
+        </div>
+        <div class="field">
+          <label for="in-follow" data-i18n="edit.follow">Follow user</label>
+          <div style="display:flex;gap:8px;align-items:stretch">
+            <input type="text" id="in-follow" data-i18n-ph="edit.followPh" placeholder="username" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();followUserLookup();}"/>
+            <button class="btn btn-ghost" id="follow-btn" style="flex-shrink:0" onclick="followUserLookup()">
+              <span class="material-icons-round" style="font-size:15px">person_search</span><span data-i18n="edit.followFind">Find</span>
+            </button>
+          </div>
+          <div class="field-hint" id="follow-status" data-i18n="edit.followHint">Finds the server they're in and fills the target above.</div>
+        </div>
       </div>
-      <div class="field-hint" data-i18n="edit.passwordHint">Optional. Stored encrypted on your PC only.</div>
-    </div>
-    <div class="field">
-      <button class="btn btn-ghost" id="edit-refresh-btn" style="width:100%;justify-content:center" onclick="refreshEditFromRoblox()">
-        <span class="material-icons-round" style="font-size:15px">refresh</span><span data-i18n="edit.refresh">Refresh from Roblox</span>
-      </button>
-      <div class="field-hint" data-i18n="edit.refreshHint">Re-fetches the username and user ID from the saved cookie.</div>
-    </div>
-    <div class="field">
-      <label for="in-follow" data-i18n="edit.follow">Follow user</label>
-      <div style="display:flex;gap:8px;align-items:stretch">
-        <input type="text" id="in-follow" data-i18n-ph="edit.followPh" placeholder="username" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();followUserLookup();}"/>
-        <button class="btn btn-ghost" id="follow-btn" style="flex-shrink:0" onclick="followUserLookup()">
-          <span class="material-icons-round" style="font-size:15px">person_search</span><span data-i18n="edit.followFind">Find</span>
-        </button>
-      </div>
-      <div class="field-hint" id="follow-status" data-i18n="edit.followHint">Finds the server they're in and fills the target above.</div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('m-edit')">Cancel</button>
