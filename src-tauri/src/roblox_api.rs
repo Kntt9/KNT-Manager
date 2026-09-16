@@ -2,18 +2,7 @@ use crate::state::AppState;
 use serde_json::Value;
 use std::time::Duration;
 
-fn ua() -> &'static str {
-    crate::stealth::pick_ua()
-}
-
-fn lang() -> &'static str {
-    crate::stealth::pick_lang()
-}
-
-fn stealth_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    req.header("User-Agent", ua())
-        .header("Accept-Language", lang())
-}
+const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -48,13 +37,11 @@ pub struct UserInfo {
 }
 
 pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
-    let client = crate::stealth::client_for(state, cookie);
-    let res = client
+    let res = state
+        .http
         .get("https://users.roblox.com/v1/users/authenticated")
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Accept", "application/json")
-        .header("User-Agent", ua())
-        .header("Accept-Language", lang())
         .timeout(Duration::from_secs(8))
         .send()
         .await;
@@ -109,7 +96,7 @@ pub async fn get_roblox_version(state: &AppState, channel: Option<&str>) -> Resu
     let res = state
         .http
         .get(&url)
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
         .send()
         .await
@@ -136,11 +123,11 @@ pub async fn get_roblox_version(state: &AppState, channel: Option<&str>) -> Resu
 
 async fn csrf_from_endpoint(state: &AppState, cookie: &str, endpoint: &str) -> Option<String> {
     let url = format!("https://auth.roblox.com{}", endpoint);
-    let client = crate::stealth::client_for(state, cookie);
-    let res = client
+    let res = state
+        .http
         .post(&url)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
         .header("Content-Length", "0")
@@ -187,32 +174,12 @@ pub struct TicketResult {
     pub error: Option<String>,
 }
 
-// Farm-guard: evita rajada de tickets que queima o IP e vincula a leva.
-// Qualquer 429/403 aqui entra em quarentena automatica com jitter.
+// Any non-429/403 status also gets backoff-and-retry across all 3 attempts.
 pub async fn get_auth_ticket(
     state: &AppState,
     cookie: &str,
     csrf_token: Option<String>,
 ) -> TicketResult {
-    // Chave curta pra nao guardar cookie inteiro no guard.
-    let guard_key = format!("ticket:{}", &cookie[..cookie.len().min(24)]);
-    if let Some(wait_ms) = state
-        .farm_guard
-        .lock()
-        .unwrap()
-        .check(&guard_key, 2500)
-    {
-        return TicketResult {
-            ok: false,
-            ticket: None,
-            error: Some(format!(
-                "Quarentena anti-farm: aguarde {}s antes de lançar essa conta de novo.",
-                (wait_ms / 1000).max(1)
-            )),
-        };
-    }
-    crate::stealth::human_gap().await;
-    state.farm_guard.lock().unwrap().mark_use(&guard_key);
     let now = now_ms();
     let cached = {
         state
@@ -244,13 +211,13 @@ pub async fn get_auth_ticket(
         if delays[attempt] > 0 {
             tokio::time::sleep(Duration::from_millis(delays[attempt])).await;
         }
-        let ticket_client = crate::stealth::client_for(state, cookie);
-        let mut req = ticket_client
+        let mut req = state
+            .http
             .post("https://auth.roblox.com/v1/authentication-ticket")
             .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
             .header("Referer", "https://www.roblox.com")
             .header("Origin", "https://www.roblox.com")
-            .header("User-Agent", ua())
+            .header("User-Agent", UA)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .header("Content-Length", "0")
@@ -276,7 +243,6 @@ pub async fn get_auth_ticket(
                 .lock()
                 .unwrap()
                 .insert(cookie.to_string(), (ticket.clone(), now_ms()));
-            state.farm_guard.lock().unwrap().mark_ok(&guard_key);
             return TicketResult {
                 ok: true,
                 ticket: Some(ticket),
@@ -285,7 +251,6 @@ pub async fn get_auth_ticket(
         }
         if status == 429 {
             invalidate_csrf(state, cookie);
-            let mins = state.farm_guard.lock().unwrap().mark_fail(&guard_key);
             let retry_after = res
                 .headers()
                 .get("retry-after")
@@ -293,7 +258,6 @@ pub async fn get_auth_ticket(
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(8);
             tokio::time::sleep(Duration::from_secs(retry_after)).await;
-            let _ = mins;
             token = get_csrf_token(state, cookie).await;
             if token.is_none() {
                 return TicketResult {
@@ -309,7 +273,6 @@ pub async fn get_auth_ticket(
         }
         if status == 403 {
             invalidate_csrf(state, cookie);
-            state.farm_guard.lock().unwrap().mark_fail(&guard_key);
             token = get_csrf_token(state, cookie).await;
             if token.is_none() {
                 return TicketResult {
@@ -381,7 +344,7 @@ async fn get_json(state: &AppState, url: &str, cookie: &str) -> Option<Value> {
         .get(url)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Accept", "application/json")
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(5))
         .send()
         .await
@@ -441,7 +404,7 @@ pub async fn follow_redirect(state: &AppState, url: &str) -> String {
     match state
         .http_no_redirect
         .get(url)
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
         .send()
         .await
@@ -558,7 +521,7 @@ async fn post_raw(
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("X-CSRF-TOKEN", csrf)
         .header("Content-Type", "application/json")
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
         .body(body.to_string())
         .send()
@@ -591,7 +554,7 @@ pub async fn get_access_code(
         .header("Accept", "application/json")
         .header("Origin", "https://www.roblox.com")
         .header("Referer", "https://www.roblox.com")
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
         .body(body)
         .send()
@@ -626,7 +589,7 @@ pub async fn get_access_code(
         .get(&url)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Referer", "https://www.roblox.com")
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(5))
         .send()
         .await
@@ -653,7 +616,7 @@ pub async fn get_json_public(state: &AppState, url: &str) -> Result<Value, Strin
         .http
         .get(url)
         .header("Accept", "application/json")
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(10))
         .send()
         .await
@@ -671,7 +634,7 @@ pub async fn get_weao_data(state: &AppState) -> Result<Value, String> {
         .http
         .get(url)
         .header("Accept", "application/json")
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(15))
         .send()
         .await
@@ -694,7 +657,7 @@ pub async fn get_json_auth(state: &AppState, url: &str, cookie: &str) -> Result<
         .get(url)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Accept", "application/json")
-        .header("User-Agent", ua())
+        .header("User-Agent", UA)
         .timeout(Duration::from_secs(10))
         .send()
         .await
