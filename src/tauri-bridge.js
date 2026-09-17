@@ -115,9 +115,18 @@
 
   // Electron version showed the BrowserWindow only once the page had painted
   // (win.once('ready-to-show', ...)). Tauri's window starts hidden the same
-  // way (see tauri.conf.json "visible": false) -- reveal it once the DOM is
-  // actually ready instead of on window creation, so there's no white flash.
+  // way (see tauri.conf.json "visible": false) -- reveal it once the renderer
+  // finished its boot decision (lock screen up, or first content painted),
+  // signalled via window.__kntBootDone, so the app never flashes its empty
+  // shell. Hard reveal after 4s regardless (the Rust side force-shows at 5s
+  // as the last backstop), so a broken frontend still surfaces itself.
   const reveal = () => invoke('show_main_window').catch(() => {});
-  if (document.readyState === 'complete' || document.readyState === 'interactive') reveal();
-  else document.addEventListener('DOMContentLoaded', reveal);
+  const armReveal = () => {
+    const t0 = Date.now();
+    const t = setInterval(() => {
+      if (window.__kntBootDone || Date.now() - t0 > 4000) { clearInterval(t); reveal(); }
+    }, 100);
+  };
+  if (document.readyState === 'complete' || document.readyState === 'interactive') armReveal();
+  else document.addEventListener('DOMContentLoaded', armReveal);
 })();

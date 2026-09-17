@@ -318,7 +318,7 @@ async function submitEnc() {
     _encSetBtnState('success');
     await new Promise(r => setTimeout(r, 260));
     closeModal('m-enc');
-    await continueInit();
+    try { await continueInit(); } catch (e) { hideBootCover(); console.error(e); }
   } catch (e) { _encErr(t('enc.errGeneric')); _encSetBtnState('normal'); _encShake(); }
 }
 async function skipEnc() {
@@ -326,7 +326,7 @@ async function skipEnc() {
   if (skip) skip.disabled = true;
   try { await api.encSetKey(''); } catch {}
   closeModal('m-enc');
-  await continueInit();
+  try { await continueInit(); } catch (e) { hideBootCover(); console.error(e); }
 }
 
 function clearAppData() {
@@ -351,12 +351,31 @@ function clearAppData() {
 async function init() {
   // Encryption gate: in passphrase mode the cookies can't be read until the key is
   // entered for this boot session. Show the popup first; only load data once ready.
+  // The boot cover stays up behind the lock screen (and until first render when
+  // unlocked), so the window never flashes the empty shell.
   try {
     const st = await api.encStatus();
+    window.__kntBootDone = true;
     if (st && st.mode === 'locked') { showEncModal('locked'); return; }
     if (st && st.mode === 'setup') { showEncModal('setup'); return; }
-  } catch {}
-  await continueInit();
+  } catch { window.__kntBootDone = true; }
+  // A failed boot must never leave the cover spinning forever: drop it so
+  // the (empty) app shell is usable instead of a frozen spinner.
+  try {
+    await continueInit();
+  } catch (e) {
+    hideBootCover();
+    console.error(e);
+  }
+}
+
+// Fades the boot cover out once real content is painted. Idempotent: later
+// render() calls are unaffected.
+function hideBootCover() {
+  const c = document.getElementById('boot-cover');
+  if (!c || c.classList.contains('hide')) return;
+  c.classList.add('hide');
+  setTimeout(() => c.remove(), 350);
 }
 
 // Decrypt failure is itself proof a cookie is unusable -- flag it instantly
@@ -426,6 +445,7 @@ async function continueInit() {
   renderFilterCategories();
   updateTrashBadge();
   render();
+  hideBootCover();
   renderDashboard();
   _initSliderFills();
   // put the toolbar back to the saved view + filter
@@ -473,6 +493,10 @@ async function continueInit() {
   // in sync; only the visual polling/compositing work is dropped). Restored
   // on focus with an immediate re-poll so nothing looks stale.
   api.onWindowVisibility(hidden => {
+    // Stale/misordered focus events can stick app-hidden ON, freezing every
+    // CSS animation app-wide (all spinners included): a "hidden" that arrives
+    // while the document actually has focus is bogus — ignore it.
+    if (hidden && document.hasFocus()) hidden = false;
     document.documentElement.classList.toggle('app-hidden', !!hidden);
     if (hidden) {
       if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
@@ -819,16 +843,42 @@ function previewTheme(accent, bg, surface, isDark) {
   Object.entries(vars).forEach(([k,v]) => document.documentElement.style.setProperty(k, v));
 }
 function clearPreview() {
+  // Preview only ever adds inline vars on top of the untouched active theme
+  // classes, so removing them restores the theme by itself. A full
+  // _reapplyActiveTheme() here (class churn + card queries + radius +
+  // texture on EVERY card mouseleave) was the main themes-tab jank.
   _previewedKeys.forEach(k => document.documentElement.style.removeProperty(k));
   _previewedKeys = [];
   document.body.classList.remove('theme-transitioning');
-  _reapplyActiveTheme();
+  // Exception: custom themes THEMSELVES live as inline vars, which the wipe
+  // above just removed together with the preview ones — lay them back.
+  // Built-in themes need nothing (their classes were never touched).
+  const name = currentTheme();
+  if (name.startsWith('custom:')) {
+    const ct = _customThemes.find(t => t.id === name.slice(7));
+    if (ct) {
+      const vars = generateThemeVars(ct.accent, ct.bg, ct.surface, ct.isDark);
+      Object.entries(vars).forEach(([k,v]) => document.documentElement.style.setProperty(k, v));
+    }
+  }
+}
+// Hover preview, debounced: sweeping the mouse across cards used to repaint
+// the whole app once per card. Now a card previews only if the cursor rests
+// on it (~120ms); leaving early cancels the pending preview.
+let _previewTimer = null;
+function previewThemeSoon(accent, bg, surface, isDark) {
+  cancelPreviewTheme();
+  _previewTimer = setTimeout(() => { _previewTimer = null; previewTheme(accent, bg, surface, isDark); }, 120);
+}
+function cancelPreviewTheme() {
+  if (_previewTimer) { clearTimeout(_previewTimer); _previewTimer = null; }
+  else clearPreview();
 }
 
 // ── Texture intensity (off | subtle | medium) ─────────────────────────────
 const _TEX_PATTERNS = ['grain','dots','stars','rays','triangles','crosses','waves','hex','grid','diagonal','mesh','circuit'];
 function _themeTexture() { try { return localStorage.getItem('mr-theme-texture') || 'subtle'; } catch { return 'subtle'; } }
-function _themePattern() { try { return localStorage.getItem('mr-theme-pattern') || ''; } catch { return ''; } }
+function _themePattern() { try { return localStorage.getItem('mr-theme-pattern') || 'none'; } catch { return 'none'; } }
 function _themeTexSize() { try { return parseInt(localStorage.getItem('mr-theme-tex-size'), 10) || 0; } catch { return 0; } }
 function _applyTextureIntensity() {
   const v = _themeTexture();
@@ -836,7 +886,8 @@ function _applyTextureIntensity() {
   // the whole layer's opacity on top of that.
   const opacity = v === 'off' ? 0 : (v === 'medium' ? 1 : 0.55);
   document.documentElement.style.setProperty('--theme-texture-opacity', String(opacity));
-  // Pattern override ('' = follow the active theme's own texture).
+  // Pattern override ('none' = no background pattern, the default; '' =
+  // follow the active theme's own texture for users who had it set before).
   // Set on BODY, not :root — body.theme-* declares --theme-texture on the
   // body itself, so an :root inline value would lose the cascade for
   // body::before. An inline style on body beats the stylesheet.
@@ -877,8 +928,8 @@ function setThemeTexSize(v) {
 function _renderTexturePatternSelect() {
   const sel = document.getElementById('texture-pattern');
   if (!sel) return;
-  let html = '<option value="">' + esc(t('themes.patternAuto')) + '</option>';
-  html += '<option value="none">' + esc(t('themes.patternNone')) + '</option>';
+  let html = '<option value="none">' + esc(t('themes.patternNone')) + '</option>';
+  html += '<option value="">' + esc(t('themes.patternAuto')) + '</option>';
   for (const p of _TEX_PATTERNS) html += '<option value="' + p + '">' + esc(t('themes.pattern' + p)) + '</option>';
   sel.innerHTML = html;
   sel.value = _themePattern();
@@ -999,7 +1050,14 @@ function onCustomColorChange() {
   if (ah) ah.textContent = a;
   if (bh) bh.textContent = b;
   if (sh) sh.textContent = s;
-  previewTheme(a, b, s, d);
+  // Color inputs fire per tick while dragging the picker: coalesce to one
+  // full-page preview per animation frame instead of one per tick.
+  window.__ccArgs = [a, b, s, d];
+  if (window.__ccRaf) return;
+  window.__ccRaf = requestAnimationFrame(() => {
+    window.__ccRaf = null;
+    previewTheme(...window.__ccArgs);
+  });
 }
 function saveCustomTheme() {
   const nameEl = document.getElementById('custom-theme-name');
@@ -1158,7 +1216,7 @@ function renderThemePage() {
   for (const name of visibleBuiltins) {
     const m = THEME_META[name];
     if (!m) continue;
-    html += '<div class="theme-card" data-theme="'+name+'" onclick="setTheme(\''+name+'\')" onmouseenter="previewTheme(\''+m.accent+'\',\''+m.bg+'\',\''+m.surface+'\','+m.isDark+')" onmouseleave="clearPreview()" role="button" tabindex="0">';
+    html += '<div class="theme-card" data-theme="'+name+'" onclick="setTheme(\''+name+'\')" onmouseenter="previewThemeSoon(\''+m.accent+'\',\''+m.bg+'\',\''+m.surface+'\','+m.isDark+')" onmouseleave="cancelPreviewTheme()" role="button" tabindex="0">';
     html += _themeCardMiniHtml(m.accent, m.bg, m.surface, m.isDark, m.tex);
     html += '<div class="tc-foot"><span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>'+esc(t('settings.theme'+name.charAt(0).toUpperCase()+name.slice(1)))+' <button class="btn btn-sm btn-ghost" style="margin-left:6px;padding:2px 6px;font-size:10px" title="'+esc(t('themes.duplicate'))+'" onclick="event.stopPropagation();duplicateTheme(\''+name+'\')"><span class="material-icons-round" style="font-size:12px">content_copy</span></button></span>';
     html += _swatchesHtml(m.accent, m.bg, m.surface);
@@ -1167,7 +1225,7 @@ function renderThemePage() {
   // Custom themes
   if (_themeCat !== 'dark' && _themeCat !== 'light') {
     for (const ct of _customThemes) {
-      html += '<div class="theme-card theme-custom-card" data-theme-id="'+ct.id+'" onclick="setTheme(\'custom:'+ct.id+'\')" onmouseenter="previewTheme(\''+ct.accent+'\',\''+ct.bg+'\',\''+ct.surface+'\','+ct.isDark+')" onmouseleave="clearPreview()" role="button" tabindex="0">';
+      html += '<div class="theme-card theme-custom-card" data-theme-id="'+ct.id+'" onclick="setTheme(\'custom:'+ct.id+'\')" onmouseenter="previewThemeSoon(\''+ct.accent+'\',\''+ct.bg+'\',\''+ct.surface+'\','+ct.isDark+')" onmouseleave="cancelPreviewTheme()" role="button" tabindex="0">';
       html += _themeCardMiniHtml(ct.accent, ct.bg, ct.surface, ct.isDark, 'grain');
       html += '<div class="tc-foot"><span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>'+esc(ct.name)+' <button class="btn btn-sm btn-ghost" style="margin-left:6px;padding:2px 6px;font-size:10px" onclick="event.stopPropagation();openCustomThemePanel(\''+ct.id+'\')"><span class="material-icons-round" style="font-size:12px">edit</span></button></span>';
       html += _swatchesHtml(ct.accent, ct.bg, ct.surface);
@@ -1533,6 +1591,13 @@ document.addEventListener('click', e => {
   const fm = document.getElementById('filter-menu');
   if (fm && fm.classList.contains('open') && !e.target.closest('.filter-wrap')) fm.classList.remove('open');
 });
+// Backstop for a stuck app-hidden freeze: any real user interaction or DOM
+// focus proves the window is visible, so drop the animation freeze at once.
+// (Without this, one missed focus event leaves every spinner static forever.)
+['pointerdown', 'keydown'].forEach(ev =>
+  document.addEventListener(ev, () => document.documentElement.classList.remove('app-hidden'), { passive: true, capture: true })
+);
+window.addEventListener('focus', () => document.documentElement.classList.remove('app-hidden'));
 
 function toggleAntiAfk(src) {
   const el = document.getElementById(src === 'sb' ? 'sb-antiafk' : 'set-antiafk');

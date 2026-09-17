@@ -8,8 +8,19 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/>
 <link rel="stylesheet" href="styles.css"/>
+<style>
+/* Boot cover: first paint, before styles.css/fonts/JS. Hides the empty app
+   shell and stays up behind the encryption lock screen until content is ready. */
+#boot-cover{position:fixed;inset:0;z-index:90;background:#0b0d13;display:flex;align-items:center;justify-content:center;transition:opacity .3s}
+#boot-cover.hide{opacity:0;pointer-events:none}
+.boot-inner{display:flex;flex-direction:column;align-items:center;gap:18px}
+.boot-logo{font-family:'Inter','Segoe UI',sans-serif;font-size:20px;font-weight:700;color:#e6e9f2;letter-spacing:.02em}
+.boot-spin{width:26px;height:26px;border-radius:50%;border:3px solid #2a3048;border-top-color:#6366f1;animation:bootspin .8s linear infinite}
+@keyframes bootspin{to{transform:rotate(360deg)}}
+</style>
 </head>
 <body>
+<div id="boot-cover"><div class="boot-inner"><div class="boot-logo">KNT Manager</div><div class="boot-spin"></div></div></div>
 <div id="titlebar">
   <div class="tb-brand">
     <div class="tb-name">KNT Manager</div>
