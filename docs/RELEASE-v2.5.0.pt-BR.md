@@ -14,13 +14,16 @@
 - Gravação de dados com validação, arquivos temporários e recuperação de transações interrompidas.
 - Melhorias de teclado, foco e confirmação nos diálogos.
 
-## Download e atualização
-1. Baixe **KNT-Manager-v2.5.0-Windows.zip** e extraia todo o conteúdo em uma pasta nova.
-2. Se utiliza o perfil de teste das versões anteriores, copie a pasta `dados-teste` para a nova pasta, mantendo a original, e abra `TESTAR.cmd`.
-3. Para o perfil normal do Windows, execute `KNT-Manager-v2.5.0.exe` diretamente.
-4. Mantenha `WebView2Loader.dll` junto ao executável. Não abra duas versões sobre a mesma pasta de dados simultaneamente.
+## Download para Windows
+1. Baixe **[KNT-Manager-v2.5.0.exe](https://github.com/Kntt9/KNT-Manager/releases/download/v2.5.0/KNT-Manager-v2.5.0.exe)**.
+2. Baixe **[WebView2Loader.dll](https://github.com/Kntt9/KNT-Manager/releases/download/v2.5.0/WebView2Loader.dll)** e coloque na **mesma pasta do executável**. Esta compilação precisa dos dois arquivos.
+3. Abra o executável normalmente. Não é necessário usar um comando ou atalho de teste.
 
-O pacote contém SHA256 do executável e as licenças das fontes. Nenhuma conta ou credencial é distribuída.
+O aplicativo usa o perfil normal do Windows. Se você usava uma versão de teste com a pasta dados-teste, suas contas continuam naquele perfil separado; mantenha essa pasta e faça a migração por backup/restauração antes de abandoná-la.
+
+**Source code (zip)** e **Source code (tar.gz)** contêm apenas o código-fonte, para quem deseja compilar ou modificar o projeto. Não são instaladores.
+
+Os hashes dos downloads estão em **SHA256.txt**, e as licenças estão em **LICENCAS.txt**. Nenhuma conta ou credencial é distribuída.
 
 ## Validação e limites
 - 84 testes JavaScript aprovados, incluindo fila/cache de metadados e fluxos de lançamento.
