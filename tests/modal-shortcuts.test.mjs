@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../src/renderer.js', import.meta.url), 'utf8');
+// Git checkouts may use CRLF on Windows; source extraction is newline-independent.
+const source = readFileSync(new URL('../src/renderer.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const start = source.indexOf("document.addEventListener('keydown', e => {\n  // Ctrl/Cmd+F");
 assert.notEqual(start, -1);
 const code = source.slice(start, source.indexOf('\nlet chartTab =', start));
