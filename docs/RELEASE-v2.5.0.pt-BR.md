@@ -16,8 +16,8 @@
 
 ## Download para Windows
 1. Baixe **[KNT-Manager-v2.5.0.exe](https://github.com/Kntt9/KNT-Manager/releases/download/v2.5.0/KNT-Manager-v2.5.0.exe)**.
-2. Baixe **[WebView2Loader.dll](https://github.com/Kntt9/KNT-Manager/releases/download/v2.5.0/WebView2Loader.dll)** e coloque na **mesma pasta do executável**. Esta compilação precisa dos dois arquivos.
-3. Abra o executável normalmente. Não é necessário usar um comando ou atalho de teste.
+2. Abra o executável normalmente. O carregador WebView2 e o runtime C estão incorporados; não é necessário baixar DLLs separadas.
+3. Se o Windows informar que falta o WebView2 Runtime, instale o **[WebView2 Runtime — download oficial da Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section)** (Evergreen Bootstrapper) e abra o aplicativo novamente.
 
 O aplicativo usa o perfil normal do Windows. Se você usava uma versão de teste com a pasta dados-teste, suas contas continuam naquele perfil separado; mantenha essa pasta e faça a migração por backup/restauração antes de abandoná-la.
 
@@ -32,6 +32,6 @@ Os hashes dos downloads estão em **SHA256.txt**, e as licenças estão em **LIC
 - Nome e imagem reais de Anime Legacy Simulator conferidos na prévia; testes visuais usam contas fictícias.
 - A build anterior foi testada e aprovada pelo mantenedor. O ajuste de versão desta release não muda os fluxos.
 - Sem conexão ou metadados disponíveis, o app mantém o Place ID e um ícone. Links de compartilhamento sem Place ID não resolvem capa nesta versão.
-- O binário Windows é uma compilação de desenvolvimento sem assinatura digital. Os controles de requisição não garantem ausência de bloqueios pelo Roblox.
+- O binário Windows é uma compilação otimizada (release/MSVC), sem assinatura digital. Os controles de requisição não garantem ausência de bloqueios pelo Roblox.
 
 Código e relatórios técnicos completos estão disponíveis no repositório.
