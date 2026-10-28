@@ -19,11 +19,11 @@ if exist "%CSC%" (
   exit /b 1
 )
 
-cargo build --release --manifest-path src-tauri\Cargo.toml --bin MultiRoblox
+cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path src-tauri\Cargo.toml --bin MultiRoblox
 if errorlevel 1 (echo Build failed & pause & exit /b 1)
 
 if not exist dist mkdir dist
-copy /y "src-tauri\target\release\MultiRoblox.exe" "dist\KNT-Manager.exe" >nul
+copy /y "src-tauri\target\x86_64-pc-windows-msvc\release\MultiRoblox.exe" "dist\KNT-Manager.exe" >nul
 if errorlevel 1 (echo Could not copy KNT-Manager.exe & pause & exit /b 1)
 if exist "dist\MultiRoblox.exe" del "dist\MultiRoblox.exe"
 

@@ -1,0 +1,44 @@
+name: Build standalone Windows executable
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Compile native helper
+        shell: pwsh
+        run: |
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /optimize+ /platform:x64 /target:exe /r:System.Drawing.dll /out:src-tauri\resources\RobloxNative.exe src-tauri\resources\RobloxNative.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build optimized executable with static WebView2 loader
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml --bin MultiRoblox
+      - name: Verify loader is incorporated
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin unavailable' }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $exe = 'src-tauri\target\x86_64-pc-windows-msvc\release\MultiRoblox.exe'
+          $imports = & $dumpbin.FullName /dependents $exe
+          if ($LASTEXITCODE -ne 0) { throw 'PE inspection failed' }
+          $imports | Set-Content dist\DEPENDENCIES.txt
+          if ($imports -match 'WebView2Loader\.dll') { throw 'Standalone executable still imports WebView2Loader.dll' }
+          Copy-Item $exe dist\KNT-Manager-v2.5.0.exe
+          $hash = (Get-FileHash dist\KNT-Manager-v2.5.0.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  KNT-Manager-v2.5.0.exe" | Set-Content dist\SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KNT-Manager-standalone-Windows
+          path: dist/
+          if-no-files-found: error
