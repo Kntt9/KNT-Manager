@@ -13,7 +13,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize, dirname } from 'node:path';
+import { extname, join, normalize, dirname, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -30,6 +30,8 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.webp': 'image/webp',
   '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
   '.txt': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
 };
@@ -39,12 +41,17 @@ const ALLOWED_PROXY_HOSTS = [
 ];
 const UA = 'Mozilla/5.0 (KNT-Manager-Web/1.0)';
 const ok = (res, body, type = 'application/json; charset=utf-8', status = 200) => {
-  res.writeHead(status, { 'Content-Type': type, 'Access-Control-Allow-Origin': '*' });
+  res.writeHead(status, { 'Content-Type': type });
   res.end(body);
 };
 const readBody = (req) => new Promise((resolve, reject) => {
   const chunks = [];
-  req.on('data', c => chunks.push(c));
+  let bytes = 0;
+  req.on('data', c => {
+    bytes += c.length;
+    if (bytes > 64 * 1024) return reject(Object.assign(new Error('Request body exceeds 64 KiB'), { statusCode: 413 }));
+    chunks.push(c);
+  });
   req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
   req.on('error', reject);
 });
@@ -62,7 +69,7 @@ async function proxy(req, res, url) {
     const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' }, signal: AbortSignal.timeout(12000) });
     const ct = r.headers.get('content-type') || 'application/json';
     const body = await r.arrayBuffer();
-    res.writeHead(r.status, { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(r.status, { 'Content-Type': ct });
     res.end(Buffer.from(body));
   } catch (e) {
     ok(res, JSON.stringify({ error: String(e && e.message || e) }), undefined, 502);
@@ -84,7 +91,7 @@ async function validateCookie(req, res) {
     }
     let reason = 'HTTP ' + r.status;
     if (r.status === 401 || r.status === 403) reason = 'Cookie is expired or invalid';
-    return ok(res, JSON.stringify({ ok: false, reason }));
+    return ok(res, JSON.stringify({ ok: false, status: r.status, reason }));
   } catch (e) {
     ok(res, JSON.stringify({ ok: false, reason: String(e && e.message || e) }));
   }
@@ -203,7 +210,8 @@ async function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
   if (rel === '/' || rel === '') rel = '/index.html';
   const file = normalize(join(ROOT, rel));
-  if (!file.startsWith(ROOT)) return ok(res, 'forbidden', 'text/plain', 403);
+  const local = relative(ROOT, file);
+  if (local.startsWith('..') || isAbsolute(local)) return ok(res, 'forbidden', 'text/plain', 403);
   try {
     const info = await stat(file);
     if (!info.isFile()) throw new Error('not a file');
@@ -215,21 +223,25 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
-createServer((req, res) => {
+createServer(async (req, res) => {
   const url = req.url || '/';
   const pathname = url.split('?')[0];
   try {
-    if (pathname === '/proxy') return proxy(req, res, new URL('http://internal' + url).searchParams.get('url') || '');
-    if (pathname === '/api/validate-cookie' && req.method === 'POST') return validateCookie(req, res);
-    if (pathname === '/api/altgen' && req.method === 'POST') return altgen(req, res);
-    if (pathname === '/api/follow-user' && req.method === 'POST') return followUser(req, res);
-    if (pathname === '/api/game-name') return gameName(req, res, url);
-    if (pathname === '/api/roblox-version') return robloxVersion(res);
-    return serveStatic(req, res, pathname);
+    const hosts = [`localhost:${PORT}`, `127.0.0.1:${PORT}`];
+    if (!hosts.includes(req.headers.host) || (req.headers.origin && !hosts.some(host => req.headers.origin === 'http://' + host))) {
+      return ok(res, JSON.stringify({ error: 'Local same-origin requests only' }), undefined, 403);
+    }
+    if (pathname === '/proxy') return await proxy(req, res, new URL('http://internal' + url).searchParams.get('url') || '');
+    if (pathname === '/api/validate-cookie' && req.method === 'POST') return await validateCookie(req, res);
+    if (pathname === '/api/altgen' && req.method === 'POST') return await altgen(req, res);
+    if (pathname === '/api/follow-user' && req.method === 'POST') return await followUser(req, res);
+    if (pathname === '/api/game-name') return await gameName(req, res, url);
+    if (pathname === '/api/roblox-version') return await robloxVersion(res);
+    return await serveStatic(req, res, pathname);
   } catch (e) {
-    ok(res, JSON.stringify({ error: String(e && e.message || e) }), undefined, 500);
+    ok(res, JSON.stringify({ error: String(e && e.message || e) }), undefined, e.statusCode || (e instanceof SyntaxError || e instanceof URIError ? 400 : 500));
   }
-}).listen(PORT, () => {
+}).listen(PORT, '127.0.0.1', () => {
   console.log('KNT Manager Web — http://localhost:' + PORT);
   console.log('  open the site, or open web/index.html directly for offline demo mode');
 });

@@ -1,12 +1,18 @@
+mod account_worker;
 mod backup;
 mod commands;
 mod crypto;
 mod encryption;
 mod helper;
 mod jsonfile;
+mod file_transaction;
+mod persistence;
+mod record_crypto;
+mod key_change;
 mod login;
 mod native;
 mod paths;
+mod request_policy;
 mod roblox_api;
 mod settings;
 mod signup;
@@ -27,6 +33,8 @@ pub fn run() {
         // plugins.updater + UPDATING.md for the release flow).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // Resolve interrupted key changes before reading settings/ciphertext.
+            { let _guard = persistence::data_guard()?; settings::try_load_settings()?; }
             let handle = app.handle().clone();
             app.manage(AppState::new(handle.clone()));
 

@@ -4,7 +4,7 @@
 // web/ and are not regenerated.
 //
 //   node web/build-web.mjs
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, cpSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -77,6 +77,12 @@ body{height:100dvh;display:flex;flex-direction:column}
 @media (max-width:640px){.web-banner{font-size:11px;align-items:flex-start}}
 `;
 write(join(WEB, 'styles.css'), read(join(SRC, 'styles.css')) + WEB_CSS);
+
+copyFileSync(join(SRC, 'graphite.css'), join(WEB, 'graphite.css'));
+copyFileSync(join(SRC, 'ui-shell.js'), join(WEB, 'ui-shell.js'));
+copyFileSync(join(SRC, 'workspace.css'), join(WEB, 'workspace.css'));
+copyFileSync(join(SRC, 'workspace-ui.js'), join(WEB, 'workspace-ui.js'));
+cpSync(join(SRC, 'assets'), join(WEB, 'assets'), { recursive: true });
 
 // ── renderer + i18n (plain copies) ─────────────────────────────────────────
 copyFileSync(join(SRC, 'renderer.js'), join(WEB, 'renderer.js'));

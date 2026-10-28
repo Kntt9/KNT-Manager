@@ -1,3 +1,4 @@
+use crate::request_policy::RobloxRequest;
 use crate::state::AppState;
 use serde_json::Value;
 use std::time::Duration;
@@ -34,39 +35,53 @@ pub struct UserInfo {
     pub username: Option<String>,
     pub user_id: Option<String>,
     pub reason: Option<String>,
+    pub status: u16,
 }
 
 pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
     let res = state
-        .http
+        .http_no_redirect
         .get("https://users.roblox.com/v1/users/authenticated")
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(8))
-        .send()
+        .send_roblox(&state.roblox_requests, Some(cookie))
         .await;
     match res {
         Ok(resp) => {
+            let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
             match serde_json::from_str::<Value>(&body) {
-                Ok(d) if d.get("id").is_some() => UserInfo {
-                    ok: true,
-                    username: d
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    user_id: d.get("id").map(|v| match v {
-                        Value::Number(n) => n.to_string(),
-                        Value::String(s) => s.clone(),
-                        _ => String::new(),
-                    }),
-                    reason: None,
-                },
+                Ok(d)
+                    if status == 200
+                        && d.get("id").and_then(Value::as_u64).is_some()
+                        && d.get("name").and_then(Value::as_str).is_some() =>
+                {
+                    UserInfo {
+                        ok: true,
+                        username: d
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        user_id: d.get("id").map(|v| match v {
+                            Value::Number(n) => n.to_string(),
+                            Value::String(s) => s.clone(),
+                            _ => String::new(),
+                        }),
+                        reason: None,
+                        status,
+                    }
+                }
                 _ => UserInfo {
                     ok: false,
                     username: None,
                     user_id: None,
-                    reason: Some(extract_roblox_error(&body)),
+                    reason: Some(if status == 429 {
+                        "Roblox rate limit (HTTP 429). Wait before checking again.".into()
+                    } else {
+                        format!("HTTP {status}: {}", extract_roblox_error(&body))
+                    }),
+                    status,
                 },
             }
         }
@@ -74,6 +89,7 @@ pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
             ok: false,
             username: None,
             user_id: None,
+            status: e.status,
             reason: Some(e.to_string()),
         },
     }
@@ -90,30 +106,41 @@ pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
 pub async fn get_roblox_version(state: &AppState, channel: Option<&str>) -> Result<String, String> {
     let channel = channel.filter(|c| !c.is_empty());
     let url = match channel {
-        Some(ch) => format!("https://setup.rbxcdn.com/channel/{}/version", urlencoding::encode(ch)),
+        Some(ch) => format!(
+            "https://setup.rbxcdn.com/channel/{}/version",
+            urlencoding::encode(ch)
+        ),
         None => "https://clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer".to_string(),
     };
     let res = state
-        .http
+        .http_no_redirect
         .get(&url)
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
-        .send()
+        .send_roblox(&state.roblox_requests, None)
         .await
         .map_err(|e| format!("network error: {e}"))?;
     let status = res.status();
     if status != 200 {
-        return Err(format!("unexpected status {status} -- unknown or restricted channel"));
+        return Err(format!(
+            "unexpected status {status} -- unknown or restricted channel"
+        ));
     }
     if channel.is_some() {
-        let text = res.text().await.map_err(|e| format!("bad response body: {e}"))?;
+        let text = res
+            .text()
+            .await
+            .map_err(|e| format!("bad response body: {e}"))?;
         let text = text.trim();
         if text.is_empty() || !text.starts_with("version-") {
             return Err("response wasn't a version hash".to_string());
         }
         return Ok(text.to_string());
     }
-    let json: Value = res.json().await.map_err(|e| format!("bad response body: {e}"))?;
+    let json: Value = res
+        .json()
+        .await
+        .map_err(|e| format!("bad response body: {e}"))?;
     json.get("clientVersionUpload")
         .or_else(|| json.get("version"))
         .and_then(|v| v.as_str())
@@ -121,47 +148,85 @@ pub async fn get_roblox_version(state: &AppState, channel: Option<&str>) -> Resu
         .ok_or_else(|| "response missing version field".to_string())
 }
 
-async fn csrf_from_endpoint(state: &AppState, cookie: &str, endpoint: &str) -> Option<String> {
-    let url = format!("https://auth.roblox.com{}", endpoint);
-    let res = state
-        .http
-        .post(&url)
+// These legacy auth endpoints require their JSON media type even with no
+// payload. Keep one builder for the CSRF probe and launch ticket so retries
+// preserve the same request contract. A missing Content-Type causes HTTP 415.
+fn empty_auth_post(
+    client: &reqwest::Client,
+    endpoint: &str,
+    cookie: &str,
+) -> reqwest::RequestBuilder {
+    client
+        .post(endpoint)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("User-Agent", UA)
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
         .header("Content-Length", "0")
-        .timeout(Duration::from_secs(8))
         .body("")
-        .send()
-        .await
-        .ok()?;
-    res.headers()
-        .get("x-csrf-token")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
 }
 
-pub async fn get_csrf_token(state: &AppState, cookie: &str) -> Option<String> {
-    {
-        let cache = state.csrf_cache.lock().unwrap();
-        if let Some((token, ts)) = cache.get(cookie) {
-            if now_ms() - ts < 5 * 60_000 {
-                return Some(token.clone());
-            }
+fn authentication_error(operation: &str, status: reqwest::StatusCode) -> String {
+    match status.as_u16() {
+        400 | 415 => format!(
+            "Roblox rejected the {operation} request format (HTTP {}). Update KNT Manager and report this application error.",
+            status.as_u16()
+        ),
+        401 => "Roblox rejected this session (HTTP 401). Sign in again before trying to launch.".into(),
+        403 => format!("{operation} denied (HTTP 403). Check the account in Roblox before trying again."),
+        429 => "Roblox rate limit (HTTP 429). Requests are paused; wait before trying again.".into(),
+        500..=599 => format!("Roblox {operation} service is unavailable (HTTP {}). Try again later.", status.as_u16()),
+        _ => format!("Roblox {operation} request failed (HTTP {}).", status.as_u16()),
+    }
+}
+
+// Never send a cached CSRF token to logout: this is only a token probe and
+// must not become an authenticated logout request. There is no retry here.
+async fn request_csrf_token(
+    client: &reqwest::Client,
+    policy: &crate::request_policy::RequestPolicy,
+    endpoint: &str,
+    cookie: &str,
+) -> Result<String, String> {
+    let response = empty_auth_post(client, endpoint, cookie)
+        .send_roblox(policy, Some(cookie))
+        .await?;
+    if response.status() == 403 && !response.headers().contains_key("rblx-challenge-id") {
+        if let Some(token) = response
+            .headers()
+            .get("x-csrf-token")
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.is_empty())
+        {
+            return Ok(token.to_string());
         }
     }
-    for endpoint in ["/v2/logout", "/v1/logout"] {
-        if let Some(token) = csrf_from_endpoint(state, cookie, endpoint).await {
-            state
-                .csrf_cache
-                .lock()
-                .unwrap()
-                .insert(cookie.to_string(), (token.clone(), now_ms()));
-            return Some(token);
+    if response.status() == 403 {
+        policy.pause_authentication(cookie).await;
+    }
+    Err(authentication_error("CSRF", response.status()))
+}
+
+// A single CSRF probe; failures never trigger alternate logout endpoints.
+pub async fn get_csrf_token(state: &AppState, cookie: &str) -> Result<String, String> {
+    if let Some((token, ts)) = state.csrf_cache.lock().unwrap().get(cookie) {
+        if now_ms() - ts < 5 * 60_000 {
+            return Ok(token.clone());
         }
     }
-    None
+    let token = request_csrf_token(
+        &state.http_no_redirect,
+        &state.roblox_requests,
+        "https://auth.roblox.com/v2/logout",
+        cookie,
+    )
+    .await?;
+    state
+        .csrf_cache
+        .lock()
+        .unwrap()
+        .insert(cookie.to_string(), (token.clone(), now_ms()));
+    Ok(token)
 }
 
 pub fn invalidate_csrf(state: &AppState, cookie: &str) {
@@ -174,137 +239,90 @@ pub struct TicketResult {
     pub error: Option<String>,
 }
 
-// Any non-429/403 status also gets backoff-and-retry across all 3 attempts.
+// Tickets are consumed by a launch. Never cache or replay a successful ticket.
+// Only the server's explicit CSRF refresh allows one repeat of this POST.
 pub async fn get_auth_ticket(
     state: &AppState,
     cookie: &str,
     csrf_token: Option<String>,
 ) -> TicketResult {
-    let now = now_ms();
-    let cached = {
-        state
-            .ticket_cache
-            .lock()
-            .unwrap()
-            .get(cookie)
-            .map(|(t, ts)| (t.clone(), *ts))
-    };
-    if let Some((ticket, ts)) = cached {
-        if now - ts < 25_000 {
-            return TicketResult {
+    let result = request_auth_ticket(
+        &state.http_no_redirect,
+        &state.roblox_requests,
+        "https://auth.roblox.com/v1/authentication-ticket",
+        cookie,
+        csrf_token,
+    )
+    .await;
+    invalidate_csrf(state, cookie);
+    match result {
+        Ok((ticket, token)) => {
+            if let Some(token) = token {
+                state
+                    .csrf_cache
+                    .lock()
+                    .unwrap()
+                    .insert(cookie.to_string(), (token, now_ms()));
+            }
+            TicketResult {
                 ok: true,
                 ticket: Some(ticket),
                 error: None,
-            };
-        }
-        if now - ts < 8_000 {
-            let wait = 8_000 - (now - ts);
-            tokio::time::sleep(Duration::from_millis(wait as u64)).await;
-        }
-    }
-
-    let mut token = csrf_token;
-    let delays = [0u64, 2000, 5000];
-    let mut last_status: u16 = 0;
-
-    for attempt in 0..3 {
-        if delays[attempt] > 0 {
-            tokio::time::sleep(Duration::from_millis(delays[attempt])).await;
-        }
-        let mut req = state
-            .http
-            .post("https://auth.roblox.com/v1/authentication-ticket")
-            .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
-            .header("Referer", "https://www.roblox.com")
-            .header("Origin", "https://www.roblox.com")
-            .header("User-Agent", UA)
-            .header("Accept", "application/json")
-            .header("Content-Type", "application/json")
-            .header("Content-Length", "0")
-            .timeout(Duration::from_secs(8))
-            .body("");
-        if let Some(t) = &token {
-            req = req.header("X-CSRF-TOKEN", t.as_str());
-        }
-        let res = match req.send().await {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let status = res.status().as_u16();
-        last_status = status;
-        if let Some(ticket) = res
-            .headers()
-            .get("rbx-authentication-ticket")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-        {
-            state
-                .ticket_cache
-                .lock()
-                .unwrap()
-                .insert(cookie.to_string(), (ticket.clone(), now_ms()));
-            return TicketResult {
-                ok: true,
-                ticket: Some(ticket),
-                error: None,
-            };
-        }
-        if status == 429 {
-            invalidate_csrf(state, cookie);
-            let retry_after = res
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(8);
-            tokio::time::sleep(Duration::from_secs(retry_after)).await;
-            token = get_csrf_token(state, cookie).await;
-            if token.is_none() {
-                return TicketResult {
-                    ok: false,
-                    ticket: None,
-                    error: Some(
-                        "Rate limited and could not refresh token. Wait a moment and try again."
-                            .into(),
-                    ),
-                };
             }
-            continue;
         }
-        if status == 403 {
-            invalidate_csrf(state, cookie);
-            token = get_csrf_token(state, cookie).await;
-            if token.is_none() {
-                return TicketResult {
-                    ok: false,
-                    ticket: None,
-                    error: Some("Authentication failed (403). Cookie may be expired.".into()),
-                };
-            }
-            continue;
-        }
-    }
-    if last_status != 0 {
-        return TicketResult {
+        Err(error) => TicketResult {
             ok: false,
             ticket: None,
-            error: Some(format!(
-                "Auth ticket request failed (HTTP {}) after 3 attempts. Try again in a moment.",
-                last_status
-            )),
-        };
-    }
-    TicketResult {
-        ok: false,
-        ticket: None,
-        error: Some(
-            "Still rate limited after 3 attempts. Please wait 30 seconds and try again.".into(),
-        ),
+            error: Some(error),
+        },
     }
 }
 
-pub fn invalidate_ticket(state: &AppState, cookie: &str) {
-    state.ticket_cache.lock().unwrap().remove(cookie);
+async fn request_auth_ticket(
+    client: &reqwest::Client,
+    policy: &crate::request_policy::RequestPolicy,
+    endpoint: &str,
+    cookie: &str,
+    mut token: Option<String>,
+) -> Result<(String, Option<String>), String> {
+    for attempt in 0..2 {
+        let mut request = empty_auth_post(client, endpoint, cookie)
+            .header("Referer", "https://www.roblox.com")
+            .header("Origin", "https://www.roblox.com");
+        if let Some(token) = &token {
+            request = request.header("X-CSRF-TOKEN", token);
+        }
+        let response = request.send_roblox(policy, Some(cookie)).await?;
+        let status = response.status();
+        if response.headers().contains_key("rblx-challenge-id") {
+            return Err("Authentication challenge received. Complete verification in Roblox before trying again.".into());
+        }
+        if status.is_success() {
+            return response
+                .headers()
+                .get("rbx-authentication-ticket")
+                .and_then(|v| v.to_str().ok())
+                .filter(|v| !v.is_empty())
+                .map(|ticket| (ticket.to_string(), token))
+                .ok_or_else(|| "Roblox response did not contain an authentication ticket".into());
+        }
+        if status == 403 && attempt == 0 && !response.headers().contains_key("rblx-challenge-id") {
+            if let Some(fresh) = response
+                .headers()
+                .get("x-csrf-token")
+                .and_then(|v| v.to_str().ok())
+                .filter(|v| !v.is_empty())
+            {
+                token = Some(fresh.to_string());
+                continue;
+            }
+        }
+        if status == 403 {
+            policy.pause_authentication(cookie).await;
+        }
+        return Err(authentication_error("authentication", status));
+    }
+    unreachable!("each attempt returns or consumes the one CSRF refresh")
 }
 
 fn extract_place_id(place_id_or_target: &str) -> Option<String> {
@@ -340,13 +358,13 @@ fn extract_place_id(place_id_or_target: &str) -> Option<String> {
 
 async fn get_json(state: &AppState, url: &str, cookie: &str) -> Option<Value> {
     let res = state
-        .http
+        .http_no_redirect
         .get(url)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Accept", "application/json")
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(5))
-        .send()
+        .send_roblox(&state.roblox_requests, Some(cookie))
         .await
         .ok()?;
     res.json::<Value>().await.ok()
@@ -406,7 +424,7 @@ pub async fn follow_redirect(state: &AppState, url: &str) -> String {
         .get(url)
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
-        .send()
+        .send_roblox(&state.roblox_requests, None)
         .await
     {
         Ok(res) => res
@@ -503,8 +521,16 @@ static ACCESS_CODE_QUERY_RE: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| regex::Regex::new(r"[?&]accessCode=([^&]+)").unwrap());
 
 fn extract_place_link(body: &str) -> Option<(String, String)> {
-    let pid = PLACE_ID_JSON_RE.captures(body)?.get(1)?.as_str().to_string();
-    let lc = LINK_CODE_JSON_RE.captures(body)?.get(1)?.as_str().to_string();
+    let pid = PLACE_ID_JSON_RE
+        .captures(body)?
+        .get(1)?
+        .as_str()
+        .to_string();
+    let lc = LINK_CODE_JSON_RE
+        .captures(body)?
+        .get(1)?
+        .as_str()
+        .to_string();
     Some((pid, lc))
 }
 
@@ -516,7 +542,7 @@ async fn post_raw(
     body: &str,
 ) -> (u16, reqwest::header::HeaderMap, String) {
     let res = state
-        .http
+        .http_no_redirect
         .post(url)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("X-CSRF-TOKEN", csrf)
@@ -524,7 +550,7 @@ async fn post_raw(
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
         .body(body.to_string())
-        .send()
+        .send_roblox(&state.roblox_requests, Some(cookie))
         .await;
     match res {
         Ok(r) => {
@@ -546,7 +572,7 @@ pub async fn get_access_code(
 ) -> Option<String> {
     let body = serde_json::json!({ "shareCode": link_code, "shareType": "Server" }).to_string();
     let res = state
-        .http
+        .http_no_redirect
         .post("https://apis.roblox.com/sharelinks/v1/resolve")
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("X-CSRF-TOKEN", csrf_token)
@@ -557,7 +583,7 @@ pub async fn get_access_code(
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(8))
         .body(body)
-        .send()
+        .send_roblox(&state.roblox_requests, Some(cookie))
         .await;
     if let Ok(r) = res {
         if let Ok(d) = r.json::<Value>().await {
@@ -591,7 +617,7 @@ pub async fn get_access_code(
         .header("Referer", "https://www.roblox.com")
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(5))
-        .send()
+        .send_roblox(&state.roblox_requests, Some(cookie))
         .await
         .ok()?;
     let loc = res
@@ -604,23 +630,41 @@ pub async fn get_access_code(
         .map(|m| m.as_str().to_string())
 }
 
+fn validate_roblox_url(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|_| "Invalid Roblox URL".to_string())?;
+    let host = parsed.host_str().unwrap_or("");
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some_and(|port| port != 443)
+        || !(host == "roblox.com" || host.ends_with(".roblox.com"))
+    {
+        return Err("Only HTTPS Roblox URLs on port 443 are allowed".into());
+    }
+    Ok(())
+}
+
 // Proxied through Rust since *.roblox.com sends no CORS headers and a
 // renderer-side fetch() would get blocked.
 pub async fn get_json_public(state: &AppState, url: &str) -> Result<Value, String> {
-    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
-    let host = parsed.host_str().unwrap_or("");
-    if !(host == "roblox.com" || host.ends_with(".roblox.com")) {
-        return Err("host not allowed".into());
-    }
+    validate_roblox_url(url)?;
     let res = state
-        .http
+        .http_no_redirect
         .get(url)
         .header("Accept", "application/json")
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .send_roblox(&state.roblox_requests, None)
+        .await;
+    let res = match res {
+        Ok(response) => response,
+        Err(error) if error.status != 0 => {
+            return Ok(
+                serde_json::json!({ "ok": false, "status": error.status, "data": { "errors": [{ "message": error.message }] } }),
+            )
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let status = res.status().as_u16();
     let ok = res.status().is_success();
     let data: Value = res.json().await.unwrap_or(Value::Null);
@@ -647,21 +691,25 @@ pub async fn get_weao_data(state: &AppState) -> Result<Value, String> {
 // some endpoints (e.g. the public server list) now require a logged-in
 // session and return empty/errors without it.
 pub async fn get_json_auth(state: &AppState, url: &str, cookie: &str) -> Result<Value, String> {
-    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
-    let host = parsed.host_str().unwrap_or("");
-    if !(host == "roblox.com" || host.ends_with(".roblox.com")) {
-        return Err("host not allowed".into());
-    }
+    validate_roblox_url(url)?;
     let res = state
-        .http
+        .http_no_redirect
         .get(url)
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Accept", "application/json")
         .header("User-Agent", UA)
         .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .send_roblox(&state.roblox_requests, Some(cookie))
+        .await;
+    let res = match res {
+        Ok(response) => response,
+        Err(error) if error.status != 0 => {
+            return Ok(
+                serde_json::json!({ "ok": false, "status": error.status, "data": { "errors": [{ "message": error.message }] } }),
+            )
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let status = res.status().as_u16();
     let ok = res.status().is_success();
     let data: Value = res.json().await.unwrap_or(Value::Null);
@@ -685,7 +733,12 @@ mod tests {
             "www.roblox.com/games/1818/Classic-Crossroads",
             "https://www.roblox.com/games/1818",
         ] {
-            assert_eq!(extract_place_id(input), Some("1818".into()), "failed for {}", input);
+            assert_eq!(
+                extract_place_id(input),
+                Some("1818".into()),
+                "failed for {}",
+                input
+            );
         }
     }
 
@@ -701,8 +754,14 @@ mod tests {
     fn place_id_rejects_non_numeric_and_junk() {
         assert_eq!(extract_place_id(""), None);
         assert_eq!(extract_place_id("not a link"), None);
-        assert_eq!(extract_place_id("https://www.roblox.com/games/abc/Name"), None);
-        assert_eq!(extract_place_id("https://www.roblox.com/users/1818/profile"), None);
+        assert_eq!(
+            extract_place_id("https://www.roblox.com/games/abc/Name"),
+            None
+        );
+        assert_eq!(
+            extract_place_id("https://www.roblox.com/users/1818/profile"),
+            None
+        );
     }
 
     #[test]
@@ -711,7 +770,10 @@ mod tests {
             extract_roblox_error(r#"{"errors":[{"code":0,"message":"Token Validation Failed"}]}"#),
             "Token Validation Failed"
         );
-        assert_eq!(extract_roblox_error(r#"{"message":"Too many requests"}"#), "Too many requests");
+        assert_eq!(
+            extract_roblox_error(r#"{"message":"Too many requests"}"#),
+            "Too many requests"
+        );
     }
 
     #[test]
@@ -724,17 +786,346 @@ mod tests {
     #[test]
     fn share_link_extraction_needs_both_ids() {
         let body = r#"{"placeId":1818,"linkCode":"abc-DEF_123"}"#;
-        assert_eq!(extract_place_link(body), Some(("1818".into(), "abc-DEF_123".into())));
-        assert_eq!(extract_place_link(r#"{"placeId":1818}"#), None, "no link code");
-        assert_eq!(extract_place_link(r#"{"linkCode":"abc"}"#), None, "no place id");
+        assert_eq!(
+            extract_place_link(body),
+            Some(("1818".into(), "abc-DEF_123".into()))
+        );
+        assert_eq!(
+            extract_place_link(r#"{"placeId":1818}"#),
+            None,
+            "no link code"
+        );
+        assert_eq!(
+            extract_place_link(r#"{"linkCode":"abc"}"#),
+            None,
+            "no place id"
+        );
     }
 
     #[test]
     fn share_link_accepts_the_other_code_field_names() {
         for field in ["privateServerLinkCode", "accessCode", "linkcode"] {
             let body = format!(r#"{{"placeId":7,"{}":"zzz"}}"#, field);
-            assert_eq!(extract_place_link(&body), Some(("7".into(), "zzz".into())), "failed for {}", field);
+            assert_eq!(
+                extract_place_link(&body),
+                Some(("7".into(), "zzz".into())),
+                "failed for {}",
+                field
+            );
         }
+    }
+
+    #[test]
+    fn authenticated_urls_reject_plaintext_credentials_ports_and_untrusted_hosts() {
+        for url in [
+            "http://users.roblox.com/v1/users/authenticated",
+            "https://roblox.com.evil.test/",
+            "https://roblox.com:8080/",
+            "https://user:password@roblox.com/",
+        ] {
+            assert!(validate_roblox_url(url).is_err(), "accepted {url}");
+        }
+        assert!(validate_roblox_url("https://users.roblox.com/v1/users/authenticated").is_ok());
+    }
+
+    #[derive(Debug)]
+    struct AuthRequest {
+        method: String,
+        target: String,
+        headers: std::collections::HashMap<String, String>,
+        body: Vec<u8>,
+    }
+
+    impl AuthRequest {
+        fn has_auth_format(&self) -> bool {
+            self.method == "POST"
+                && self.headers.get("accept").map(String::as_str) == Some("application/json")
+                && self.headers.get("content-type").map(String::as_str) == Some("application/json")
+                && self.headers.get("content-length").map(String::as_str) == Some("0")
+                && self.body.is_empty()
+        }
+    }
+
+    type ObservedRequests = std::sync::Arc<std::sync::Mutex<Vec<AuthRequest>>>;
+
+    // Local HTTP fixture only: never contacts Roblox or needs real credentials.
+    // Unlike a response-only stub, it rejects malformed media types with 415
+    // and records the complete headers/body, including the second CSRF POST.
+    // It keeps accepting after the planned replies to detect unexpected retries.
+    async fn ticket_endpoint(responses: Vec<(&str, &str)>) -> (String, ObservedRequests) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = ObservedRequests::default();
+        let observed = requests.clone();
+        let mut replies: std::collections::VecDeque<String> = responses.into_iter().map(|(status, headers)|
+            format!("HTTP/1.1 {status}\r\n{headers}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}")
+        ).collect();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = tokio::time::timeout(Duration::from_secs(2), async {
+                    let mut buf = Vec::new();
+                    let header_end = loop {
+                        let mut chunk = [0; 1024];
+                        let len = stream.read(&mut chunk).await.unwrap();
+                        assert!(len > 0, "request ended before its headers");
+                        buf.extend_from_slice(&chunk[..len]);
+                        assert!(buf.len() < 16 * 1024, "oversized fixture request");
+                        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break end + 4;
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&buf[..header_end]);
+                    let mut lines = head.lines();
+                    let mut first = lines.next().unwrap().split_whitespace();
+                    let method = first.next().unwrap().to_string();
+                    let target = first.next().unwrap().to_string();
+                    let headers: std::collections::HashMap<String, String> = lines
+                        .filter_map(|line| line.split_once(':'))
+                        .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_string()))
+                        .collect();
+                    let length = headers
+                        .get("content-length")
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    assert!(length < 16 * 1024, "oversized fixture body");
+                    while buf.len() < header_end + length {
+                        let mut chunk = [0; 1024];
+                        let len = stream.read(&mut chunk).await.unwrap();
+                        assert!(len > 0, "request ended before its body");
+                        buf.extend_from_slice(&chunk[..len]);
+                    }
+                    AuthRequest {
+                        method,
+                        target,
+                        headers,
+                        body: buf[header_end..].to_vec(),
+                    }
+                })
+                .await
+                .unwrap();
+                let reply = if request.has_auth_format() {
+                    replies.pop_front().unwrap_or_else(|| "HTTP/1.1 500 Unexpected Retry\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".into())
+                } else {
+                    "HTTP/1.1 415 Unsupported Media Type\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".into()
+                };
+                observed.lock().unwrap().push(request);
+                stream.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        (url, requests)
+    }
+
+    fn assert_auth_requests(requests: &ObservedRequests, expected: usize) {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), expected);
+        for request in requests.iter() {
+            assert!(
+                request.has_auth_format(),
+                "invalid auth request: {request:?}"
+            );
+            assert_eq!(
+                request.headers.get("cookie").map(String::as_str),
+                Some(".ROBLOSECURITY=fake-session")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn csrf_probe_has_json_media_type_empty_body_and_no_csrf_header() {
+        let (url, requests) =
+            ticket_endpoint(vec![("403 Forbidden", "x-csrf-token: fresh\r\n")]).await;
+        let policy = crate::request_policy::RequestPolicy::default();
+        let token = request_csrf_token(
+            &reqwest::Client::new(),
+            &policy,
+            &format!("{url}/v2/logout"),
+            "fake-session",
+        )
+        .await
+        .unwrap();
+        assert_eq!(token, "fresh");
+        assert_auth_requests(&requests, 1);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests[0].target, "/v2/logout");
+        assert!(!requests[0].headers.contains_key("x-csrf-token"));
+    }
+
+    #[tokio::test]
+    async fn authentication_retries_once_only_for_explicit_csrf_refresh() {
+        let (url, requests) = ticket_endpoint(vec![
+            ("403 Forbidden", "x-csrf-token: fresh\r\n"),
+            ("200 OK", "rbx-authentication-ticket: ticket-1\r\n"),
+        ])
+        .await;
+        let policy = crate::request_policy::RequestPolicy::default();
+        let (ticket, token) =
+            request_auth_ticket(&reqwest::Client::new(), &policy, &url, "fake-session", None)
+                .await
+                .unwrap();
+        assert_eq!(ticket, "ticket-1");
+        assert_eq!(token.as_deref(), Some("fresh"));
+        assert_auth_requests(&requests, 2);
+        let requests = requests.lock().unwrap();
+        assert!(!requests[0].headers.contains_key("x-csrf-token"));
+        assert_eq!(
+            requests[1].headers.get("x-csrf-token").map(String::as_str),
+            Some("fresh")
+        );
+        for request in requests.iter() {
+            assert_eq!(
+                request.headers.get("origin").map(String::as_str),
+                Some("https://www.roblox.com")
+            );
+            assert_eq!(
+                request.headers.get("referer").map(String::as_str),
+                Some("https://www.roblox.com")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_replaces_stale_csrf_and_never_retries_a_second_refresh() {
+        for second_status in ["200 OK", "403 Forbidden"] {
+            let (url, requests) = ticket_endpoint(vec![
+                ("403 Forbidden", "x-csrf-token: fresh\r\n"),
+                (
+                    second_status,
+                    "x-csrf-token: second-refresh\r\nrbx-authentication-ticket: ticket-2\r\n",
+                ),
+            ])
+            .await;
+            let policy = crate::request_policy::RequestPolicy::default();
+            let result = request_auth_ticket(
+                &reqwest::Client::new(),
+                &policy,
+                &url,
+                "fake-session",
+                Some("stale".into()),
+            )
+            .await;
+            assert_eq!(result.is_ok(), second_status == "200 OK");
+            assert_auth_requests(&requests, 2);
+            let requests = requests.lock().unwrap();
+            assert_eq!(
+                requests[0].headers.get("x-csrf-token").map(String::as_str),
+                Some("stale")
+            );
+            assert_eq!(
+                requests[1].headers.get("x-csrf-token").map(String::as_str),
+                Some("fresh")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_does_not_retry_denials_limits_or_server_failures() {
+        for status in [
+            "400 Bad Request",
+            "401 Unauthorized",
+            "403 Forbidden",
+            "415 Unsupported Media Type",
+            "429 Too Many Requests",
+            "500 Internal Server Error",
+        ] {
+            let (url, requests) = ticket_endpoint(vec![(status, "")]).await;
+            let policy = crate::request_policy::RequestPolicy::default();
+            let result =
+                request_auth_ticket(&reqwest::Client::new(), &policy, &url, "fake-session", None)
+                    .await;
+            assert!(result.is_err(), "accepted {status}");
+            assert_auth_requests(&requests, 1);
+            if status.starts_with("415") {
+                let error = result.unwrap_err();
+                assert!(error.contains("request format") && error.contains("HTTP 415"));
+                assert!(!error.contains("Check the account"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_stops_on_security_challenge_even_with_csrf_header() {
+        let (url, requests) = ticket_endpoint(vec![(
+            "403 Forbidden",
+            "x-csrf-token: fresh\r\nrblx-challenge-id: challenge\r\n",
+        )])
+        .await;
+        let policy = crate::request_policy::RequestPolicy::default();
+        assert!(
+            request_auth_ticket(&reqwest::Client::new(), &policy, &url, "fake-session", None)
+                .await
+                .is_err()
+        );
+        assert_auth_requests(&requests, 1);
+    }
+
+    #[tokio::test]
+    async fn csrf_probe_stops_on_challenge_denial_or_format_error() {
+        for (status, headers) in [
+            (
+                "403 Forbidden",
+                "x-csrf-token: fresh\r\nrblx-challenge-id: challenge\r\n",
+            ),
+            ("403 Forbidden", ""),
+            ("415 Unsupported Media Type", ""),
+        ] {
+            let (url, requests) = ticket_endpoint(vec![(status, headers)]).await;
+            let policy = crate::request_policy::RequestPolicy::default();
+            let result =
+                request_csrf_token(&reqwest::Client::new(), &policy, &url, "fake-session").await;
+            assert!(result.is_err(), "accepted {status}");
+            assert_auth_requests(&requests, 1);
+            if status.starts_with("415") {
+                assert!(result.unwrap_err().contains("request format (HTTP 415)"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_requires_a_successful_status_and_nonempty_ticket() {
+        for (status, headers) in [
+            ("200 OK", ""),
+            ("200 OK", "rbx-authentication-ticket: \r\n"),
+            (
+                "401 Unauthorized",
+                "rbx-authentication-ticket: ticket-on-error\r\n",
+            ),
+        ] {
+            let (url, requests) = ticket_endpoint(vec![(status, headers)]).await;
+            let policy = crate::request_policy::RequestPolicy::default();
+            assert!(request_auth_ticket(
+                &reqwest::Client::new(),
+                &policy,
+                &url,
+                "fake-session",
+                None
+            )
+            .await
+            .is_err());
+            assert_auth_requests(&requests, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_format_error_does_not_suspend_a_valid_session() {
+        let (url, requests) = ticket_endpoint(vec![
+            ("415 Unsupported Media Type", ""),
+            ("200 OK", "rbx-authentication-ticket: ticket-after-fix\r\n"),
+        ])
+        .await;
+        let policy = crate::request_policy::RequestPolicy::default();
+        let client = reqwest::Client::new();
+        assert!(
+            request_auth_ticket(&client, &policy, &url, "fake-session", None)
+                .await
+                .is_err()
+        );
+        let (ticket, _) = request_auth_ticket(&client, &policy, &url, "fake-session", None)
+            .await
+            .unwrap();
+        assert_eq!(ticket, "ticket-after-fix");
+        assert_auth_requests(&requests, 2);
     }
 }
 
@@ -780,9 +1171,7 @@ pub async fn follow_user_target(
         return Err("Enter a username".into());
     }
 
-    let csrf = get_csrf_token(state, cookie)
-        .await
-        .ok_or_else(|| "Could not authenticate (cookie may be expired)".to_string())?;
+    let csrf = get_csrf_token(state, cookie).await?;
 
     // 1. username -> userId
     let body = serde_json::json!({
@@ -838,7 +1227,10 @@ pub async fn follow_user_target(
         .ok_or_else(|| "Unexpected presence response".to_string())?;
 
     // 0 Offline, 1 Online (site/app, not in a game), 2 InGame, 3 InStudio.
-    let ptype = p.get("userPresenceType").and_then(|v| v.as_i64()).unwrap_or(0);
+    let ptype = p
+        .get("userPresenceType")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     if ptype != 2 {
         return Err(format!("{} is not in a game right now", real_name));
     }

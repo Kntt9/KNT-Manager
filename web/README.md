@@ -22,7 +22,9 @@ npm run web:serve
 ```
 
 Com o servidor rodando: Charts ao vivo, validação real de `.ROBLOSECURITY`,
-Altgen, "Follow user" e nomes de jogos reais.
+Altgen, "Follow user" e nomes de jogos reais. O relay escuta apenas em
+`127.0.0.1`, aceita os hosts `localhost` e `127.0.0.1` na porta escolhida,
+rejeita origens externas e limita corpos de requisição a 64 KiB.
 
 Se você alterar algo em `src/` (o app Tauri) e quiser re-sincronizar o site:
 
@@ -43,6 +45,10 @@ npm run web:build          # copia src/ → web/ e aplica as adaptações de nav
 | Login via navegador embutido (Chrome) | ❌ use "Paste Cookie" |
 | Gerar conta manual (signup) | ⚠️ abre a página da Roblox; complete e cole o cookie |
 
-> **Aviso:** tudo fica salvo no `localStorage` do navegador — limpar os dados
-> do site apaga as contas. Cookies não são enviados a nenhum servidor; sem o
-> `server.mjs` rodando, nenhuma requisição sai do seu navegador.
+Os dados, incluindo cookies e senhas, ficam em texto simples no `localStorage`
+do navegador. Limpar os dados do site apaga as contas. Na validação real,
+o cookie passa pelo relay local e é enviado à Roblox. Integrações opcionais
+(geradores e webhook do Discord) também fazem requisições externas.
+O modo offline pode aceitar o formato de um cookie sem verificar a identidade;
+isso não equivale a uma sessão autenticada. A fila de requisições do desktop
+ainda não foi portada para este relay.

@@ -268,6 +268,8 @@ function _encSetBtnState(mode) {
   // mode: 'normal' | 'loading' | 'success'
   const action = document.getElementById('enc-action');
   if (!action) return;
+  const skip = document.getElementById('enc-skip');
+  if (skip) skip.disabled = mode !== 'normal';
   const label = action.querySelector('span:last-child') || action;
   if (mode === 'loading') {
     action.disabled = true;
@@ -289,12 +291,15 @@ function _encShake() {
   card.classList.add('shake');
   setTimeout(() => card.classList.remove('shake'), 320);
 }
+let _encSubmitting = false;
 async function submitEnc() {
+  if (_encSubmitting) return;
   const inp = document.getElementById('enc-input');
   const val = inp ? inp.value : '';
   const err = document.getElementById('enc-err');
   if (err) err.classList.remove('show');
   if (!val) { _encErr(_encMode === 'setup' ? t('enc.errSetupEmpty') : t('enc.errEmpty')); _encShake(); inp && inp.focus(); return; }
+  _encSubmitting = true;
   _encSetBtnState('loading');
   try {
     if (_encMode === 'setup') {
@@ -310,7 +315,14 @@ async function submitEnc() {
       }
     } else {
       const r = await api.encUnlock(val);
-      if (!r || !r.ok) { _encErr(t('enc.errWrong')); logEntry('warn', 'enc', 'Failed encryption unlock attempt (wrong key)'); _encSetBtnState('normal'); _encShake(); inp.value = ''; inp.focus(); return; }
+      if (!r || !r.ok) {
+        _encErr(r?.error || t('enc.errWrong'));
+        logEntry('warn', 'enc', r?.error ? 'Could not finish encryption unlock' : 'Failed encryption unlock attempt (wrong key)');
+        _encSetBtnState('normal'); _encShake();
+        if (!r?.error) inp.value = '';
+        inp.focus();
+        return;
+      }
       logEntry('ok', 'enc', 'Encryption key accepted, accounts unlocked');
     }
     // Success: brief check state, then a smooth fade-out. The unlock has
@@ -320,13 +332,26 @@ async function submitEnc() {
     closeModal('m-enc');
     try { await continueInit(); } catch (e) { hideBootCover(); console.error(e); }
   } catch (e) { _encErr(t('enc.errGeneric')); _encSetBtnState('normal'); _encShake(); }
+  finally { _encSubmitting = false; }
 }
 async function skipEnc() {
+  if (_encSubmitting) return;
+  _encSubmitting = true;
   const skip = document.getElementById('enc-skip');
   if (skip) skip.disabled = true;
-  try { await api.encSetKey(''); } catch {}
-  closeModal('m-enc');
-  try { await continueInit(); } catch (e) { hideBootCover(); console.error(e); }
+  _encSetBtnState('loading');
+  try {
+    const result = await api.encSetKey('');
+    if (!result || !result.ok) throw new Error(result?.error || t('enc.errSetGeneric'));
+    closeModal('m-enc');
+    try { await continueInit(); } catch (e) { hideBootCover(); console.error(e); }
+  } catch (error) {
+    _encErr(error.message || t('enc.errGeneric'));
+    _encSetBtnState('normal');
+  } finally {
+    _encSubmitting = false;
+    if (skip) skip.disabled = false;
+  }
 }
 
 function clearAppData() {
@@ -694,8 +719,7 @@ function generateThemeVars(accent, bg, surface, isDark) {
 }
 
 // ── Reapply everything (theme + radius + high contrast) ───────────────────
-function _reapplyActiveTheme() {
-  const name = currentTheme();
+function _reapplyActiveTheme(name = currentTheme()) {
   // Clear custom inline styles first
   const customKeys = Object.keys(generateThemeVars('#5c5ce0','#0b0c0f','#141519',true));
   customKeys.forEach(k => document.documentElement.style.removeProperty(k));
@@ -739,17 +763,17 @@ function _reapplyActiveTheme() {
 // ── Theme apply with smooth transition ────────────────────────────────────
 function applyTheme(name) {
   document.body.classList.add('theme-transitioning');
-  _reapplyActiveTheme();
+  _reapplyActiveTheme(name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 300);
 }
 function setTheme(name) {
   if (!name) return;
-  applyTheme(name);
   try { localStorage.setItem('ui-theme', name); } catch {}
+  applyTheme(name);
   _syncUiPrefsToSettings();
   renderThemePage();
 }
-function currentTheme() { try { return localStorage.getItem('ui-theme') || 'dark'; } catch { return 'dark'; } }
+function currentTheme() { try { return localStorage.getItem('ui-theme') || 'graphite'; } catch { return 'graphite'; } }
 
 // ── Custom themes persistence ─────────────────────────────────────────────
 function _loadCustomThemes() {
@@ -780,7 +804,7 @@ function _collectUiPrefs() {
   } catch { customs = []; }
   return {
     v: 1,
-    theme: _lsGet('ui-theme') || 'dark',
+    theme: _lsGet('ui-theme') || 'graphite',
     customThemes: customs,
     lang: _lsGet('mr-lang') || '',
     radius: _lsGet('mr-border-radius') || '',
@@ -930,7 +954,7 @@ function _renderTexturePatternSelect() {
   if (!sel) return;
   let html = '<option value="none">' + esc(t('themes.patternNone')) + '</option>';
   html += '<option value="">' + esc(t('themes.patternAuto')) + '</option>';
-  for (const p of _TEX_PATTERNS) html += '<option value="' + p + '">' + esc(t('themes.pattern' + p)) + '</option>';
+  for (const p of _TEX_PATTERNS) html += '<option value="' + p + '">' + esc(t('themes.pattern' + p.charAt(0).toUpperCase() + p.slice(1))) + '</option>';
   sel.innerHTML = html;
   sel.value = _themePattern();
 }
@@ -1180,7 +1204,7 @@ const THEME_META = {
   forest: { accent:'#4ade80', bg:'#0a1410', surface:'#13251c', isDark:true, tex:'triangles' },
   amber: { accent:'#f59e0b', bg:'#161106', surface:'#271e0d', isDark:true, tex:'rays' },
   rose: { accent:'#fb7185', bg:'#170b11', surface:'#29131f', isDark:true, tex:'dots' },
-  graphite: { accent:'#94a3b8', bg:'#0d0e10', surface:'#1a1c21', isDark:true, tex:'grid' },
+  graphite: { accent:'#8b6cf0', bg:'#101419', surface:'#171d24', isDark:true, tex:'' },
 };
 function _themeCardMiniHtml(accent, bg, surface, isDark, tex) {
   const text = isDark ? '#f0f0f5' : '#0e0e1a';
@@ -1258,9 +1282,9 @@ function openDiscord() {
   let t0;
   try {
     t0 = localStorage.getItem('ui-theme');
-    if (!t0) { const old = localStorage.getItem('theme'); t0 = (old === 'light') ? 'light' : 'dark'; }
-  } catch { t0 = 'dark'; }
-  applyTheme(t0 || 'dark');
+    if (!t0) { const old = localStorage.getItem('theme'); t0 = ['light','dark'].includes(old) ? old : 'graphite'; }
+  } catch { t0 = 'graphite'; }
+  applyTheme(t0 || 'graphite');
   _applyBorderRadius();
   _startAutoTheme();
   document.body.classList.toggle('high-contrast', _highContrast());
@@ -1340,9 +1364,9 @@ function genAddKey() {
   if (inp) { inp.value = ''; inp.focus(); }
   genOnKeyInput();
 }
-function genRenameKey() {
+async function genRenameKey() {
   const k = genActiveKey(); if (!k) return;
-  const name = prompt(t('gen.keyName'), k.label || '');
+  const name = await KntUi.requestText({title:t('gen.keyName'), value:k.label || ''});
   if (name === null) return;
   if (name.trim()) k.label = name.trim();
   genKeysSave(); genRenderKeySelect(); genKeysTick();
@@ -1502,7 +1526,7 @@ function applySettings() {
   if (pwEl) pwEl.textContent = ab.password || '—';
 }
 
-let _acctQuery = '', _acctFilter = (() => { try { const f = localStorage.getItem('mr-acct-filter'); return (f && f !== 'running' && f !== 'idle') ? f : 'all'; } catch { return 'all'; } })(), _acctView = (() => { try { const v = localStorage.getItem('mr-acct-view'); return (v === 'list' || v === 'compact') ? v : 'grid'; } catch { return 'grid'; } })();
+let _acctQuery = '', _acctFilter = (() => { try { const f = localStorage.getItem('mr-acct-filter'); return (f && f !== 'running' && f !== 'idle') ? f : 'all'; } catch { return 'all'; } })(), _acctView = (() => { try { const v = localStorage.getItem('mr-workspace-view'); return ['grid','list','compact'].includes(v) ? v : 'list'; } catch { return 'list'; } })();
 // Active category filter: '' = any, 'nocat' = uncategorized, else a category id.
 let _acctCategory = '';
 
@@ -1527,8 +1551,7 @@ function visibleAccounts() {
   }
   if (_acctCategory === 'nocat') list = list.filter(a => !a.categoryId);
   else if (_acctCategory) list = list.filter(a => a.categoryId === _acctCategory);
-  if (_acctFilter === 'running') list = list.filter(a => _launchedIds.has(a.id));
-  else if (_acctFilter === 'idle') list = list.filter(a => !_launchedIds.has(a.id));
+  if (['running','idle','waiting'].includes(_acctFilter)) list = workspaceFilterState(list,_acctFilter,accountUiState);
   else if (_acctFilter === 'valid-first') list.sort((a, b) => {
     const s = id => _cookieStatus[id] === 'dead' ? 1 : 0;
     return s(a.id) - s(b.id);
@@ -1571,7 +1594,7 @@ function setAcctFilter(f) {
   else { _acctCategory = ''; _acctFilter = f; }
   // Only the classic filters are worth remembering across sessions; category
   // selections (and the empty-trash 'nocat') reset on reload.
-  const persist = (f === 'running' || f === 'idle' || (f && f.startsWith('cat:')) || f === 'nocat') ? 'all' : f;
+  const persist = (f === 'running' || f === 'idle' || f === 'waiting' || (f && f.startsWith('cat:')) || f === 'nocat') ? 'all' : f;
   try { localStorage.setItem('mr-acct-filter', persist); } catch {}
   const key = _currentFilterKey();
   document.querySelectorAll('#filter-menu button[data-f]').forEach(b => b.classList.toggle('active', b.dataset.f === key));
@@ -1581,7 +1604,7 @@ function setAcctFilter(f) {
 }
 function setAcctView(v) {
   _acctView = v;
-  try { localStorage.setItem('mr-acct-view', v); } catch {}
+  try { localStorage.setItem('mr-workspace-view', v); } catch {}
   document.getElementById('vt-grid').classList.toggle('active', v === 'grid');
   document.getElementById('vt-list').classList.toggle('active', v === 'list');
   document.getElementById('vt-compact').classList.toggle('active', v === 'compact');
@@ -1867,6 +1890,7 @@ function goTo(p) {
   document.querySelectorAll('.nav-item').forEach(x => x.classList.remove('active'));
   document.getElementById('page-' + p).classList.add('active');
   document.getElementById('nav-' + p).classList.add('active');
+  if (['dashboard','charts','generator','tracking','exploits','credits'].includes(p)) document.getElementById('nav-tools')?.classList.add('active');
   positionNavSlider();
   if (p === 'settings') {
     document.getElementById('stat-count').textContent = accounts.length;
@@ -2007,8 +2031,8 @@ function showCardMenu(id, x, y) {
   menu.className = 'ctx-menu';
   menu.innerHTML = `
     <div class="ctx-header">${esc(a ? (a.nickname || a.username || 'Unknown') : id)}</div>
-    ${isLive ? `<button class="ctx-item ctx-danger" onclick="ctxKill('${id}')"><span class="material-icons-round">power_settings_new</span>Kill instance</button>` : ''}
-    ${isLive ? `<button class="ctx-item" onclick="ctxTrim('${id}')"><span class="material-icons-round">memory</span>Trim memory</button>` : ''}
+    ${isLive ? `<button class="ctx-item ctx-danger" onclick="ctxKill('${id}')"><span class="material-icons-round">power_settings_new</span>${esc(t('layout.killInstance'))}</button>` : ''}
+    ${isLive ? `<button class="ctx-item" onclick="ctxTrim('${id}')"><span class="material-icons-round">memory</span>${esc(t('layout.trimMemory'))}</button>` : ''}
     ${isLive ? `
     <div class="ctx-item ctx-has-sub">
       <span class="material-icons-round">speed</span>Set priority
@@ -2019,15 +2043,17 @@ function showCardMenu(id, x, y) {
         ).join('')}
       </div>
     </div>` : ''}
-    <button class="ctx-item" onclick="ctxLaunch('${id}')"><span class="material-icons-round">rocket_launch</span>${isLive ? 'Relaunch' : 'Launch'}</button>
-    <button class="ctx-item" onclick="ctxEdit('${id}')"><span class="material-icons-round">edit</span>Edit account</button>
+    <button class="ctx-item" onclick="ctxLaunch('${id}')"><span class="material-icons-round">rocket_launch</span>${esc(t(isLive ? 'layout.relaunch' : 'launch.start'))}</button>
+    <button class="ctx-item" onclick="ctxEdit('${id}')"><span class="material-icons-round">edit</span>${esc(t('edit.title'))}</button>
+    ${/^\d+/.test(String(a?.gameTarget || '')) ? `<button class="ctx-item" onclick="ctxServers('${id}')"><span class="material-icons-round">dns</span>${esc(t('srv.title'))}</button>` : ''}
     <div class="ctx-sep"></div>
-    <button class="ctx-item" onclick="ctxCopyId('${id}')"><span class="material-icons-round">tag</span>Copy user ID</button>
-    <button class="ctx-item" onclick="ctxCopyUser('${id}')"><span class="material-icons-round">person</span>Copy username</button>
-    <button class="ctx-item" onclick="ctxCopyCookie('${id}')"><span class="material-icons-round">cookie</span>Copy cookie</button>
-    <button class="ctx-item" onclick="ctxCopyPassword('${id}')"><span class="material-icons-round">lock</span>Copy password</button>
-    <button class="ctx-item" onclick="ctxCopyCombo('${id}')"><span class="material-icons-round">content_copy</span>Copy combo</button>
-    <button class="ctx-item" onclick="ctxOpenBrowser('${id}')"><span class="material-icons-round">open_in_browser</span>Open in browser</button>
+    <button class="ctx-item" onclick="ctxCopyId('${id}')"><span class="material-icons-round">tag</span>${esc(t('layout.copyId'))}</button>
+    <button class="ctx-item" onclick="ctxCopyUser('${id}')"><span class="material-icons-round">person</span>${esc(t('layout.copyUsername'))}</button>
+    <button class="ctx-item" onclick="ctxCopyCookie('${id}')"><span class="material-icons-round">cookie</span>${esc(t('layout.copyCookie'))}</button>
+    <button class="ctx-item" onclick="ctxCopyPassword('${id}')"><span class="material-icons-round">lock</span>${esc(t('layout.copyPassword'))}</button>
+    <button class="ctx-item" onclick="ctxCopyCombo('${id}')"><span class="material-icons-round">content_copy</span>${esc(t('layout.copyCombo'))}</button>
+    <button class="ctx-item" onclick="ctxOpenBrowser('${id}')"><span class="material-icons-round">open_in_browser</span>${esc(t('layout.openBrowser'))}</button>
+    <div class="ctx-sep"></div><button class="ctx-item ctx-danger" onclick="ctxRemove('${id}')"><span class="material-icons-round">delete_outline</span>${esc(t('layout.moveToTrash'))}</button>
   `;
   document.body.appendChild(menu);
   positionCardMenu(menu, x, y);
@@ -2086,7 +2112,13 @@ function positionCardSubmenu(menu, vw, vh) {
   const overflowBelow = parent.getBoundingClientRect().top - 4 + subRect.height + CTX_EDGE_GAP - vh;
   if (overflowBelow > 0) sub.style.top = (-4 - overflowBelow) + 'px';
 }
-function closeCardMenu() { const m = document.getElementById('card-ctx-menu'); if (m) m.remove(); _ctxMenuId = null; }
+function closeCardMenu(event) {
+  const m = document.getElementById('card-ctx-menu'); if (m) m.remove(); _ctxMenuId = null;
+  if (typeof _workspaceMenuTrigger !== 'undefined') {
+    if (!event && _workspaceMenuTrigger?.isConnected) _workspaceMenuTrigger.focus();
+    _workspaceMenuTrigger = null;
+  }
+}
 async function ctxKill(id) { closeCardMenu(); await killOne(id); }
 async function ctxTrim(id) {
   closeCardMenu();
@@ -2115,8 +2147,16 @@ async function ctxSetPriority(id, priority) {
   }
 }
 
-function ctxLaunch(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a) { launchAcc = a; openModal('m-launch'); } }
+function ctxLaunch(id) { closeCardMenu(); openLaunch(id); }
 function ctxEdit(id) { closeCardMenu(); openEdit(id); }
+function ctxServers(id) {
+  closeCardMenu();
+  const account=accounts.find(item=>item.id===id);
+  if (!/^\d+/.test(String(account?.gameTarget || ''))) return;
+  const placeId=parseInt(String(account.gameTarget).split(/[:,]/)[0],10);
+  openServerList(placeId,{accountId:id,placeId});
+}
+function ctxRemove(id) { closeCardMenu(); removeAcc(id); }
 function ctxCopyId(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.userId) navigator.clipboard.writeText(a.userId).then(() => toast(t('acct.copyId'), 'ok')); else toast(t('acct.noId'), 'err'); }
 function ctxCopyUser(id) { closeCardMenu(); const a = accounts.find(x => x.id === id); if (a?.username) navigator.clipboard.writeText(a.username).then(() => toast(t('acct.copyUser'), 'ok')); else toast(t('acct.noUser'), 'err'); }
 function _copySecretWithClear(text, okKey, vars) {
@@ -2166,6 +2206,7 @@ async function ctxOpenBrowser(id) {
 }
 
 function refreshPkgAvatarStatus() {
+  refreshAccountStatuses();
   document.querySelectorAll('.pkg-avatar[data-acc-id]').forEach(av => {
     av.classList.toggle('online', _launchedIds.has(av.dataset.accId));
     av.classList.toggle('home', _homeIds.has(av.dataset.accId));
@@ -2279,6 +2320,7 @@ function folderHtml(g, viewCls) {
 // Recomputes the running/total pills after live status changes (the push
 // handlers move cards without a full render).
 function updateFolderCounts() {
+  refreshAccountStatuses();
   document.querySelectorAll('#grid .folder').forEach(f => {
     const cards = f.querySelectorAll('.card[data-id]');
     let run = 0;
@@ -2321,6 +2363,90 @@ async function folderLaunch(key) {
   pollRunningCount();
   toast(t('folders.launchedN', { ok, total: idle.length }), ok > 0 ? 'ok' : 'err');
 }
+// Presentation derives from existing process/session and group-job state.
+// It never validates a cookie, queries servers or schedules a launch.
+function accountUiState(account) {
+  if (_launchedIds.has(account.id)) return {state:'running',label:t('ui.running')};
+  if (_homeIds.has(account.id)) return {state:'home',label:t('accounts.home')};
+  if (_cookieStatus[account.id] === 'dead' || account._cookieInvalid) return {state:'invalid',label:t('ui.invalid')};
+  if (_launchingId === account.id) return {state:'starting',label:t('ui.starting')};
+  for (const job of _pkgLaunchJobs.values()) {
+    if (job.cancelled || job.completed?.has(account.id)) continue;
+    if (job.members.some(member => member.id === account.id)) {
+      return job.currentAccount === account.id ? {state:'starting',label:t('ui.starting')} : {state:'waiting',label:t('ui.queue')};
+    }
+  }
+  return {state:'stopped',label:t('ui.stopped')};
+}
+function refreshAccountStatuses() {
+  if (typeof workspaceSyncAccounts === 'function') workspaceSyncAccounts();
+  const byId = new Map(accounts.map(account => [String(account.id), account]));
+  document.querySelectorAll('.card[data-id] .card-state,.inspector-member[data-account-id] .card-state').forEach(pill => {
+    const parent = pill.closest('[data-id],[data-account-id]');
+    const account = byId.get(parent?.dataset.accountId || parent?.dataset.id);
+    if (!account) return;
+    const state = accountUiState(account);
+    pill.dataset.state = state.state;
+    pill.textContent = state.label;
+  });
+  const summary = document.getElementById('acct-sub');
+  if (summary) summary.textContent = t('ui.accountSummary',{total:accounts.length,running:accounts.filter(account => _launchedIds.has(account.id)).length});
+  const select = document.getElementById('account-group-select');
+  const busy = Boolean(select && _pkgLaunchJobs.has(select.value));
+  const group = packages.find(group => group.id === select?.value);
+  const hasMembers = Boolean(group && pkgMembers(group).length);
+  document.querySelectorAll('#account-group-panel [data-group-action]').forEach(button => {
+    const action = button.dataset.groupAction;
+    if (['start','distribute','edit'].includes(action)) {
+      button.disabled = busy || (action !== 'edit' && !hasMembers) || (action === 'distribute' && !_pkgPublicPlace(group?.link));
+    }
+  });
+}
+var _inspectorGroupId = '';
+var _inspectorSignature = '';
+function renderGroupInspector() {
+  const panel = document.getElementById('account-group-panel');
+  if (!panel) return;
+  if (!packages.some(group => group.id === _inspectorGroupId)) _inspectorGroupId = packages.find(group => group.pinned)?.id || packages[0]?.id || '';
+  const signature = JSON.stringify([_lang,_inspectorGroupId,packages.map(group => [group.id,group.name,group.accountIds,group.launchOrder,group.link]),accounts.map(account => [account.id,account.username,account.nickname])]);
+  if (signature === _inspectorSignature) { refreshAccountStatuses(); return; }
+  _inspectorSignature = signature;
+  const group = packages.find(group => group.id === _inspectorGroupId);
+  const heading = '<div class="inspector-heading"><span class="material-icons-round" aria-hidden="true">groups</span>'+esc(t('ui.groupPanel'))+'</div>';
+  if (!group) {
+    panel.innerHTML = heading+'<p class="inspector-hint">'+esc(t('ui.noGroups'))+'</p><div class="inspector-actions"><button class="btn btn-primary" data-group-action="create">'+esc(t('groups.new'))+'</button></div>';
+  } else {
+    const members = pkgMembers(group);
+    const target = group.link || '—';
+    panel.innerHTML = heading+'<label class="inspector-label" for="account-group-select">'+esc(t('ui.chooseGroup'))+'</label>'+
+      '<select id="account-group-select" class="inspector-select">'+packages.map(item=>'<option value="'+esc(item.id)+'"'+(item.id===group.id?' selected':'')+'>'+esc(item.name)+'</option>').join('')+'</select>'+
+      '<span class="inspector-label">'+esc(t('ui.destination'))+'</span><div class="inspector-game">'+pkgGameMarkup(target)+'</div>'+
+      '<div class="inspector-actions"><button class="btn btn-primary" data-group-action="start">'+esc(t('groups.startAll'))+'</button><button class="btn btn-ghost" data-group-action="distribute">'+esc(t('pkg.distribute'))+'</button><button class="btn btn-ghost" data-group-action="edit">'+esc(t('ui.manageGroup'))+'</button></div>'+
+      '<p class="inspector-hint">'+esc(t('ui.groupHint'))+'</p><span class="inspector-label">'+esc(t('ui.members'))+' · '+members.length+'</span>'+
+      members.map(account=>{const state=accountUiState(account);return '<div class="inspector-member" data-account-id="'+esc(account.id)+'"><span class="inspector-avatar">'+esc((account.username||'?')[0].toUpperCase())+'</span><strong>'+esc(account.nickname||account.username||'?')+'</strong><span class="card-state" data-state="'+state.state+'">'+esc(state.label)+'</span></div>';}).join('');
+    loadPkgCover(group.id, group.link || '');
+    document.getElementById('account-group-select').onchange = event => {_inspectorGroupId = event.target.value; renderGroupInspector();};
+  }
+  panel.onclick = event => {
+    const action = event.target.closest('[data-group-action]')?.dataset.groupAction;
+    if (action === 'create') openCreatePackage();
+    else if (action === 'edit') openEditPackage(_inspectorGroupId);
+    else if (action === 'start') launchPackage(_inspectorGroupId);
+    else if (action === 'distribute') workspaceDistribute(_inspectorGroupId);
+  };
+  refreshAccountStatuses();
+}
+function openKeySettings() {
+  if (_savingKey) return;
+  document.getElementById('custom-key').value = '';
+  document.getElementById('custom-key-confirm').value = '';
+  document.getElementById('custom-key').type = 'password';
+  document.getElementById('key-vis-icon').textContent = 'visibility';
+  onKeyInput();
+  openModal('m-key-change');
+}
+
+
 function cardHtml(a, i) {
   return `
     <div class="card${_launchedIds.has(a.id) ? ' is-live' : ''}${_homeIds.has(a.id) ? ' is-home' : ''}${_cookieStatus[a.id] === 'dead' ? ' cookie-dead' : ''}${_selectMode && _selectedIds.has(a.id) ? ' is-selected' : ''}${_selectMode ? ' select-mode' : ''}" data-id="${a.id}" style="animation-delay:${Math.min(i, 20) * 18}ms" onclick="${_selectMode ? `if(!event.target.closest('button'))toggleSelectCard('${a.id}')` : ''}">
@@ -2338,24 +2464,30 @@ function cardHtml(a, i) {
         ${_homeIds.has(a.id) ? `<div class="card-home-badge">${esc(t('accounts.home'))}</div>` : ''}
         ${_catTagHtml(a)}
       </div>
-      <div class="card-game ${a.gameTarget ? 'visible' : ''}" id="gt-${a.id}" title="${esc(a.gameTarget || '')}">${a.gameTarget ? esc(truncate(_gameNameCache[a.id] || extractTargetLabel(a.gameTarget), 22)) : ''}</div>
+      <span class="card-state" data-state="${accountUiState(a).state}">${esc(accountUiState(a).label)}</span>
+      <div class="card-game ${a.gameTarget ? 'visible' : ''}" id="gt-${a.id}" title="${esc(a.gameTarget || '')}">${a.gameTarget ? esc(truncate(_gameNameCache[a.id] || extractTargetLabel(a.gameTarget), 36)) : esc(t('accounts.noTarget') === 'accounts.noTarget' ? '—' : t('accounts.noTarget'))}</div>
       <div class="card-row">
         <button class="btn btn-launch" onclick="openLaunch('${a.id}')" title="${esc(t('launch.start'))}" aria-label="${esc(t('launch.start'))}">
           <span class="material-icons-round" style="font-size:15px">play_arrow</span>
         </button>
-        ${/^\d+/.test(String(a.gameTarget || '').split(/[:,]/)[0]) ? `<button class="btn btn-edit" onclick="openServerList(${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)}, { accountId: '${a.id}', placeId: ${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)} })" title="${esc(t('srv.title'))}" aria-label="Server list">
+        ${/^\d+/.test(String(a.gameTarget || '').split(/[:,]/)[0]) ? `<button class="btn btn-edit" onclick="openServerList(${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)}, { accountId: '${a.id}', placeId: ${parseInt(String(a.gameTarget).split(/[:,]/)[0], 10)} })" title="${esc(t('srv.title'))}" aria-label="${esc(t('srv.title'))}">
           <span class="material-icons-round">dns</span>
         </button>` : ''}
-        <button class="btn btn-edit" onclick="openEdit('${a.id}')" aria-label="Edit account">
+        <button class="btn btn-edit" onclick="openEdit('${a.id}')" title="${esc(t('edit.title'))}" aria-label="${esc(t('edit.title'))}">
           <span class="material-icons-round">edit</span>
         </button>
-        <button class="btn btn-del" onclick="removeAcc('${a.id}')" aria-label="Remove account">
+        <button class="btn btn-del" onclick="removeAcc('${a.id}')" title="${esc(t('common.delete'))}" aria-label="${esc(t('common.delete'))}">
           <span class="material-icons-round">delete_outline</span>
         </button>
       </div>
     </div>`;
 }
 function render() {
+  const previousRendering = _workspaceRendering;
+  _workspaceRendering = true;
+  try {
+  if (typeof workspaceSyncAccounts === 'function') workspaceSyncAccounts();
+  renderGroupInspector();
   const grid = document.getElementById('grid'), empty = document.getElementById('empty'), sub = document.getElementById('acct-sub');
   const savedTxt = accounts.length ? t('accounts.savedCount', { n: accounts.length, s: accounts.length !== 1 ? 's' : '' }) : t('accounts.none');
   sub.textContent = savedTxt;
@@ -2375,11 +2507,14 @@ function render() {
   }
   const viewCls = _acctView === 'list' ? ' list-view' : _acctView === 'compact' ? ' compact-view' : '';
   const groups = groupAccountsByFolder(list);
-  const addTile = `<div class="card-add" onclick="openLogin()"><span class="material-icons-round card-add-icon">add</span><span class="card-add-label">Add account</span></div>`;
+  const addTile = `<div class="card-add" onclick="openLogin()"><span class="material-icons-round card-add-icon">add</span><span class="card-add-label">${esc(t('accounts.addAccount'))}</span></div>`;
   // Folder mode when there is anything to group by: several groups, or a
   // single categorized one. A lone uncategorized list keeps the classic flat
   // grid so users without categories see zero visual change.
-  if (groups.length > 1 || (groups.length === 1 && groups[0].cat)) {
+  if (_acctView === 'list') {
+    grid.classList.remove('has-folders');
+    grid.innerHTML = list.map(workspaceAccountRow).join('');
+  } else if (groups.length > 1 || (groups.length === 1 && groups[0].cat)) {
     grid.classList.add('has-folders');
     grid.innerHTML = groups.map(g => folderHtml(g, viewCls)).join('') + addTile;
   } else {
@@ -2393,7 +2528,9 @@ function render() {
     card.addEventListener('contextmenu', e => { e.preventDefault(); showCardMenu(card.dataset.id, e.clientX, e.clientY); });
   });
   initDrag();
+  refreshAccountStatuses();
   renderDashboard();
+  } finally { _workspaceRendering = previousRendering; }
 }
 
 // ── Multi-select & batch actions ─────────────────────────────────────────
@@ -2720,94 +2857,95 @@ function renderDashboard() {
   if (actEl) renderActivity(actEl);
 }
 
-const _cookieStatus = {}; // id -> 'checking' | 'ok' | 'dead' | 'unknown'
+const _cookieStatus = {}; // id -> checking | ok | dead | unknown
+const _cookieCheckedAt = {};
+const _cookieCheckedValue = {};
+const OK_RECHECK_MS = 5 * 60 * 1000;
+const UNKNOWN_RECHECK_MS = 60 * 1000;
+let _cookieCheckRunning = false;
+
 function applyCookieStatus(id) {
   const card = document.querySelector(`.card[data-id="${id}"]`);
   if (card) card.classList.toggle('cookie-dead', _cookieStatus[id] === 'dead');
   renderDashboard();
 }
-// Surfaces a likely-expired cookie right after a launch auth failure, without
-// waiting for the periodic health check. Only genuine auth/cookie errors
-// flip the badge, not rate-limits or transient HTTP errors.
+
+// Permission failures, throttling and transport errors do not prove expiry.
 function _flagCookieMaybeDead(id, error) {
-  if (id && error && /cookie|expired|\b403\b/i.test(error)) {
+  if (id && /\bHTTP\s+401\b/i.test(String(error || ''))) {
     if (_cookieStatus[id] !== 'dead') pushStatusHistory(id, 'cookie-dead', _cookieStatus[id] || '');
     _cookieStatus[id] = 'dead';
+    const account = accounts.find(a => a.id === id);
+    if (account) _cookieCheckedValue[id] = account.cookie;
     applyCookieStatus(id);
   }
 }
-// Runs `worker` over `items` with at most `limit` in flight at once.
+
 async function _runWithConcurrency(items, limit, worker) {
   let next = 0;
   async function lane() {
-    while (next < items.length) {
-      const item = items[next++];
-      await worker(item);
-    }
+    while (next < items.length) await worker(items[next++]);
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
 }
 
-let _cookieCheckRunning = false;
+function _cookieValidationStatus(result) {
+  if (result && result.ok) return 'ok';
+  return result && result.status === 401 ? 'dead' : 'unknown';
+}
+
+async function _validateAccountCookie(account) {
+  const cookie = account.cookie;
+  const previous = _cookieStatus[account.id];
+  _cookieStatus[account.id] = 'checking';
+  let result;
+  try { result = await api.validateCookie(cookie); }
+  catch { result = null; }
+  // A deleted account or a replacement session must not inherit a stale reply.
+  const current = accounts.find(a => a.id === account.id);
+  if (!current || current.cookie !== cookie) {
+    delete _cookieStatus[account.id];
+    return;
+  }
+  const next = _cookieValidationStatus(result);
+  _cookieStatus[account.id] = next;
+  _cookieCheckedAt[account.id] = Date.now();
+  _cookieCheckedValue[account.id] = cookie;
+  if (next === 'dead' && previous !== 'dead') {
+    pushStatusHistory(account.id, 'cookie-dead', previous || '');
+    logEntry('warn', 'cookie', 'Session rejected for ' + (account.username || account.id), { accountId: account.id });
+  } else if (next === 'ok' && previous === 'dead') {
+    pushStatusHistory(account.id, 'cookie-ok', previous);
+  }
+  applyCookieStatus(account.id);
+}
+
 async function checkCookieHealth(list) {
   if (_cookieCheckRunning) return;
   const todo = list.filter(a => a.cookie && _cookieStatus[a.id] === undefined);
   if (!todo.length) return;
   _cookieCheckRunning = true;
-  try {
-    await _runWithConcurrency(todo, 4, async (a) => {
-      if (_cookieStatus[a.id] !== undefined) return;
-      _cookieStatus[a.id] = 'checking';
-      try {
-        const res = await api.validateCookie(a.cookie);
-        const st = (res && res.ok) ? 'ok' : 'dead';
-        _cookieStatus[a.id] = st;
-        if (st === 'dead') { pushStatusHistory(a.id, 'cookie-dead', ''); logEntry('warn', 'cookie', `Cookie invalid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null }); }
-        else logEntry('info', 'cookie', `Cookie valid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
-      } catch { _cookieStatus[a.id] = 'unknown'; logEntry('warn', 'cookie', `Cookie check failed for ${a.username || a.id}`, { accountId: a.id }); }
-      applyCookieStatus(a.id);
-    });
-  } finally { _cookieCheckRunning = false; }
+  try { await _runWithConcurrency(todo, 2, _validateAccountCookie); }
+  finally { _cookieCheckRunning = false; }
 }
 
-// Recheck ALL cookies every 60s so status stays live
-let _recheckRunning = false;
-const _cookieCheckedAt = {};            // id -> last validation epoch ms
-const OK_RECHECK_MS = 5 * 60 * 1000;    // re-check known-good cookies at most every 5 min
 async function recheckAllCookies(force) {
-  if (_recheckRunning) return; // bail if a previous pass is still going
-  _recheckRunning = true;
-  // Flag before the first await so checkCookieHealth's render() pass doesn't race us.
-  for (const a of accounts) if (a.cookie && _cookieStatus[a.id] === undefined) _cookieStatus[a.id] = 'checking';
-  try {
-  let changed = false;
+  if (_cookieCheckRunning) return;
   const now = Date.now();
   const todo = accounts.filter(a => {
     if (!a.cookie) return false;
-    // Known-good cookies recheck every few minutes; dead/unknown ones every tick.
-    if (!force && _cookieStatus[a.id] === 'ok' && _cookieCheckedAt[a.id] && (now - _cookieCheckedAt[a.id]) < OK_RECHECK_MS) return false;
-    return true;
+    if (_cookieCheckedValue[a.id] !== a.cookie) return true;
+    // A confirmed rejection stays stopped until the session is replaced.
+    if (_cookieStatus[a.id] === 'dead') return false;
+    const interval = _cookieStatus[a.id] === 'ok' ? OK_RECHECK_MS : UNKNOWN_RECHECK_MS;
+    return force || _cookieCheckedAt[a.id] === undefined || now - _cookieCheckedAt[a.id] >= interval;
   });
-  await _runWithConcurrency(todo, 4, async (a) => {
-    const prev = _cookieStatus[a.id];
-    _cookieStatus[a.id] = 'checking';
-    try {
-      const res = await api.validateCookie(a.cookie);
-      _cookieCheckedAt[a.id] = Date.now();
-      const next = (res && res.ok) ? 'ok' : 'dead';
-      if (next !== prev) {
-        _cookieStatus[a.id] = next;
-        applyCookieStatus(a.id); // toggles .cookie-dead on the card (badge + ring)
-        changed = true;
-        if (next === 'dead') { pushStatusHistory(a.id, 'cookie-dead', prev || ''); logEntry('warn', 'cookie', `Cookie expired for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId }); }
-        else if (prev === 'dead' && next === 'ok') { pushStatusHistory(a.id, 'cookie-ok', prev); logEntry('ok', 'cookie', `Cookie re-validated for ${a.username || a.id}`, { accountId: a.id, username: a.username, userId: a.userId }); }
-      } else {
-        _cookieStatus[a.id] = next;
-      }
-    } catch { _cookieStatus[a.id] = prev || 'unknown'; }
-  });
-  if (changed) render(); // rebuild once at the end so the cards match
-  } finally { _recheckRunning = false; }
+  if (!todo.length) return;
+  _cookieCheckRunning = true;
+  try {
+    await _runWithConcurrency(todo, 2, _validateAccountCookie);
+    render();
+  } finally { _cookieCheckRunning = false; }
 }
 setInterval(() => { if (accounts.length) recheckAllCookies(false); }, 60000);
 
@@ -3195,7 +3333,7 @@ async function addByCookie() {
   btn.disabled = false;
   btn.innerHTML = '<span class="material-icons-round" style="font-size:15px">check</span>' + esc(t('login.addAccount'));
   if (!res.ok) {
-    setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>' + (res.reason || t('login.err')));
+    setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>' + esc(res.reason || t('login.err')));
     return;
   }
   await finishLogin({ success: true, cookie, username: res.username, userId: res.userId }, { askPassword: true });
@@ -3232,7 +3370,7 @@ async function finishLogin(res, opts) {
 
 function openEdit(id) {
   editAcc = accounts.find(a => a.id === id); if (!editAcc) return;
-  document.getElementById('edit-title').textContent = 'Edit account';
+  document.getElementById('edit-title').textContent = t('edit.title');
   document.getElementById('edit-head-name').textContent = editAcc.username || 'Unknown';
   document.getElementById('edit-head-meta').textContent =
     (editAcc.username ? '@' + editAcc.username : '') +
@@ -3248,7 +3386,7 @@ function openEdit(id) {
   closeAllCdd();
   renderCategorySelector(editAcc.categoryId || '');
   const refreshBtn = document.getElementById('edit-refresh-btn');
-  if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.innerHTML = '<span class="material-icons-round" style="font-size:15px">refresh</span>Refresh from Roblox'; }
+  if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.innerHTML = '<span class="material-icons-round" style="font-size:15px">refresh</span>'+esc(t('edit.refresh')); }
   document.getElementById('in-target').value = editAcc.gameTarget || '';
   document.getElementById('in-password').value = editAcc.password || '';
   // Reset follow field/status -- it's a lookup tool, not a saved value.
@@ -3951,6 +4089,7 @@ function openLaunch(id) {
     gameName = (gameName ? gameName + ' · ' : '') + t('srv.server') + ' #' + String(jobId).slice(0, 8);
   }
   const p = document.getElementById('launch-prev');
+  if (typeof workspaceLaunchDetails === 'function') workspaceLaunchDetails(launchAcc,gameName);
   p.innerHTML = '<div class="prev-av" id="prev-av">' + esc((launchAcc.username || '?')[0].toUpperCase()) + '</div>' +
     '<div><div class="prev-name">' + esc(launchAcc.username) + '</div>' +
     '<div class="prev-uid">' + esc(gameName || 'Opens home screen') + '</div></div>';
@@ -3966,7 +4105,7 @@ function openLaunch(id) {
   setStatus('launch-status', 'hidden', '');
   _launchingId = null;
   const btn = document.getElementById('btn-launch');
-  btn.disabled = false; btn.innerHTML = 'Start';
+  btn.disabled = false; btn.textContent = t('launch.start');
   openModal('m-launch');
 }
 // The Cancel button doubles as "abandon the launch in progress": a launch can
@@ -3986,6 +4125,7 @@ async function cancelLaunchOrClose() {
 
 async function doLaunch() {
   if (!launchAcc) return;
+  if (_pkgLaunchingAccounts.has(launchAcc.id)) { toast(t('pkg.launchBusy'), 'err'); return; }
   const btn = document.getElementById('btn-launch');
   if (btn.disabled) return;
   // When multi-instance is off, refuse to launch a second account.
@@ -4332,21 +4472,45 @@ function _extractPlaceId(str) {
   return '';
 }
 
-// True when a server has realistic headroom (2+ free slots for normal
-// games, 1 for tiny 2-slot games) — picking these avoids queueing.
-function _hasGoodSlots(s) {
-  const max = s.maxPlayers || 1;
-  return (max - (s.playing || 0)) >= (max > 2 ? 2 : 1);
+// Only accept a real public-server record with measured occupancy.
+function _srvHasSlots(s, requiredSlots = 1, minPlayers = 0) {
+  return !!s && typeof s.id === 'string' && /^[a-zA-Z0-9-]+$/.test(s.id)
+    && Number.isInteger(s.playing) && Number.isInteger(s.maxPlayers)
+    && s.playing >= minPlayers && s.maxPlayers > 0
+    && s.maxPlayers - s.playing >= requiredSlots;
 }
 
-// Stability score for distribution: servers with 1-3 players are the
-// sweet spot — not empty (Roblox kills idle servers) and not nearly full
-// (queue). A lower score = better pick.
-function _srvStabilityScore(s) {
-  const p = s.playing || 0;
-  if (p >= 1 && p <= 3) return p;    // 1→3: stable, in order
-  if (p === 0) return 100;            // empty → likely shut down soon
-  return 50 + p;                       // fuller → later
+function _srvCandidateOrder(a, b) {
+  return a.playing - b.playing || (a.ping ?? Infinity) - (b.ping ?? Infinity)
+    || a.id.localeCompare(b.id);
+}
+
+// Public metadata never needs an account cookie. Fail explicitly on HTTP
+// errors; do not turn an unavailable server list into a generic game join.
+async function _srvFetchCandidates(placeId, { needed = 1, slots = 1, minPlayers = 0, maxPages = 8, exclude = new Set(), cancelled = () => false } = {}) {
+  const servers = new Map();
+  const cursors = new Set();
+  let cursor = '';
+  for (let page = 0; page < maxPages && !cancelled(); page++) {
+    const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc'
+      + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    const r = await api.robloxGet(url);
+    if (cancelled()) break;
+    if (!r?.ok) {
+      const error = new Error('Server list request failed (HTTP ' + (r?.status || 0) + ')');
+      error.status = r?.status || 0;
+      throw error;
+    }
+    if (!Array.isArray(r.data?.data)) throw new Error('Invalid server list response');
+    for (const s of r.data.data) {
+      if (s?.id) servers.delete(s.id); // the newest duplicate wins, even if now full
+      if (_srvHasSlots(s, slots, minPlayers) && !exclude.has(s.id)) servers.set(s.id, s);
+    }
+    cursor = r.data.nextPageCursor || '';
+    if (servers.size >= needed || !cursor || cursors.has(cursor)) break;
+    cursors.add(cursor);
+  }
+  return [...servers.values()].sort(_srvCandidateOrder);
 }
 
 // ── Central server data layer ─────────────────────────────────────────────
@@ -4356,12 +4520,6 @@ function _srvStabilityScore(s) {
 let _srvCache = {};    // placeId -> { at, servers }
 const SRV_TTL = 20000; // ms — how long a fetched list is considered fresh
 const SRV_POLL = 30000; // ms — auto-refresh while the picker is open
-// Server pre-join validation is bounded-retry: the public server list is
-// eventually consistent (a live server can be momentarily absent), so a
-// single miss is not proof of death. Two fresh queries with a short pause
-// ride out the common consistency window without loops or excess requests.
-const SRV_VALIDATE_ATTEMPTS = 2;    // fresh queries before declaring a server gone
-const SRV_VALIDATE_RETRY_MS = 2000; // pause between validation queries
 
 // Fetches the public server list for a placeId, reusing a short-lived
 // cache unless forceFresh. Always Asc (least occupied first) so free slots
@@ -4385,6 +4543,11 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh, full) {
       for (let page = 0; page < maxPages; page++) {
         const srvUrl = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=' + (_srvSortOrder() || 'Asc') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
         const r = await fetcher(srvUrl);
+        if (!r || !r.ok) {
+          const error = new Error('Server list request failed (HTTP ' + (r?.status || 0) + ')');
+          error.status = r?.status || 0;
+          throw error;
+        }
         const data = (r && r.data) || {};
         const batch = (data.data) || [];
         allServers = allServers.concat(batch);
@@ -4402,66 +4565,35 @@ async function _srvFetchRaw(placeId, maxPages, forceFresh, full) {
       // the sample have ceased to exist — drop them (no extra requests).
       if (allServers.length) _srvPruneHighlighted(placeId, allServers);
       return _srvCache[placeId];
-    } catch (e) { lastErr = e; }
+    } catch (e) {
+      if ([401, 403, 429].includes(e.status)) throw e;
+      lastErr = e;
+    }
   }
   if (lastErr) throw lastErr;
   _srvCache[placeId] = { at: Date.now(), servers: [] };
   return _srvCache[placeId];
 }
 
-// Re-validates a single server RIGHT BEFORE joining, with fresh data, so we
-// never enter a dead/closed server or one that just filled up.
-// The public server list is eventually consistent: a live server can be
-// momentarily absent from it, so a single "not found" is NOT proof the
-// server is gone. We retry a bounded number of times with a short pause
-// before concluding. Outcomes:
-//   { ok:true, server }            — found with free slots (or API inconclusive)
-//   { ok:false, reason:'full' }    — found but full (definitive right now)
-//   { ok:false, reason:'gone' }    — not found across all attempts (definitive)
-async function _srvValidateServer(placeId, jobId) {
-  // A highlighted server was used very recently (often another account is
-  // still on it) — strong evidence it exists, so it gets the benefit of the
-  // doubt if the API keeps failing to list it.
-  const knownLive = (() => {
-    const j = _srvHighlighted[String(jobId)];
-    return !!(j && String(j.placeId) === String(placeId));
-  })();
-  for (let attempt = 0; attempt < SRV_VALIDATE_ATTEMPTS; attempt++) {
-    try {
-      const fresh = await _srvFetchRaw(placeId, 10, true, true);
-      // An empty fresh list means the API hiccuped (rate limit, transient
-      // failure) — never trust it enough to declare a server dead.
-      if (!fresh.servers.length) return { ok: true, server: null };
-      const server = fresh.servers.find(s => s.id === jobId);
-      if (server) {
-        if (server.playing >= (server.maxPlayers || 1)) return { ok: false, reason: 'full', server };
-        return { ok: true, server };
-      }
-      // Not found in a non-empty sample: the server may be gone OR the API
-      // index may be lagging behind the live game. One short, bounded retry
-      // rides out the common consistency window without loops or excess
-      // requests (each attempt is one fresh fetch; games usually end after
-      // 1-2 pages).
-      if (attempt < SRV_VALIDATE_ATTEMPTS - 1) {
-        logEntry('info', 'launch', `Server #${String(jobId).slice(0, 8)} not in API sample (attempt ${attempt + 1}/${SRV_VALIDATE_ATTEMPTS}, sample=${fresh.servers.length}) — retrying in ${SRV_VALIDATE_RETRY_MS}ms`, { placeId: String(placeId), jobId });
-        await new Promise(r => setTimeout(r, SRV_VALIDATE_RETRY_MS));
-        continue;
-      }
-      // Out of attempts. A highlighted server has evidence of life (it was
-      // used very recently), so let the attempt go — Roblox fails fast if
-      // the server is really gone. Unknown servers are declared gone.
-      if (knownLive) {
-        logEntry('info', 'launch', `Server #${String(jobId).slice(0, 8)} still missing after ${SRV_VALIDATE_ATTEMPTS} fresh samples — highlighted server, allowing attempt`, { placeId: String(placeId), jobId });
-        return { ok: true, server: null };
-      }
-      logEntry('warn', 'launch', `Server #${String(jobId).slice(0, 8)} confirmed gone after ${SRV_VALIDATE_ATTEMPTS} fresh samples`, { placeId: String(placeId), jobId });
-      return { ok: false, reason: 'gone' };
-    } catch (e) {
-      // API hiccup — don't block the user, allow the attempt.
-      return { ok: true, server: null };
-    }
+// Re-validates a single server RIGHT BEFORE joining with a bounded sample.
+// A bounded sample can confirm that a server is full; it cannot prove a
+// missing server is dead. Roblox resolves an explicit jobId when it is not
+// in the sample, avoiding twenty API pages and false "server gone" errors.
+async function _srvValidateServer(placeId, jobId, requiredSlots = 1) {
+  try {
+    const fresh = await _srvFetchRaw(placeId, 1, true, true);
+    const server = fresh.servers.find(s => String(s.id) === String(jobId));
+    if (server && !_srvHasSlots(server, requiredSlots)) return { ok: false, reason: 'full', server };
+    return { ok: true, server: server || null };
+  } catch (e) {
+    return { ok: false, reason: 'error', error: e.message || String(e) };
   }
-  return { ok: true, server: null }; // defensive, unreachable
+}
+
+function _srvValidationFailed(result) {
+  if (result.ok) return false;
+  toast(result.reason === 'error' ? result.error : t('srv.fullNow'), 'err');
+  return true;
 }
 
 // Keeps the cache bounded: drops expired entries once it grows past a
@@ -4540,12 +4672,16 @@ function _srvEnterSpinner(jobId, on) {
   }
 }
 
-async function launchToServer(jobId) {
+const _srvPendingEntries = new Set();
+async function launchToServer(jobId, explicitPlaceId = null) {
+  const ctx = _srvCtx;
   const s = _srvList.find(x => x.id === jobId) || { id: jobId };
-  if (!s.id || !_srvCtx || !_srvCtx.accountId) return;
-  const id = _srvCtx.accountId;
+  if (!s.id || !ctx?.accountId) return;
+  const id = ctx.accountId;
+  const placeId = explicitPlaceId || ctx.placeId;
   const acc = accounts.find(a => a.id === id);
-  if (!acc) return;
+  if (!acc || _srvPendingEntries.has(id) || _pkgLaunchingAccounts.has(id)) return;
+  _srvPendingEntries.add(id);
   // Visual-only: spinner + disable the clicked Enter button while the fresh
   // re-check runs, so the API delay doesn't look like a hang.
   _srvEnterSpinner(jobId, true);
@@ -4558,22 +4694,19 @@ async function launchToServer(jobId) {
     // live, so skip the re-check there too — the launch modal opens instantly
     // instead of waiting on a fresh API fetch (which can lag a couple seconds).
     if (!(_srvPresence[s.id] || []).length) {
-      const v = await _srvValidateServer(_srvCtx.placeId, s.id);
-      if (!v.ok) {
-        if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-        else toast(t('srv.fullNow'), 'err');
-        refreshServerList();
-        return;
-      }
+      const v = await _srvValidateServer(placeId, s.id);
+      if (_srvValidationFailed(v)) return;
     }
-    const target = _srvCtx.placeId + ':' + s.id;
+    if (_srvCtx !== ctx) return; // a different picker was opened while waiting
+    const target = placeId + ':' + s.id;
     closeModal('m-servers');
     // Temporarily override the account's target for this single launch only.
     acc._srvTarget = target;
-    acc._srvPlaceId = _srvCtx.placeId;
+    acc._srvPlaceId = placeId;
     openLaunch(id);
     logEntry('info', 'launch', 'Targeting specific server for ' + (acc.username || id), { accountId: id, target });
   } finally {
+    _srvPendingEntries.delete(id);
     _srvEnterSpinner(jobId, false);
   }
 }
@@ -4590,62 +4723,146 @@ function openPkgServerList(pkgId) {
 }
 
 async function launchPkgToServer(jobId) {
-  const s = _srvList.find(x => x.id === jobId) || { id: jobId };
-  if (!s.id || !_srvCtx || !_srvCtx.packageId) return;
-  const p = packages.find(x => x.id === _srvCtx.packageId);
+  const ctx = _srvCtx;
+  if (!ctx?.packageId || !jobId) return;
+  const p = packages.find(x => x.id === ctx.packageId);
   if (!p) return;
-  const members = pkgMembers(p);
-  if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
-  if (settings.multiInstance === false) {
-    toast(t('settings.multiInstanceGroupBlocked'), 'err');
-    return;
-  }
-  // Visual-only: spinner + disable the clicked Enter button while the fresh
-  // re-check runs, so the API delay doesn't look like a hang.
   _srvEnterSpinner(jobId, true);
-  try {
-    // Fresh re-check before launching the whole group into this server.
-    // Skip when an account is already on it (runtime presence = provably live),
-    // so the group doesn't wait on a (possibly lagging) API fetch.
-    if (!(_srvPresence[s.id] || []).length) {
-      const v = await _srvValidateServer(_srvCtx.placeId, s.id);
-      if (!v.ok) {
-        if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-        else toast(t('srv.fullNow'), 'err');
-        refreshServerList();
-        return;
-      }
-    }
-    const target = _srvCtx.placeId + ':' + s.id;
-    const placeIdStr = String(_srvCtx.placeId);
-    closeModal('m-servers');
-    const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
-    let ok = 0;
-    for (const m of members) {
-      logEntry('info', 'launch', `Launching ${m.username || m.id} into server #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
-      try {
-        const res = await api.launchRoblox(m.id, m.cookie, target);
-        if (res && res.success) {
-          ok++;
-          markLaunched(m.id);
-          _srvAddJoined(m.id, placeIdStr, s.id);
-        } else if (res && res.error) {
-          _flagCookieMaybeDead(m.id, res.error);
-        }
-      } catch (e) { /* keep going */ }
-      if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
-    }
-    toast(t('pkg.launchedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
-    renderPackages();
-  } finally {
-    _srvEnterSpinner(jobId, false);
-  }
+  try { await _launchPkgAtServer(p, ctx.placeId, jobId); }
+  finally { _srvEnterSpinner(jobId, false); }
 }
 
-// Launches each account of a group into its OWN server: the emptiest
-// servers that already have at least 1 player (so our account is never the
-// first one in — Roblox shuts down truly idle servers). Strictly one account
-// per server: if servers run out, the rest wait for the next round.
+async function _launchPkgAtServer(p, placeId, jobId) {
+  const members = pkgMembers(p);
+  if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
+  if (settings.multiInstance === false) { toast(t('settings.multiInstanceGroupBlocked'), 'err'); return; }
+  const job = _pkgBeginLaunch(p, members);
+  if (!job) return;
+  try {
+    const validation = await _srvValidateServer(placeId, jobId, members.length);
+    if (job.cancelled || _srvValidationFailed(validation)) return;
+    const target = placeId + ':' + jobId;
+    closeModal('m-servers');
+    const entries = members.map(account => ({ account, target }));
+    const result = await _pkgExecuteLaunches(job, entries, Math.max(0, Math.min(60000, Number(p.launchDelay) || 0)));
+    _pkgReportLaunch(job, p, result, members.length);
+  } catch (e) {
+    if (!job.cancelled) toast(e?.message || String(e), 'err');
+  } finally { _pkgFinishLaunch(job); }
+}
+
+// Group operations use state, not DOM attributes, as the concurrency lock.
+// Re-rendering a card must never permit a second launch of the same accounts.
+const _pkgLaunchJobs = new Map();
+const _pkgLaunchingAccounts = new Set();
+const _pkgReservedServers = new Map();
+
+function _refreshLaunchPresentation() {
+  if (typeof refreshAccountStatuses === 'function') refreshAccountStatuses();
+}
+
+function _pkgBeginLaunch(p, members) {
+  if (_pkgLaunchJobs.has(p.id) || members.some(m => _pkgLaunchingAccounts.has(m.id) || _srvPendingEntries.has(m.id) || _launchingId === m.id)) {
+    toast(t('pkg.launchBusy'), 'err');
+    return null;
+  }
+  const card = document.querySelector('.pkg-card[data-id="' + p.id + '"]');
+  if (card?.querySelector('.pkg-kill-btn')?.dataset.busy === '1') {
+    toast(t('pkg.killBusy'), 'err');
+    return null;
+  }
+  const job = { id: p.id, members, cancelled: false, currentAccount: null, completed: new Set(), reserved: [], wake: null };
+  _pkgLaunchJobs.set(p.id, job);
+  members.forEach(m => _pkgLaunchingAccounts.add(m.id));
+  renderPackages();
+  return job;
+}
+
+function _pkgFinishLaunch(job) {
+  _pkgLaunchJobs.delete(job.id);
+  job.members.forEach(m => _pkgLaunchingAccounts.delete(m.id));
+  job.reserved.forEach(key => { if (_pkgReservedServers.get(key) === job) _pkgReservedServers.delete(key); });
+  renderPackages();
+}
+
+async function cancelPackageLaunch(id) {
+  const job = _pkgLaunchJobs.get(id);
+  if (!job || job.cancelled) return;
+  job.cancelled = true;
+  if (job.wake) job.wake();
+  if (job.currentAccount) {
+    try { await api.cancelLaunch(job.currentAccount); } catch (e) {
+      logEntry('warn', 'launch', e?.message || String(e), { accountId: job.currentAccount });
+    }
+  }
+  renderPackages();
+}
+
+async function _pkgLaunchDelay(job, delay) {
+  if (delay <= 0 || job.cancelled) return;
+  await new Promise(resolve => {
+    const timer = setTimeout(resolve, delay);
+    job.wake = () => { clearTimeout(timer); resolve(); };
+  });
+  job.wake = null;
+}
+
+// An uncertain/failed spawn is never retried with a different server: the
+// first process may already exist. Each account gets exactly one attempt.
+async function _pkgExecuteLaunches(job, entries, delay = 0) {
+  const result = { ok: 0, errors: [], attempted: 0 };
+  for (let i = 0; i < entries.length && !job.cancelled; i++) {
+    const { account: m, target } = entries[i];
+    job.currentAccount = m.id;
+    _refreshLaunchPresentation();
+    logEntry('info', 'launch', 'Launching Roblox for ' + (m.username || m.id), { accountId: m.id, target: target || 'Roblox home' });
+    let res;
+    try { res = await api.launchRoblox(m.id, m.cookie, target); }
+    catch (e) { res = { success: false, error: e?.message || String(e) }; }
+    finally { job.currentAccount = null; }
+    result.attempted++;
+    job.completed?.add(m.id);
+    if (res?.success) {
+      result.ok++;
+      markLaunched(m.id);
+      const specific = String(target || '').match(/^(\d+):([a-zA-Z0-9-]+)$/);
+      if (specific) _srvAddJoined(m.id, specific[1], specific[2]);
+      else _srvAccountLeft(m.id);
+    } else if (res?.cancelled) {
+      job.cancelled = true;
+    } else {
+      const error = res?.error || 'Launch failed';
+      result.errors.push(error);
+      _flagCookieMaybeDead(m.id, error);
+      logEntry('err', 'launch', error, { accountId: m.id, target });
+      // Respect a global rate limit instead of marching through the group.
+      if (res?.status === 429 || /HTTP\s*429|rate[ -]?limit|cooldown|Retry-After/i.test(error)) break;
+    }
+    _refreshLaunchPresentation();
+    if (i < entries.length - 1) await _pkgLaunchDelay(job, delay);
+  }
+  return result;
+}
+
+function _pkgReportLaunch(job, p, result, total, distributed = false) {
+  if (job.cancelled) toast(t('common.cancel') + ' · ' + result.ok + '/' + total, '');
+  else if (result.errors.length) toast(result.ok + '/' + total + ' · ' + result.errors[0], 'err');
+  else toast(t(distributed ? (result.ok < total ? 'pkg.distributedPartial' : 'pkg.distributedN') : 'pkg.launchedN', { ok: result.ok, total, name: p.name }), result.ok === total ? 'ok' : 'err');
+}
+
+function _srvDistributionExclusions(placeId) {
+  const exclude = new Set();
+  for (const [jobId, ids] of Object.entries(_srvPresence)) {
+    if (ids.length) exclude.add(jobId);
+  }
+  for (const key of _pkgReservedServers.keys()) {
+    if (key.startsWith(placeId + ':')) exclude.add(key.slice(String(placeId).length + 1));
+  }
+  return exclude;
+}
+
+// One distinct nonempty public server per account, lowest population first.
+// Leave excess accounts untouched when there are fewer suitable servers.
 async function distributePkg(pkgId) {
   const p = packages.find(x => x.id === pkgId);
   if (!p) return;
@@ -4658,145 +4875,57 @@ async function distributePkg(pkgId) {
   const link = String(p.link || '').trim();
   const placeId = _extractPlaceId(link);
   if (!placeId) { toast(t('srv.errResolve'), 'err'); return; }
-  // Lively = at least 1 player inside + REAL headroom (2+ free slots when
-  // the game allows) so accounts neither open an idle server nor queue up.
-  const isLively = (s) => (s.playing || 0) >= 1 && _hasGoodSlots(s);
-  const acc = members[0];
-  const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
-  const seen = new Set();
-  const lively = [];
-  let cursor = '';
-  // Collect more than needed (2x): entries go stale between fetch and
-  // launch, and the fresh re-check below drops the dead ones.
-  for (let page = 0; page < 8 && lively.length < members.length * 2; page++) {
-    let batch = [];
-    try {
-      const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-      const r = await fetcher(url);
-      const data = (r && r.data) || {};
-      batch = (data.data) || [];
-      cursor = data.nextPageCursor || '';
-    } catch (e) { break; }
-    for (const s of batch) {
-      if (!s || !s.id || seen.has(s.id)) continue;
-      seen.add(s.id);
-      if (isLively(s)) lively.push(s);
-    }
-    if (!cursor) break;
-  }
-  if (!lively.length) { toast(t('pkg.noLivelyServers'), 'err'); return; }
-  // Emptiest first (our account becomes #2, #3...), ping as tiebreak.
-  const emptiestFirst = (a, b) => ((a.playing || 0) - (b.playing || 0)) || ((a.ping ?? 99999) - (b.ping ?? 99999));
-  lively.sort(emptiestFirst);
-  // ONE fresh re-check so servers that died/filled between listing and
-  // launch are dropped instead of joined.
-  let valid = lively;
+  const job = _pkgBeginLaunch(p, members);
+  if (!job) return;
   try {
-    const fresh = await _srvFetchRaw(placeId, 8, true, true);
-    if (fresh.servers.length) {
-      valid = lively
-        .map(s => {
-          const live = fresh.servers.find(x => x.id === s.id);
-          return live && isLively(live) ? live : null;
-        })
-        .filter(Boolean);
-      valid.sort(emptiestFirst);
+    const servers = await _srvFetchCandidates(placeId, {
+      needed: members.length, minPlayers: 1,
+      exclude: _srvDistributionExclusions(placeId), cancelled: () => job.cancelled,
+    });
+    if (job.cancelled) return;
+    // Another group may have reserved a server while this fetch was pending.
+    const excludedNow = _srvDistributionExclusions(placeId);
+    const chosen = servers.filter(s => !excludedNow.has(s.id)).slice(0, members.length);
+    if (!chosen.length) { toast(t('pkg.noLivelyServers'), 'err'); return; }
+    for (const s of chosen) {
+      const key = placeId + ':' + s.id;
+      _pkgReservedServers.set(key, job);
+      job.reserved.push(key);
     }
-  } catch (e) { /* keep the collected list if the re-check fails */ }
-  if (!valid.length) { toast(t('pkg.noLivelyServers'), 'err'); return; }
-  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
-  let ok = 0;
-  const used = new Set(); // serverId already taken this round: 1 account each
-  const nextServer = (skip) => valid.find(s => !used.has(s.id) && !(skip && skip.has(s.id)) && isLively(s)) || null;
-  for (let i = 0; i < members.length; i++) {
-    const m = members[i];
-    // Try up to 2 fresh servers for this account (the first may have been
-    // shut down by Roblox between the fetch and the launch, or filled up).
-    // A failed server is never retried for the same account.
-    const failed = new Set();
-    let launched = false;
-    for (let attempt = 0; attempt < 2 && !launched; attempt++) {
-      const s = nextServer(failed);
-      if (!s) break;
-      used.add(s.id);
-      failed.add(s.id);
-      const target = placeId + ':' + s.id;
-      logEntry('info', 'launch', `Launching ${m.username || m.id} into server with ${s.playing} player(s) #${String(s.id).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
-      try {
-        const res = await api.launchRoblox(m.id, m.cookie, target);
-        if (res && res.success) {
-          ok++;
-          markLaunched(m.id);
-          _srvAddJoined(m.id, String(placeId), s.id);
-          launched = true; // launched ok, move to next account
-        } else {
-          used.delete(s.id); // failed here: offer this server to the next account
-          if (res && res.error) _flagCookieMaybeDead(m.id, res.error);
-        }
-      } catch (e) { used.delete(s.id); /* keep going */ }
-      // Brief pause before retrying with the next candidate server.
-      if (!launched && attempt === 0) await new Promise(r => setTimeout(r, Math.min(delay || 1000, 3000)));
-    }
-    if (!launched) break; // out of lively servers: stop, report partial
-    if (delay > 0 && i < members.length - 1) await new Promise(r => setTimeout(r, delay));
-  }
-  if (ok < members.length) toast(t('pkg.distributedPartial', { ok: ok, total: members.length, name: p.name }), 'err');
-  else toast(t('pkg.distributedN', { ok: ok, total: members.length, name: p.name }), 'ok');
-  renderPackages();
+    const entries = chosen.map((s, i) => ({ account: members[i], target: placeId + ':' + s.id }));
+    const result = await _pkgExecuteLaunches(job, entries, Math.max(0, Math.min(60000, Number(p.launchDelay) || 0)));
+    _pkgReportLaunch(job, p, result, members.length, true);
+  } catch (e) {
+    logEntry('err', 'launch', e?.message || String(e), { packageId: p.id });
+    if (!job.cancelled) toast(e?.message || String(e), 'err');
+  } finally { _pkgFinishLaunch(job); }
 }
 
-// Picks a random server that is actually free: fetched fresh from the API,
-// not full, and never one where another of the user's accounts is currently
-// in (those live in _srvPresence). Bounded retries ride out a momentarily
-// stale or empty API answer before giving up.
+// A random join uses one bounded fresh search and never retries failed auth.
+let _srvRandomPending = false;
 async function joinRandomServer() {
-  if (!_srvCtx || (!_srvCtx.accountId && !_srvCtx.packageId)) return;
-  // Visual-only: spinner + disable while fetching, so the API delay doesn't
-  // look like a hang and a double-click can't fire two launches.
-  // Replace the casino icon with a visible spinner circle (more noticeable
-  // than mere icon rotation), then restore it when done.
+  const ctx = _srvCtx;
+  if (!ctx || (!ctx.accountId && !ctx.packageId) || _srvRandomPending) return;
+  _srvRandomPending = true;
   const btn = document.getElementById('srv-random');
-  const ic = document.getElementById('srv-random-ic');
-  if (btn) { btn.disabled = true; btn._srvPrevHtml = btn.innerHTML; btn.innerHTML = '<div class="spin"></div>'; }
+  const previousHtml = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = '<div class="spin"></div>'; }
   try {
-    const placeId = _srvCtx.placeId;
-    const acc = _srvCtx.accountId ? accounts.find(a => a.id === _srvCtx.accountId) : null;
-    const fetcher = acc && acc.cookie ? (u) => api.robloxGetAuth(u, acc.cookie) : (u) => api.robloxGet(u);
-    const isFree = (s) =>
-      s.playing < (s.maxPlayers || 1) &&   // has a free slot (not full)
-      !(_srvPresence[s.id] || []).length;  // no own account already inside
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const pool = [];
-        let cursor = '';
-        // Asc puts the least-occupied (free) servers first — exactly the pool
-        // we want; stop once we have enough candidates for a fair random pick.
-        for (let page = 0; page < 3; page++) {
-          const url = 'https://games.roblox.com/v1/games/' + placeId + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-          const r = await fetcher(url);
-          const data = (r && r.data) || {};
-          for (const s of (data.data) || []) if (isFree(s)) pool.push(s);
-          cursor = data.nextPageCursor || '';
-          if (pool.length >= 5 || !cursor) break;
-        }
-        if (pool.length) {
-          const pick = pool[Math.floor(Math.random() * pool.length)];
-          // Await the launch so the spinner stays visible until the
-          // confirmation window opens (or the error is shown), instead of
-          // disappearing mid-flight and making the user wait for the window.
-          // Own try/catch so a launch error stops here (never re-picks).
-          try {
-            if (_srvCtx.packageId) await launchPkgToServer(pick.id);
-            else await launchToServer(pick.id);
-          } catch (e) { /* launch failed — stop, do not retry */ }
-          return;
-        }
-      } catch (e) { /* retry below */ }
-      if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
-    }
-    toast(t('srv.randomNone'), 'err');
+    const p = ctx.packageId ? packages.find(x => x.id === ctx.packageId) : null;
+    const pool = await _srvFetchCandidates(ctx.placeId, {
+      needed: 5, slots: p ? Math.max(1, pkgMembers(p).length) : 1, maxPages: 3,
+      exclude: _srvDistributionExclusions(String(ctx.placeId)), cancelled: () => _srvCtx !== ctx,
+    });
+    if (_srvCtx !== ctx) return;
+    if (!pool.length) { toast(t('srv.randomNone'), 'err'); return; }
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    if (ctx.packageId) await launchPkgToServer(pick.id);
+    else await launchToServer(pick.id);
+  } catch (e) {
+    toast(e?.message || String(e), 'err');
   } finally {
-    if (btn) { btn.disabled = false; if (btn._srvPrevHtml != null) { btn.innerHTML = btn._srvPrevHtml; btn._srvPrevHtml = null; } }
+    _srvRandomPending = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = previousHtml; }
   }
 }
 
@@ -4813,66 +4942,13 @@ async function joinPastedServer() {
     jobId = parts.slice(1).join(':');
   }
   if (!/^\d+$/.test(String(placeId)) || !jobId) { toast(t('srv.pasteBad'), 'err'); return; }
-  // Group mode: launch every account of the group into the pasted server.
-  if (_srvCtx.packageId) {
-    launchPkgToPasted(placeId, jobId);
-    return;
-  }
-  const id = _srvCtx.accountId;
-  if (!id) { toast(t('srv.pasteBad'), 'err'); return; }
-  const acc = accounts.find(a => a.id === id);
-  if (!acc) return;
-  // Fresh re-check before joining a pasted jobId.
-  const v = await _srvValidateServer(placeId, jobId);
-  if (!v.ok) {
-    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-    else toast(t('srv.fullNow'), 'err');
-    return;
-  }
-  closeModal('m-servers');
-  acc._srvTarget = placeId + ':' + jobId;
-  acc._srvPlaceId = placeId;
-  openLaunch(id);
-  logEntry('info', 'launch', 'Joining pasted server for ' + (acc.username || id), { accountId: id, target: placeId + ':' + jobId });
+  if (_srvCtx.packageId) await launchPkgToPasted(placeId, jobId);
+  else await launchToServer(jobId, placeId);
 }
 
 async function launchPkgToPasted(placeId, jobId) {
-  const p = packages.find(x => x.id === _srvCtx.packageId);
-  if (!p) return;
-  const members = pkgMembers(p);
-  if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
-  if (settings.multiInstance === false) {
-    toast(t('settings.multiInstanceGroupBlocked'), 'err');
-    return;
-  }
-  // Fresh re-check before joining a pasted jobId (group-wide).
-  const v = await _srvValidateServer(placeId, jobId);
-  if (!v.ok) {
-    if (v.reason === 'gone') toast(t('srv.gone'), 'err');
-    else toast(t('srv.fullNow'), 'err');
-    return;
-  }
-  const target = placeId + ':' + jobId;
-  const placeIdStr = String(placeId);
-  closeModal('m-servers');
-  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
-  let ok = 0;
-  for (const m of members) {
-    logEntry('info', 'launch', `Launching ${m.username || m.id} into pasted server #${String(jobId).slice(0, 8)} (package ${p.name})...`, { accountId: m.id, target });
-    try {
-      const res = await api.launchRoblox(m.id, m.cookie, target);
-      if (res && res.success) {
-        ok++;
-        markLaunched(m.id);
-        _srvAddJoined(m.id, placeIdStr, jobId);
-      } else if (res && res.error) {
-        _flagCookieMaybeDead(m.id, res.error);
-      }
-    } catch (e) { /* keep going */ }
-    if (delay > 0 && ok < members.length) await new Promise(r => setTimeout(r, delay));
-  }
-  toast(t('pkg.launchedN', { ok: ok, total: members.length, name: p.name }), ok === members.length ? 'ok' : 'err');
-  renderPackages();
+  const p = packages.find(x => x.id === _srvCtx?.packageId);
+  if (p) await _launchPkgAtServer(p, placeId, jobId);
 }
 
 async function copyServerId(jobId) {
@@ -4895,8 +4971,9 @@ let _pkgQuery = '', _pkgFilter = 'all', _pkgSort = 'manual', _pkgExpanded = new 
 const _sessionLaunched = new Set();
 
 function pkgMembers(p) {
-  const order = (p.launchOrder && p.launchOrder.length) ? p.launchOrder : (p.accountIds || []);
-  const byId = new Map(accounts.filter(a => order.includes(a.id)).map(a => [a.id, a]));
+  const selected = new Set(p.accountIds || []);
+  const order = [...new Set([...(p.launchOrder || []), ...selected])].filter(id => selected.has(id));
+  const byId = new Map(accounts.filter(a => selected.has(a.id)).map(a => [a.id, a]));
   return order.map(id => byId.get(id)).filter(Boolean);
 }
 
@@ -4972,8 +5049,8 @@ function exportPackage(id) {
     () => toast(t('pkg.exportFail'), 'err')
   );
 }
-function importPackage() {
-  const raw = prompt(t('groups.importPrompt'));
+async function importPackage() {
+  const raw = await KntUi.requestText({title:t('groups.importPrompt'), multiline:true});
   if (!raw) return;
   try {
     const data = JSON.parse(raw);
@@ -4990,17 +5067,17 @@ function importPackage() {
 async function relaunchDownedPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
   const members = pkgMembers(p);
-  const downed = members.filter(m => m.gameTarget && _sessionLaunched.has(m.id) && !_launchedIds.has(m.id) && !_homeIds.has(m.id) && !(_cookieStatus[m.id] === 'dead' || m._cookieInvalid));
+  const downed = members.filter(m => (p.link || m.gameTarget) && _sessionLaunched.has(m.id) && !_launchedIds.has(m.id) && !_homeIds.has(m.id) && !(_cookieStatus[m.id] === 'dead' || m._cookieInvalid));
   if (!downed.length) { toast(t('pkg.noDowned'), 'ok'); return; }
-  const link = (p.link || '').trim();
-  let okCount = 0;
-  await Promise.all(downed.map(async (m) => {
-    const target = link || m.gameTarget || null;
-    logEntry('info', 'launch', `Relaunching downed ${m.username || m.id} (package)...`, { accountId: m.id, username: m.username || null, userId: m.userId || null, target: target || 'Roblox home' });
-    const res = await api.launchRoblox(m.id, m.cookie, target);
-    if (res.success) { okCount++; markLaunched(m.id); }
-  }));
-  toast(t('pkg.relaunchedN', { ok: okCount, total: downed.length, name: p.name }), okCount === downed.length ? 'ok' : 'err');
+  if (settings.multiInstance === false) { toast(t('settings.multiInstanceGroupBlocked'), 'err'); return; }
+  const job = _pkgBeginLaunch(p, downed);
+  if (!job) return;
+  try {
+    const link = String(p.link || '').trim();
+    const entries = downed.map(account => ({ account, target: link || account.gameTarget || null }));
+    const result = await _pkgExecuteLaunches(job, entries, Math.max(0, Math.min(60000, Number(p.launchDelay) || 0)));
+    _pkgReportLaunch(job, p, result, downed.length);
+  } finally { _pkgFinishLaunch(job); }
 }
 async function trimPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
@@ -5015,6 +5092,8 @@ async function trimPackage(id) {
 }
 
 function renderPackages() {
+  _refreshLaunchPresentation();
+  if (typeof renderGroupInspector === 'function') renderGroupInspector();
   const list = document.getElementById('pkg-list'), empty = document.getElementById('pkg-empty');
   if (!list) return;
   const vis = visiblePackages();
@@ -5023,6 +5102,8 @@ function renderPackages() {
   list.innerHTML = vis.map((p, i) => {
     const members = pkgMembers(p);
     const st = pkgState(p);
+    const launchJob = _pkgLaunchJobs.get(p.id);
+    const busy = !!launchJob;
     const shown = members.slice(0, 6);
     const extra = members.length - shown.length;
     const avatarsHtml = shown.map(m => `<div class="pkg-avatar${_launchedIds.has(m.id) ? ' online' : ''}${_homeIds.has(m.id) ? ' home' : ''}" id="pkg-av-${p.id}-${m.id}" data-acc-id="${m.id}" data-uid="${m.userId || ''}" data-uname="${esc(m.username || '')}" data-nick="${esc(m.nickname || '')}">${esc((m.username || '?')[0].toUpperCase())}<span class="pkg-avatar-dot"></span></div>`).join('')
@@ -5032,7 +5113,7 @@ function renderPackages() {
     const membersHtml = members.map(m => {
       const cls = _homeIds.has(m.id) ? 'home' : (_launchedIds.has(m.id) ? 'running' : (_cookieStatus[m.id] === 'dead' ? 'dead' : 'idle'));
       const lbl = _homeIds.has(m.id) ? t('accounts.home') : (_launchedIds.has(m.id) ? t('accounts.launched') : (_cookieStatus[m.id] === 'dead' ? t('accounts.expired') : t('accounts.notLaunched')));
-      return `<div class="pkg-member ${cls}" data-acc-id="${m.id}"><span class="pkg-member-dot"></span>${esc(m.nickname || m.username || 'Unknown')}<span class="pkg-member-st">${esc(lbl)}</span></div>`;
+      return `<div class="pkg-member ${cls}" data-acc-id="${m.id}"><span class="pkg-member-dot"></span><span class="group-member-avatar">${m.userId && _avatarCache[m.userId] ? '<img alt="" src="'+esc(_avatarCache[m.userId])+'"/>' : esc((m.username || '?')[0].toUpperCase())}</span>${esc(m.nickname || m.username || 'Unknown')}<span class="pkg-member-st">${esc(lbl)}</span></div>`;
     }).join('');
     return `
     <div class="pkg-card${_pkgExpanded.has(p.id) ? ' expanded' : ''}${p.pinned ? ' pinned' : ''}" data-id="${p.id}" style="animation-delay:${i * 18}ms;${p.color ? `--pkgc:${esc(p.color)}` : ''}">
@@ -5051,7 +5132,7 @@ function renderPackages() {
           <button class="btn btn-ghost pkg-expand-btn${_pkgExpanded.has(p.id) ? ' open' : ''}" onclick="togglePkgExpand('${p.id}')" aria-label="Expand members">
             <span class="material-icons-round">expand_more</span>
           </button>
-          <button class="btn btn-edit" onclick="openEditPackage('${p.id}')" aria-label="Manage accounts">
+          <button class="btn btn-edit" onclick="openEditPackage('${p.id}')" ${busy ? 'disabled' : ''} aria-label="Manage accounts">
             <span class="material-icons-round">group</span>
           </button>
           <button class="btn btn-ghost" onclick="duplicatePackage('${p.id}')" aria-label="Duplicate group">
@@ -5060,7 +5141,7 @@ function renderPackages() {
           <button class="btn btn-ghost" onclick="exportPackage('${p.id}')" aria-label="Export group to clipboard">
             <span class="material-icons-round">file_upload</span>
           </button>
-          <button class="btn btn-del" onclick="deletePackage('${p.id}')" aria-label="Delete package">
+          <button class="btn btn-del" onclick="deletePackage('${p.id}')" ${busy ? 'disabled' : ''} aria-label="Delete package">
             <span class="material-icons-round">delete_outline</span>
           </button>
         </div>
@@ -5073,21 +5154,22 @@ function renderPackages() {
         <div class="pkg-link-field">
           <span class="material-icons-round pkg-link-icon">link</span>
           <input type="text" class="pkg-link-input" id="pkg-link-${p.id}" placeholder="${esc(t('groups.linkPh'))}"
-            value="${esc(p.link || '')}" onchange="setPackageLink('${p.id}', this.value)"
+            value="${esc(p.link || '')}" ${busy ? 'disabled' : ''} onchange="setPackageLink('${p.id}', this.value)"
             onkeydown="if(event.key==='Enter'){this.blur();}"/>
         </div>
-        ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn" onclick="openPkgServerList('${p.id}')" title="${esc(t('srv.title'))}" aria-label="${esc(t('srv.title'))}"><span class="material-icons-round">dns</span></button>` : ''}
-        ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn" onclick="distributePkg('${p.id}')" title="${esc(t('pkg.distribute'))}" aria-label="${esc(t('pkg.distribute'))}"><span class="material-icons-round">call_split</span></button>` : ''}
-        <button class="btn btn-launch pkg-launch-btn" onclick="launchPackage('${p.id}')" ${members.length ? '' : 'disabled'}>
-          ${esc(t('groups.startAll'))}
+        ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn" onclick="openPkgServerList('${p.id}')" ${busy ? 'disabled' : ''} title="${esc(t('srv.title'))}" aria-label="${esc(t('srv.title'))}"><span class="material-icons-round">dns</span></button>` : ''}
+        ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn pkg-distribute-btn" onclick="workspaceDistribute('${p.id}')" ${busy ? 'disabled' : ''} title="${esc(t('pkg.distribute'))}" aria-label="${esc(t('pkg.distribute'))}"><span class="material-icons-round">call_split</span><span>${esc(t('ui.distribute'))}</span></button>` : ''}
+        <button class="btn btn-launch pkg-launch-btn" onclick="launchPackage('${p.id}')" data-busy="${busy ? '1' : '0'}" ${members.length && !busy ? '' : 'disabled'}>
+          ${busy ? '<div class="spin"></div>' : esc(t('groups.startAll'))}
         </button>
-        <button class="btn btn-out pkg-relaunch-btn" onclick="relaunchDownedPackage('${p.id}')" ${st.downed ? '' : 'disabled'} title="${esc(t('groups.relaunchTip'))}">
+        ${busy ? `<button class="btn btn-ghost" onclick="cancelPackageLaunch('${p.id}')" ${launchJob.cancelled ? 'disabled' : ''}>${esc(t('common.cancel'))}</button>` : ''}
+        <button class="btn btn-out pkg-relaunch-btn" onclick="relaunchDownedPackage('${p.id}')" ${st.downed && !busy ? '' : 'disabled'} title="${esc(t('groups.relaunchTip'))}">
           <span class="material-icons-round">refresh</span>
         </button>
-        <button class="btn btn-out pkg-trim-btn" onclick="trimPackage('${p.id}')" ${st.running ? '' : 'disabled'} title="${esc(t('groups.trimTip'))}">
+        <button class="btn btn-out pkg-trim-btn" onclick="trimPackage('${p.id}')" ${st.running && !busy ? '' : 'disabled'} title="${esc(t('groups.trimTip'))}">
           <span class="material-icons-round">memory</span>
         </button>
-        <button class="btn btn-del pkg-kill-btn" onclick="killPackage('${p.id}')" ${st.running ? '' : 'disabled'}>
+        <button class="btn btn-del pkg-kill-btn" onclick="killPackage('${p.id}')" ${st.running && !busy ? '' : 'disabled'}>
           <span class="material-icons-round">power_settings_new</span>
         </button>
       </div>
@@ -5102,6 +5184,7 @@ function renderPackages() {
     loadPkgCover(p.id, p.link || '');
   });
   refreshPkgAvatarStatus();
+  if (typeof workspaceGroupCatalog === 'function') workspaceGroupCatalog();
   renderDashboard();
 }
 
@@ -5313,124 +5396,110 @@ function renderPkgCover(pkgId, url) {
     el.classList.remove('has');
   }
 }
-async function loadPkgCover(pkgId, link) {
-  const el = document.getElementById('pkg-cover-' + pkgId);
+// Metadata requests are shared across groups and serialized. A failed lookup
+// waits five minutes before another render may retry; no automatic retry loop.
+const _pkgMetadataPending = new Map();
+const _pkgMetadataRetry = new Map();
+let _pkgMetadataQueue = Promise.resolve();
+function pkgGameMarkup(link) {
   const placeId = extractPlaceId(link);
-  if (!el || !placeId) { if (el) renderPkgCover(pkgId, null); return; }
-  if (_pkgCoverCache[placeId]) { renderPkgCover(pkgId, _pkgCoverCache[placeId]); return; }
-  try {
-    let uni = _pkgPlaceCache[placeId];
-    if (!uni) {
-      // games.roblox.com/v1/games/multiget-place-details requires an auth
-      // token (error 9002) — the public universes API does not.
-      const res = await api.robloxGet('https://apis.roblox.com/universes/v1/places/' + placeId + '/universe');
-      const d = res && res.data;
-      if (!d || !d.universeId) return;
-      uni = { universeId: d.universeId };
-      _pkgPlaceCache[placeId] = uni;
+  const name = placeId && _pkgPlaceCache[placeId]?.name;
+  const image = placeId && _pkgCoverCache[placeId];
+  const label = name || (placeId ? 'Place ID · ' + placeId : t('layout.memberDestinations'));
+  return '<div class="group-game-preview" data-game-place="'+esc(placeId || '')+'">'+
+    '<span class="group-game-art"><span class="material-icons-round" aria-hidden="true">sports_esports</span>'+
+    (image ? '<img src="'+esc(image)+'" alt="" loading="lazy" onerror="this.remove()"/>' : '')+'</span>'+
+    '<strong class="group-game-name">'+esc(label)+'</strong></div>';
+}
+function refreshPkgMetadata(placeId) {
+  // Update only matching destinations, never a previously selected group.
+  document.querySelectorAll('[data-game-place]').forEach(el => {
+    if (el.dataset.gamePlace === placeId) el.outerHTML = pkgGameMarkup(placeId);
+  });
+  packages.forEach(group => {
+    if (extractPlaceId(group.link) === placeId) renderPkgCover(group.id, _pkgCoverCache[placeId]);
+  });
+}
+function loadPkgCover(pkgId, link) {
+  const placeId = extractPlaceId(link);
+  if (!placeId) { renderPkgCover(pkgId, null); return Promise.resolve(); }
+  if (_pkgCoverCache[placeId]) renderPkgCover(pkgId, _pkgCoverCache[placeId]);
+  if (_pkgPlaceCache[placeId]?.name && _pkgCoverCache[placeId]) return Promise.resolve();
+  if (_pkgMetadataPending.has(placeId)) return _pkgMetadataPending.get(placeId);
+  if (Date.now() < (_pkgMetadataRetry.get(placeId) || 0)) return Promise.resolve();
+  const task = _pkgMetadataQueue.then(async () => {
+    try {
+      let uni = _pkgPlaceCache[placeId];
+      if (!uni) {
+        const res = await api.robloxGet('https://apis.roblox.com/universes/v1/places/' + placeId + '/universe');
+        if (!res?.data?.universeId) return;
+        uni = _pkgPlaceCache[placeId] = { universeId: res.data.universeId };
+      }
+      if (!uni.name) {
+        const res = await api.robloxGet('https://games.roblox.com/v1/games?universeIds=' + uni.universeId);
+        const game = res?.data?.data?.find(game => String(game.id) === String(uni.universeId));
+        if (typeof game?.name === 'string' && game.name.trim()) uni.name = game.name;
+        // Stop after a rejected request rather than continuing to thumbnails.
+        if (!res?.data?.data) return;
+      }
+      if (!_pkgCoverCache[placeId]) {
+        const res = await api.robloxGet('https://thumbnails.roblox.com/v1/games/icons?universeIds=' + uni.universeId + '&size=512x512&format=Png');
+        const icon = res?.data?.data?.find(icon => String(icon.targetId) === String(uni.universeId));
+        if (icon?.state === 'Completed' && /^https:\/\//.test(icon.imageUrl || '')) _pkgCoverCache[placeId] = icon.imageUrl;
+      }
+    } catch { /* Metadata is optional; keep the destination usable offline. */ }
+    finally {
+      _pkgMetadataPending.delete(placeId);
+      _pkgMetadataRetry.set(placeId, Date.now() + 5 * 60 * 1000);
+      refreshPkgMetadata(placeId);
     }
-    const tres = await api.robloxGet('https://thumbnails.roblox.com/v1/games/icons?universeIds=' + uni.universeId + '&size=512x512&format=Png');
-    const tdata = tres && tres.data;
-    const url = tdata && tdata.data && tdata.data[0] && tdata.data[0].imageUrl;
-    if (url) {
-      _pkgCoverCache[placeId] = url;
-      renderPkgCover(pkgId, url);
-    }
-  } catch { /* offline / rate-limited — card just keeps the default icon */ }
+  });
+  _pkgMetadataPending.set(placeId, task);
+  _pkgMetadataQueue = task.catch(() => {});
+  return task;
+}
+
+// Only plain place IDs and public game URLs should auto-select a server.
+// Private/VIP links and explicit job IDs keep their original destination.
+function _pkgPublicPlace(link) {
+  if (/^\d+$/.test(link)) return link;
+  if (/^https?:\/\/(?:www\.)?roblox\.com\/games\/\d+(?:[/?#]|$)/i.test(link)
+      && !/[?&](?:privateServerLinkCode|linkCode)=/i.test(link)) return _extractPlaceId(link);
+  return '';
 }
 
 async function launchPackage(id) {
-  const p = packages.find(x => x.id === id); if (!p) return;
+  const p = packages.find(x => x.id === id);
+  if (!p) return;
   const members = pkgMembers(p);
   if (!members.length) { toast(t('pkg.noAccounts'), 'err'); return; }
-  if (settings.multiInstance === false) {
-    toast(t('settings.multiInstanceGroupBlocked'), 'err');
-    return;
-  }
-
-  const card = document.querySelector('.pkg-card[data-id="' + id + '"]');
-  const btn = card ? card.querySelector('.pkg-launch-btn') : null;
-  const killBtn = card ? card.querySelector('.pkg-kill-btn') : null;
-  if (btn && btn.dataset.busy === '1') return;
-  if (killBtn && killBtn.dataset.busy === '1') { toast(t('pkg.killBusy'), 'err'); return; }
-  if (btn) btn.dataset.busy = '1';
-  if (killBtn) killBtn.disabled = true;
-  const progress = document.getElementById('pkg-progress-' + id);
-  if (btn) { btn.disabled = true; btn.innerHTML = '<div class="spin"></div>Launching'; }
-  if (progress) {
-    progress.innerHTML = members.map(m => `
-      <span class="pkg-chip load" id="pkg-chip-${id}-${m.id}">
-        <div class="spin" style="width:9px;height:9px;border-width:2px"></div>${esc(m.nickname || m.username || '')}
-      </span>`).join('');
-  }
-
-  const link = (p.link || '').trim();
-  let okCount = 0;
-  const delay = Math.max(0, Math.min(60000, p.launchDelay || 0));
-  // Auto-pick ONE free server for the group's game (plain numeric link) so
-  // every account lands in the same instance and the joined-server
-  // highlight gets registered for all of them.
-  let autoTarget = null;
-  const linkPlace = _extractPlaceId(link);
-  if (linkPlace && !link.includes(':')) {
-    try {
-      const fetcher = members[0] && members[0].cookie ? (u) => api.robloxGetAuth(u, members[0].cookie) : (u) => api.robloxGet(u);
-      // Search a few pages for a server with REAL headroom (2+ free slots).
-      // Never fall back to a 1-slot server (queue) and never launch blind
-      // into a random server (accounts land in full ones).
-      let servers = [];
-      let cursor = '';
-      for (let page = 0; page < 5; page++) {
-        const r = await fetcher('https://games.roblox.com/v1/games/' + linkPlace + '/servers/Public?limit=50&sortOrder=Asc' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
-        const data = (r && r.data) || {};
-        servers = servers.concat((data.data) || []);
-        cursor = data.nextPageCursor || '';
-        if (servers.some(s => _hasGoodSlots(s))) break;
-        if (!cursor) break;
-      }
-      const good = servers.find(s => _hasGoodSlots(s));
-      if (good) {
-        autoTarget = linkPlace + ':' + good.id;
-      } else {
-        // No server with real headroom right now — don't launch blind.
-        toast(t('pkg.noGoodServers'), 'err');
-        if (btn) { btn.disabled = false; btn.innerHTML = 'Start All'; delete btn.dataset.busy; }
-        if (killBtn && killBtn.dataset.busy !== '1') killBtn.disabled = false;
-        if (progress) progress.innerHTML = '';
-        return;
-      }
-    } catch (e) { /* API failed — keep plain-link behavior */ }
-  }
-  for (const m of members) {
-    const target = autoTarget || link || m.gameTarget || null;
-    logEntry('info', 'launch', `Launching Roblox for ${m.username || m.id} (package)...`, { accountId: m.id, username: m.username || null, userId: m.userId || null, target: target || 'Roblox home' });
-    const res = await api.launchRoblox(m.id, m.cookie, target);
-    const chip = document.getElementById('pkg-chip-' + id + '-' + m.id);
-    if (res.success) {
-      okCount++;
-      logEntry('ok', 'launch', `Launched as ${m.username || m.id} (package)`, { accountId: m.id, username: m.username || null });
-      markLaunched(m.id);
-      if (autoTarget) {
-        const [pid, ...rest] = autoTarget.split(':');
-        _srvAddJoined(m.id, pid, rest.join(':'));
-      }
-      if (chip) { chip.className = 'pkg-chip ok'; chip.innerHTML = '<span class="material-icons-round">check_circle</span>' + esc(m.nickname || m.username || ''); }
-    } else if (chip) {
-      chip.className = 'pkg-chip err';
-      chip.title = res.error || '';
-      chip.innerHTML = '<span class="material-icons-round">error_outline</span>' + esc(m.nickname || m.username || '');
-      _flagCookieMaybeDead(m.id, res.error);
+  if (settings.multiInstance === false) { toast(t('settings.multiInstanceGroupBlocked'), 'err'); return; }
+  const job = _pkgBeginLaunch(p, members);
+  if (!job) return;
+  try {
+    const link = String(p.link || '').trim();
+    const placeId = _pkgPublicPlace(link);
+    let sharedTarget = link;
+    if (placeId) {
+      const servers = await _srvFetchCandidates(placeId, {
+        needed: 1, slots: members.length, cancelled: () => job.cancelled,
+      });
+      if (job.cancelled) return;
+      if (!servers.length) { toast(t('pkg.noGoodServers'), 'err'); return; }
+      sharedTarget = placeId + ':' + servers[0].id;
     }
-    if (delay > 0 && okCount < members.length) await new Promise(r => setTimeout(r, delay));
-  }
-
-  if (btn) { btn.disabled = false; btn.innerHTML = 'Start All'; delete btn.dataset.busy; }
-  if (killBtn && killBtn.dataset.busy !== '1') killBtn.disabled = !members.some(m => _launchedIds.has(m.id));
-  toast(t('pkg.launchedN', { ok: okCount, total: members.length, name: p.name }), okCount === members.length ? 'ok' : 'err');
+    const entries = members.map(account => ({ account, target: sharedTarget || account.gameTarget || null }));
+    const result = await _pkgExecuteLaunches(job, entries, Math.max(0, Math.min(60000, Number(p.launchDelay) || 0)));
+    _pkgReportLaunch(job, p, result, members.length);
+  } catch (e) {
+    logEntry('err', 'launch', e?.message || String(e), { packageId: p.id });
+    if (!job.cancelled) toast(e?.message || String(e), 'err');
+  } finally { _pkgFinishLaunch(job); }
 }
 
 async function killPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
+  if (_pkgLaunchJobs.has(id)) { toast(t('pkg.launchBusy'), 'err'); return; }
   const members = pkgMembers(p);
   const running = members.filter(m => _launchedIds.has(m.id));
   if (!running.length) { toast(t('pkg.noRunning'), 'err'); return; }
@@ -5478,23 +5547,35 @@ function toggleKeyVisibility(inputId = 'custom-key', iconId = 'key-vis-icon') {
   else { input.type = 'password'; icon.textContent = 'visibility'; }
 }
 let _saveKeyTimer;
+let _savingKey = false;
 function onKeyInput() {
+  if (_savingKey) return;
   const btn = document.getElementById('btn-save-key');
-  if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  if (btn) { btn.disabled = false; btn.textContent = t('ui.savePassword'); }
 }
 async function saveKeySettings() {
-  const keyVal = document.getElementById('custom-key').value;
+  const input = document.getElementById('custom-key');
+  const confirmation = document.getElementById('custom-key-confirm');
+  const cancel = document.getElementById('key-change-cancel');
+  const keyVal = input.value;
   const btn = document.getElementById('btn-save-key');
-  if (btn.disabled) return;
+  if (_savingKey || btn.disabled) return;
+  if (!keyVal.trim()) { toast('Encryption key cannot be empty.', 'err'); return; }
+  if (confirmation && keyVal !== confirmation.value) { toast(t('ui.passwordMismatch'), 'err'); return; }
   clearTimeout(_saveKeyTimer);
-  btn.disabled = true; btn.textContent = 'Saving';
+  _savingKey = true;
+  if (confirmation) confirmation.disabled = true;
+  if (cancel) cancel.disabled = true;
+  input.disabled = true;
+  btn.disabled = true; btn.textContent = t('ui.saving');
   _saveKeyTimer = setTimeout(async () => {
     try {
       // enc:setKey changes the key and re-encrypts accounts in one step.
       const r = await api.encSetKey(keyVal);
       if (!r || !r.ok) throw new Error(r && r.error ? r.error : 'could not update key');
-      if (!keyVal.trim()) throw new Error('Encryption key cannot be empty.');
       settings.keySet = true;
+      if (confirmation) confirmation.value = '';
+      closeModal('m-key-change');
       document.getElementById('custom-key').value = '';
       // Reload accounts so the renderer holds cookies under the new key.
       try { accounts = await api.loadAccounts(); flagInvalidCookies(accounts); render(); } catch {}
@@ -5503,14 +5584,18 @@ async function saveKeySettings() {
     } catch (e) {
       toast(t('common.saveFailed', { msg: e.message }), 'err');
     } finally {
-      btn.disabled = false; btn.textContent = 'Save';
+      _savingKey = false;
+      if (confirmation) confirmation.disabled = false;
+      if (cancel) cancel.disabled = false;
+      input.disabled = false;
+      btn.disabled = false; btn.textContent = t('ui.savePassword');
     }
   }, 300);
 }
 
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-function setStatus(id, type, html) { const el = document.getElementById(id); el.className = 'mst ' + type; el.innerHTML = html; }
+function openModal(id) { KntUi.open(id); }
+function closeModal(id) { KntUi.close(id); }
+function setStatus(id, type, html) { const el = document.getElementById(id); el.className = 'mst ' + type; el.setAttribute('role', type === 'err' ? 'alert' : 'status'); el.innerHTML = html; }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function toast(msg, type) {
   type = type || '';
@@ -5535,12 +5620,12 @@ async function refreshMultiStatus() {
 
 document.querySelectorAll('.overlay').forEach(o => {
   o.addEventListener('mousedown', e => {
-    if (e.target === o && o.dataset.backdropClose === 'true') o.classList.remove('open');
+    if (e.target === o && o.dataset.backdropClose === 'true') closeModal(o.id);
   });
 });
 document.addEventListener('keydown', e => {
   // Ctrl/Cmd+F opens native-style find on the logs page.
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F') && document.getElementById('page-logs')?.classList.contains('active')) {
+  if (!KntUi.top() && (e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F') && document.getElementById('page-logs')?.classList.contains('active')) {
     e.preventDefault(); openLogFind(); return;
   }
   // Find-bar keys: Enter = next, Shift+Enter = previous, Esc = close.
@@ -5549,26 +5634,32 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { e.preventDefault(); closeLogFind(); return; }
   }
   if (e.key === 'Escape') {
+    if (typeof workspaceCloseMenu === 'function' && workspaceCloseMenu(e)) return;
     const lf = document.getElementById('log-find');
     if (lf && lf.style.display !== 'none') { closeLogFind(); return; }
     closeAllCdd();
-    const editEl = document.getElementById('m-edit');
-    if (editEl.classList.contains('open')) {
+    const modal = KntUi.top();
+    if (modal?.id === 'm-edit') {
       // Escape shouldn't discard the modal out from under someone mid-typing.
       const typing = ['in-target', 'in-nickname', 'in-description', 'in-follow']
         .some(f => document.activeElement === document.getElementById(f));
       if (!typing) closeModal('m-edit');
-    } else document.querySelectorAll('.overlay.open').forEach(m => m.classList.remove('open'));
+    } else {
+      if (modal?.id === 'm-launch') { e.preventDefault(); cancelLaunchOrClose(); }
+      else if (modal?.id === 'm-login') cancelLogin();
+      else if (modal && modal.dataset.backdropClose === 'true') closeModal(modal.id);
+    }
   }
+  if ((e.ctrlKey || e.metaKey) && e.key === 's' && KntUi.top()?.id === 'm-edit') {
+    e.preventDefault(); saveEdit(); return;
+  }
+  if (KntUi.top()) return;
   if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openLogin(); }
   // "/" focuses the account search (when not already typing in a field).
   if (e.key === '/' && document.getElementById('page-accounts')?.classList.contains('active')
       && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) {
     e.preventDefault();
     document.getElementById('acct-search')?.focus();
-  }
-  if ((e.ctrlKey || e.metaKey) && e.key === 's' && document.getElementById('m-edit').classList.contains('open')) {
-    e.preventDefault(); saveEdit();
   }
 });
 

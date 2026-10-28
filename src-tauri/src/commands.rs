@@ -1,5 +1,5 @@
 use crate::encryption;
-use crate::settings::{load_settings, save_settings};
+use crate::settings::load_settings;
 use crate::state::AppState;
 use crate::storage;
 use serde_json::{Map, Value};
@@ -15,6 +15,7 @@ pub fn show_main_window(app: tauri::AppHandle) {
 // ---- settings ----
 #[tauri::command]
 pub fn settings_load() -> Value {
+    let _guard = crate::persistence::data_guard().expect("Storage needs recovery before reading settings");
     let mut s = load_settings();
     for k in ["customKeyEnc", "customKey", "keyVerifier", "_deviceKey"] {
         s.remove(k);
@@ -25,9 +26,13 @@ pub fn settings_load() -> Value {
 }
 
 #[tauri::command]
-pub fn settings_save(state: State<AppState>, data: Map<String, Value>) -> bool {
+pub async fn settings_save(app: AppHandle, data: Map<String, Value>) -> bool {
+    account_work(app, move |state| Ok(settings_save_inner(state, data))).await.unwrap_or(false)
+}
+
+fn settings_save_inner(state: &AppState, data: Map<String, Value>) -> bool {
     let mut data = data;
-    for k in ["customKey", "customKeyEnc", "keyVerifier"] {
+    for k in ["customKey", "customKeyEnc", "keyVerifier", "kdfSalt", "_deviceKey", "encSetupDone", "keySet"] {
         data.remove(k);
     }
     let mut s = load_settings();
@@ -39,7 +44,7 @@ pub fn settings_save(state: State<AppState>, data: Map<String, Value>) -> bool {
     for (k, v) in data {
         s.insert(k, v);
     }
-    save_settings(&s);
+    if crate::settings::try_save_settings(&s).is_err() { return false; }
     if let Some(Value::Bool(on)) = multi_instance {
         // Releases/re-acquires the mutex inside the one helper process --
         // toggling this no longer starts or kills anything.
@@ -84,65 +89,18 @@ pub fn enc_status(state: State<AppState>) -> Value {
 }
 
 #[tauri::command]
-pub fn enc_unlock(state: State<AppState>, pass: String) -> Value {
-    if pass.is_empty() || !encryption::verify_pass(&pass) {
-        return serde_json::json!({ "ok": false });
+pub async fn enc_unlock(app: AppHandle, pass: String) -> Value {
+    match account_work(app, move |state| Ok(encryption::unlock_session(state, &pass))).await {
+        Ok(ok) => serde_json::json!({ "ok": ok }),
+        Err(error) => serde_json::json!({ "ok": false, "error": error }),
     }
-    *state.session_pass.lock().unwrap() = Some(pass);
-    encryption::invalidate_key_cache(&state);
-    serde_json::json!({ "ok": true })
 }
 
 #[tauri::command]
-pub fn enc_set_key(state: State<AppState>, pass: Option<String>) -> Value {
-    let np = pass.unwrap_or_default().trim().to_string();
-    let raw = storage::load_accounts_raw();
-    let accts_dec: Vec<Value> = raw
-        .iter()
-        .cloned()
-        .map(|a| storage::decrypt_account(&state, a))
-        .collect();
-    for (orig, dec) in raw.iter().zip(accts_dec.iter()) {
-        let had_cookie = orig
-            .get("cookie")
-            .and_then(|v| v.as_str())
-            .map(|s| !s.is_empty())
-            .unwrap_or(false);
-        let now_empty = dec
-            .get("cookie")
-            .and_then(|v| v.as_str())
-            .map(|s| s.is_empty())
-            .unwrap_or(true);
-        if had_cookie && now_empty {
-            return serde_json::json!({ "ok": false, "error": "decrypt failed" });
-        }
-    }
-
-    if !np.is_empty() {
-        encryption::rotate_salt();
-        *state.session_pass.lock().unwrap() = Some(np.clone());
-        encryption::invalidate_key_cache(&state);
-        let mut rest = load_settings();
-        rest.remove("customKey");
-        rest.remove("customKeyEnc");
-        let verifier = encryption::make_verifier(&np);
-        rest.insert("keyVerifier".into(), Value::String(verifier));
-        rest.insert("encSetupDone".into(), Value::Bool(true));
-        save_settings(&rest);
-    } else {
-        *state.session_pass.lock().unwrap() = None;
-        encryption::invalidate_key_cache(&state);
-        let mut rest = load_settings();
-        rest.remove("customKey");
-        rest.remove("customKeyEnc");
-        rest.remove("keyVerifier");
-        rest.insert("encSetupDone".into(), Value::Bool(true));
-        save_settings(&rest);
-    }
-    encryption::invalidate_key_cache(&state);
-    match storage::save_accounts(&state, accts_dec) {
-        Ok(_) => serde_json::json!({ "ok": true }),
-        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+pub async fn enc_set_key(app: AppHandle, pass: Option<String>) -> Value {
+    match account_work(app, move |state| encryption::set_key(state, pass)).await {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(error) => serde_json::json!({ "ok": false, "error": error }),
     }
 }
 
@@ -173,21 +131,38 @@ pub fn antiafk_status(state: State<AppState>) -> Value {
 }
 
 // ---- accounts ----
-#[tauri::command]
-pub fn accounts_load(state: State<AppState>) -> Vec<Value> {
-    storage::load_accounts(&state)
+async fn account_work<T, F>(app: AppHandle, operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&AppState) -> Result<T, String> + Send + 'static,
+{
+    let lock = app.state::<AppState>().accounts_io_lock.clone();
+    crate::account_worker::run(lock, move || {
+        let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
+        let state = app.state::<AppState>();
+        operation(&state)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn accounts_add(state: State<AppState>, account: Map<String, Value>) -> Result<Value, String> {
-    let mut accounts = storage::load_accounts(&state);
-    let mut a = Value::Object(account);
-    a["id"] = Value::String(uuid::Uuid::new_v4().to_string());
-    a["createdAt"] = Value::String(chrono::Utc::now().to_rfc3339());
-    a["lastUsed"] = Value::Null;
-    accounts.push(a.clone());
-    storage::save_accounts(&state, accounts)?;
-    Ok(a)
+pub async fn accounts_load(app: AppHandle) -> Result<Vec<Value>, String> {
+    account_work(app, |state| Ok(storage::load_accounts(state))).await
+}
+
+#[tauri::command]
+pub async fn accounts_add(app: AppHandle, account: Map<String, Value>) -> Result<Value, String> {
+    account_work(app, move |state| {
+        let mut accounts = storage::load_accounts(state);
+        let mut a = Value::Object(account);
+        a["id"] = Value::String(uuid::Uuid::new_v4().to_string());
+        a["createdAt"] = Value::String(chrono::Utc::now().to_rfc3339());
+        a["lastUsed"] = Value::Null;
+        accounts.push(a.clone());
+        storage::save_accounts(state, accounts)?;
+        Ok(a)
+    })
+    .await
 }
 
 // Drops the in-memory tracking for an account that is being removed from the
@@ -203,80 +178,95 @@ fn drop_account_bookkeeping(state: &AppState, id: &str) {
 // brought back from the trash UI. Kept as the same command name so existing
 // renderer call sites didn't have to change.
 #[tauri::command]
-pub fn accounts_remove(state: State<AppState>, id: String) -> Result<bool, String> {
-    let removed = storage::soft_delete_account(&state, &id)?;
-    drop_account_bookkeeping(&state, &id);
-    Ok(removed)
+pub async fn accounts_remove(app: AppHandle, id: String) -> Result<bool, String> {
+    account_work(app, move |state| {
+        let removed = storage::soft_delete_account(state, &id)?;
+        drop_account_bookkeeping(state, &id);
+        Ok(removed)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn accounts_restore(state: State<AppState>, id: String) -> Result<bool, String> {
-    storage::restore_account(&state, &id)
+pub async fn accounts_restore(app: AppHandle, id: String) -> Result<bool, String> {
+    account_work(app, move |state| storage::restore_account(state, &id)).await
 }
 
 #[tauri::command]
-pub fn accounts_purge(state: State<AppState>, id: String) -> Result<bool, String> {
-    let removed = storage::purge_account(&state, &id)?;
-    drop_account_bookkeeping(&state, &id);
-    Ok(removed)
+pub async fn accounts_purge(app: AppHandle, id: String) -> Result<bool, String> {
+    account_work(app, move |state| {
+        let removed = storage::purge_account(state, &id)?;
+        drop_account_bookkeeping(state, &id);
+        Ok(removed)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn accounts_empty_trash(state: State<AppState>) -> Result<u32, String> {
-    let removed = storage::empty_trash(&state)?;
-    for id in &removed {
-        drop_account_bookkeeping(&state, id);
-    }
-    Ok(removed.len() as u32)
+pub async fn accounts_empty_trash(app: AppHandle) -> Result<u32, String> {
+    account_work(app, |state| {
+        let removed = storage::empty_trash(state)?;
+        for id in &removed {
+            drop_account_bookkeeping(state, id);
+        }
+        Ok(removed.len() as u32)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn accounts_update(
-    state: State<AppState>,
+pub async fn accounts_update(
+    app: AppHandle,
     id: String,
     data: Map<String, Value>,
 ) -> Result<Option<Value>, String> {
-    let mut accounts = storage::load_accounts(&state);
-    let idx = accounts
-        .iter()
-        .position(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
-    match idx {
-        Some(i) => {
-            if let Value::Object(existing) = &mut accounts[i] {
-                for (k, v) in data {
-                    existing.insert(k, v);
+    account_work(app, move |state| {
+        let mut accounts = storage::load_accounts(state);
+        let idx = accounts
+            .iter()
+            .position(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
+        match idx {
+            Some(i) => {
+                if let Value::Object(existing) = &mut accounts[i] {
+                    for (k, v) in data {
+                        existing.insert(k, v);
+                    }
                 }
+                let updated = accounts[i].clone();
+                storage::save_accounts(state, accounts)?;
+                Ok(Some(updated))
             }
-            let updated = accounts[i].clone();
-            storage::save_accounts(&state, accounts)?;
-            Ok(Some(updated))
+            None => Ok(None),
         }
-        None => Ok(None),
-    }
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn accounts_reorder(state: State<AppState>, ids: Vec<String>) -> Result<bool, String> {
-    let accounts = storage::load_accounts(&state);
-    let mut reordered: Vec<Value> = Vec::new();
-    for id in &ids {
-        if let Some(a) = accounts
-            .iter()
-            .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
-        {
-            reordered.push(a.clone());
+pub async fn accounts_reorder(app: AppHandle, ids: Vec<String>) -> Result<bool, String> {
+    account_work(app, move |state| {
+        let accounts = storage::load_accounts(state);
+        let mut reordered: Vec<Value> = Vec::new();
+        for id in &ids {
+            if let Some(a) = accounts
+                .iter()
+                .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            {
+                reordered.push(a.clone());
+            }
         }
-    }
-    let rest: Vec<Value> = accounts
-        .into_iter()
-        .filter(|a| {
-            let aid = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            !ids.iter().any(|id| id == aid)
-        })
-        .collect();
-    reordered.extend(rest);
-    storage::save_accounts(&state, reordered)?;
-    Ok(true)
+        let rest: Vec<Value> = accounts
+            .into_iter()
+            .filter(|a| {
+                let aid = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                !ids.iter().any(|id| id == aid)
+            })
+            .collect();
+        reordered.extend(rest);
+        storage::save_accounts(state, reordered)?;
+        Ok(true)
+    })
+    .await
 }
 
 // ---- packages ----
@@ -291,16 +281,16 @@ pub fn packages_save(packages: Vec<Value>) -> bool {
 
 // ---- generated-account history ----
 #[tauri::command]
-pub fn genhistory_read(state: State<AppState>) -> Vec<Value> {
-    storage::read_genhistory(&state)
+pub async fn genhistory_read(app: AppHandle) -> Result<Vec<Value>, String> {
+    account_work(app, |state| Ok(storage::read_genhistory(state))).await
 }
 #[tauri::command]
-pub fn genhistory_write(state: State<AppState>, list: Vec<Value>) -> bool {
-    storage::write_genhistory(&state, list).is_ok()
+pub async fn genhistory_write(app: AppHandle, list: Vec<Value>) -> bool {
+    account_work(app, move |state| storage::write_genhistory(state, list)).await.is_ok()
 }
 #[tauri::command]
-pub fn genhistory_clear() -> bool {
-    storage::write_json_array(&crate::paths::genhistory_path(), &[]).is_ok()
+pub async fn genhistory_clear(app: AppHandle) -> bool {
+    account_work(app, |_| storage::write_json_array(&crate::paths::genhistory_path(), &[]).map_err(|error| error.to_string())).await.is_ok()
 }
 
 // ---- fflags / fps ----
@@ -428,7 +418,7 @@ pub async fn roblox_validate_cookie(
 ) -> Result<Value, ()> {
     let info = crate::roblox_api::fetch_user_info(&state, &cookie).await;
     Ok(
-        serde_json::json!({ "ok": info.ok, "username": info.username, "userId": info.user_id, "reason": info.reason }),
+        serde_json::json!({ "ok": info.ok, "status": info.status, "username": info.username, "userId": info.user_id, "reason": info.reason }),
     )
 }
 
@@ -776,9 +766,11 @@ pub async fn tracking_capture_and_send(
 pub async fn clear_app_data(app: AppHandle, state: State<'_, AppState>) -> Result<Value, ()> {
     crate::native::stop_all_native_helpers(&state).await;
     let dir = crate::paths::app_data_dir();
+    let reset_app = app.clone();
     // Preserve the backups folder: a full reset should never delete the
     // user's safety net. Deletes everything else entry by entry.
     let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let _guard = crate::persistence::data_guard()?;
         let rd = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -797,10 +789,10 @@ pub async fn clear_app_data(app: AppHandle, state: State<'_, AppState>) -> Resul
                 let _ = std::fs::remove_file(&p);
             }
         }
+        crate::native::reset_state_for_wipe(&reset_app.state::<AppState>());
         Ok(())
     })
     .await;
-    crate::native::reset_state_for_wipe(&state);
     // Re-extracts the embedded helper into the now-empty folder and starts
     // exactly one again, holding the mutex as before.
     crate::native::start_mutex_holder(&app, &state).await;

@@ -17,18 +17,23 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 static UNREADABLE: Lazy<Mutex<HashSet<PathBuf>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+#[cfg(test)]
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// File contents minus a leading UTF-8 BOM. serde rejects the BOM outright,
 /// which would make a perfectly good file look corrupt -- and plenty of
 /// Windows editors write one by default.
-fn read_text(path: &Path) -> Option<String> {
-    let s = std::fs::read_to_string(path).ok()?;
-    Some(s.trim_start_matches('\u{feff}').to_string())
+fn read_text(path: &Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text.trim_start_matches('\u{feff}').to_string())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => { note_corrupt(path); Err(error) }
+    }
 }
 
 /// Keeps the unparseable bytes around under a sibling name so nothing the
@@ -58,33 +63,38 @@ pub fn is_unreadable(path: &Path) -> bool {
 /// Missing file means "nothing saved yet" and reads as empty. A file that is
 /// present but unparseable reads as empty *and* is flagged.
 pub fn read_array(path: &Path) -> Vec<Value> {
-    let Some(text) = read_text(path) else {
-        return Vec::new();
-    };
+    read_array_checked(path).unwrap_or_default()
+}
+
+pub fn read_array_checked(path: &Path) -> std::io::Result<Vec<Value>> {
+    let Some(text) = read_text(path)? else { return Ok(Vec::new()); };
     match serde_json::from_str::<Vec<Value>>(&text) {
         Ok(v) => {
             UNREADABLE.lock().unwrap().remove(path);
-            v
+            Ok(v)
         }
-        Err(_) => {
+        Err(error) => {
             note_corrupt(path);
-            Vec::new()
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
         }
     }
 }
 
+#[cfg(test)]
 pub fn read_object(path: &Path) -> Map<String, Value> {
-    let Some(text) = read_text(path) else {
-        return Map::new();
-    };
+    read_object_checked(path).unwrap_or_default()
+}
+
+pub fn read_object_checked(path: &Path) -> std::io::Result<Map<String, Value>> {
+    let Some(text) = read_text(path)? else { return Ok(Map::new()); };
     match serde_json::from_str::<Map<String, Value>>(&text) {
         Ok(m) => {
             UNREADABLE.lock().unwrap().remove(path);
-            m
+            Ok(m)
         }
-        Err(_) => {
+        Err(error) => {
             note_corrupt(path);
-            Map::new()
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
         }
     }
 }
@@ -97,15 +107,25 @@ pub fn read_object(path: &Path) -> Map<String, Value> {
 /// The temp name carries a counter because two concurrent saves sharing one
 /// temp path would interleave their bytes into it.
 pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    write_atomic_with_hook(path, contents, |_| Ok(()))
+}
+
+fn write_atomic_with_hook(path: &Path, contents: &str, staged: impl FnOnce(&Path) -> std::io::Result<()>) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension(format!("tmp{}", TMP_SEQ.fetch_add(1, Ordering::Relaxed)));
+    let tmp = path.with_extension(format!("tmp-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
 
     let written = (|| -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         f.write_all(contents.as_bytes())?;
-        f.sync_all()
+        f.sync_all()?;
+        drop(f);
+        staged(&tmp)?;
+        if std::fs::read(&tmp)? != contents.as_bytes() {
+            return Err(std::io::Error::other("Temporary file verification failed"));
+        }
+        Ok(())
     })();
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
@@ -229,5 +249,28 @@ mod tests {
         assert!(read_object(&p).is_empty());
         assert!(is_unreadable(&p));
         assert!(p.with_extension("corrupt-backup.json").exists());
+    }
+
+    #[test]
+    fn failed_or_corrupted_staging_never_replaces_the_previous_file() {
+        for corrupt in [false, true] {
+            let path = scratch("staging-failure");
+            std::fs::write(&path, "[\"previous\"]").unwrap();
+            let result = write_atomic_with_hook(&path, "[\"new\"]", |temp| {
+                if corrupt { std::fs::write(temp, "bad bytes") }
+                else { Err(std::io::Error::other("injected disk failure")) }
+            });
+            assert!(result.is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "[\"previous\"]");
+            assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn an_io_error_is_not_treated_as_a_missing_empty_file() {
+        let path = scratch("io-error");
+        std::fs::create_dir(&path).unwrap();
+        assert!(read_array_checked(&path).is_err());
+        assert!(is_unreadable(&path));
     }
 }

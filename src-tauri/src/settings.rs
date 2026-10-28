@@ -1,20 +1,22 @@
 use crate::paths::settings_path;
 use serde_json::{Map, Value};
 
-// Unparseable settings are backed up rather than silently ignored: dropping
-// keyVerifier/kdfSalt makes the app forget a passphrase was ever set and offer
-// to create a new one, which rotates the salt and orphans every gs:-encrypted
-// cookie. Writes stay allowed here (unlike accounts) -- blocking them would
-// leave enc_set_key re-encrypting accounts under a key whose verifier never
-// reached disk, which is a worse outcome than a reset config.
+// Encryption metadata is never reset after an unreadable settings file.
+// Rekey now commits metadata and ciphertext together through a journal.
 pub fn load_settings() -> Map<String, Value> {
-    crate::jsonfile::read_object(&settings_path())
+    try_load_settings().expect("Settings could not be read; original files were preserved")
 }
 
-pub fn save_settings(s: &Map<String, Value>) {
-    if let Ok(json) = serde_json::to_string_pretty(s) {
-        let _ = crate::jsonfile::write_atomic(&settings_path(), &json);
-    }
+pub fn try_load_settings() -> std::io::Result<Map<String, Value>> {
+    let _guard = crate::persistence::data_guard()?;
+    crate::jsonfile::read_object_checked(&settings_path())
+}
+
+pub fn try_save_settings(s: &Map<String, Value>) -> std::io::Result<()> {
+    let _guard = crate::persistence::data_guard()?;
+    crate::jsonfile::read_object_checked(&settings_path())?;
+    let json = serde_json::to_string_pretty(s)?;
+    crate::jsonfile::write_atomic(&settings_path(), &json)
 }
 
 pub fn get_str(s: &Map<String, Value>, key: &str) -> Option<String> {

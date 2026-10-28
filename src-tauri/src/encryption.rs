@@ -6,13 +6,13 @@
 // crypto.rs for why.
 use crate::crypto;
 use crate::paths::local_state_path;
-use crate::settings::{get_str, load_settings, save_settings};
+use crate::settings::{get_str, load_settings};
 use crate::state::AppState;
 use rand::RngCore;
 use serde_json::Value;
 use tauri::Manager;
 
-const VERIFY_TOKEN: &str = "multiroblox-verify-v1";
+const VERIFY_TOKEN: &str = crate::key_change::VERIFY_TOKEN;
 
 pub fn passphrase_mode() -> bool {
     let s = load_settings();
@@ -38,49 +38,44 @@ fn current_salt() -> String {
     get_str(&load_settings(), "kdfSalt").unwrap_or_else(|| crypto::LEGACY_SALT.to_string())
 }
 
-/// Fresh random salt for the scrypt key -- only called from enc_set_key,
-/// which re-encrypts every account right after, so rotating here can never
-/// strand ciphertext under a salt nothing can derive anymore.
-pub fn rotate_salt() {
-    let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    let mut s = load_settings();
-    s.insert("kdfSalt".into(), Value::String(hex::encode(bytes)));
-    save_settings(&s);
-}
-
 pub fn make_verifier(pass: &str) -> String {
     let key = crypto::derive_scrypt_key(pass, &current_salt());
     crypto::encrypt_gcm(VERIFY_TOKEN, &key, "gs")
 }
 
-pub fn verify_pass(pass: &str) -> bool {
-    let s = load_settings();
-    match s.get("keyVerifier").and_then(|v| v.as_str()) {
-        Some(v) => {
-            let key = crypto::derive_scrypt_key(pass, &current_salt());
-            crypto::decrypt_gcm(v, &key, "gs").as_deref() == Some(VERIFY_TOKEN)
-        }
-        None => false,
+pub fn unlock_session(state: &AppState, pass: &str) -> bool {
+    let Ok(_guard) = crate::persistence::data_guard() else { return false; };
+    if pass.is_empty() {
+        return false;
     }
+    let s = load_settings();
+    let Some(verifier) = s.get("keyVerifier").and_then(|value| value.as_str()) else {
+        return false;
+    };
+    let salt = s.get("kdfSalt").and_then(|value| value.as_str()).unwrap_or(crypto::LEGACY_SALT);
+    let Some(key) = crypto::verified_scrypt_key(pass, salt, verifier, VERIFY_TOKEN) else {
+        return false;
+    };
+    *state.session_pass.lock().unwrap() = Some(pass.to_string());
+    *state.cached_legacy_key.lock().unwrap() = None;
+    *state.cached_key.lock().unwrap() = Some(key);
+    true
 }
 
-fn get_or_create_device_key() -> [u8; 32] {
+fn get_or_create_device_key() -> Option<[u8; 32]> {
+    if let Some(key) = get_existing_device_key() { return Some(key); }
     let mut s = load_settings();
-    if let Some(k) = s.get("_deviceKey").and_then(|v| v.as_str()) {
-        if let Ok(bytes) = hex::decode(k) {
-            if bytes.len() == 32 {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&bytes);
-                return out;
-            }
-        }
-    }
     let mut key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
     s.insert("_deviceKey".into(), Value::String(hex::encode(key)));
-    save_settings(&s);
-    key
+    crate::settings::try_save_settings(&s).ok()?;
+    Some(key)
+}
+
+fn get_existing_device_key() -> Option<[u8; 32]> {
+    let settings = load_settings();
+    let text = settings.get("_deviceKey")?.as_str()?;
+    hex::decode(text).ok()?.try_into().ok()
 }
 
 fn safe_storage_ready() -> bool {
@@ -98,7 +93,7 @@ pub fn get_encryption_key(state: &AppState) -> Option<[u8; 32]> {
         return Some(k);
     }
     if !passphrase_mode() {
-        let k = get_or_create_device_key();
+        let k = get_existing_device_key()?;
         *state.cached_key.lock().unwrap() = Some(k);
         return Some(k);
     }
@@ -116,16 +111,11 @@ pub fn get_legacy_key(state: &AppState) -> Option<[u8; 32]> {
         return Some(k);
     }
     if !passphrase_mode() {
-        let k = get_or_create_device_key();
+        let k = get_existing_device_key()?;
         *state.cached_legacy_key.lock().unwrap() = Some(k);
         return Some(k);
     }
     None
-}
-
-pub fn invalidate_key_cache(state: &AppState) {
-    *state.cached_key.lock().unwrap() = None;
-    *state.cached_legacy_key.lock().unwrap() = None;
 }
 
 /// Pre-derives the unlocked passphrase key off the async runtime's blocking
@@ -134,22 +124,11 @@ pub fn invalidate_key_cache(state: &AppState) {
 pub fn prewarm_key(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let state = app.state::<AppState>();
-        let already = state.cached_key.lock().unwrap().is_some();
-        let session_pass = state.session_pass.lock().unwrap().clone();
-        let Some(pass) = (if already { None } else { session_pass }) else {
-            return;
-        };
-        let salt = current_salt();
-        let key = tokio::task::spawn_blocking(move || crypto::derive_scrypt_key(&pass, &salt))
-            .await
-            .ok();
-        if let Some(key) = key {
-            let mut cached = state.cached_key.lock().unwrap();
-            if cached.is_none() {
-                *cached = Some(key);
-            }
-        }
+        let _ = tokio::task::spawn_blocking(move || {
+            let Ok(_guard) = crate::persistence::data_guard() else { return; };
+            let state = app.state::<AppState>();
+            if state.session_pass.lock().unwrap().is_some() { let _ = get_encryption_key(&state); }
+        }).await;
     });
 }
 
@@ -162,6 +141,7 @@ pub fn is_encrypted(v: &str) -> bool {
 }
 
 pub fn encrypt_field(state: &AppState, plaintext: &str) -> Result<String, String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     let session_pass = state.session_pass.lock().unwrap().clone();
     if session_pass.is_some() {
         let key = get_encryption_key(state).ok_or("locked")?;
@@ -175,11 +155,18 @@ pub fn encrypt_field(state: &AppState, plaintext: &str) -> Result<String, String
             return Ok(enc);
         }
     }
-    let key = get_encryption_key(state).ok_or("locked")?;
+    // A read/decrypt never invents a replacement for a lost device key. Only
+    // this explicit encryption path may create and persist a new one.
+    let key = get_encryption_key(state).or_else(|| {
+        let key = get_or_create_device_key()?;
+        *state.cached_key.lock().unwrap() = Some(key);
+        Some(key)
+    }).ok_or("Could not persist the device encryption key")?;
     Ok(crypto::encrypt_gcm(plaintext, &key, "gs"))
 }
 
 pub fn decrypt_field(state: &AppState, ct: &str) -> Option<String> {
+    let _guard = crate::persistence::data_guard().ok()?;
     if ct.is_empty() {
         return None;
     }
@@ -207,6 +194,7 @@ pub fn decrypt_field(state: &AppState, ct: &str) -> Option<String> {
 /// this app asks for the passphrase on every launch (writeSessionKey was
 /// already disabled in the source main.js).
 pub fn init_encryption(state: &AppState) {
+    let Ok(_guard) = crate::persistence::data_guard() else { return; };
     let s = load_settings();
     if s.get("keyVerifier").and_then(|v| v.as_str()).is_none() {
         let mut legacy: Option<String> = None;
@@ -230,8 +218,26 @@ pub fn init_encryption(state: &AppState) {
             rest.remove("customKey");
             rest.remove("customKeyEnc");
             rest.insert("keyVerifier".into(), Value::String(make_verifier(&pass)));
-            save_settings(&rest);
-            *state.session_pass.lock().unwrap() = Some(pass);
+            if crate::settings::try_save_settings(&rest).is_ok() {
+                *state.session_pass.lock().unwrap() = Some(pass);
+            }
         }
     }
+}
+
+pub fn set_key(state: &AppState, pass: Option<String>) -> Result<(), String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
+    if passphrase_mode() && state.session_pass.lock().unwrap().is_none() {
+        return Err("Unlock the app with the current password before changing its encryption".into());
+    }
+    let settings = crate::settings::try_load_settings().map_err(|error| error.to_string())?;
+    let accounts = crate::jsonfile::read_array_checked(&crate::paths::accounts_path()).map_err(|error| error.to_string())?;
+    let history = crate::jsonfile::read_array_checked(&crate::paths::genhistory_path()).map_err(|error| error.to_string())?;
+    let plan = crate::key_change::prepare(&settings, &accounts, &history, pass.as_deref().unwrap_or_default(), |ciphertext| decrypt_field(state, ciphertext))?;
+    plan.commit(&crate::paths::app_data_dir())?;
+    // The durable commit is complete. Only now expose the new session/key.
+    *state.session_pass.lock().unwrap() = plan.pass;
+    *state.cached_key.lock().unwrap() = Some(plan.key);
+    *state.cached_legacy_key.lock().unwrap() = None;
+    Ok(())
 }

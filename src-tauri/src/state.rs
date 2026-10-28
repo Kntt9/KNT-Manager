@@ -8,10 +8,15 @@ pub struct AppState {
     pub app_handle: AppHandle,
     pub http: reqwest::Client,
     pub http_no_redirect: reqwest::Client,
+    pub roblox_requests: crate::request_policy::RequestPolicy,
 
     pub session_pass: Mutex<Option<String>>,
     pub cached_key: Mutex<Option<[u8; 32]>>,
     pub cached_legacy_key: Mutex<Option<[u8; 32]>>,
+    /// Serializes account IPC read/modify/write operations on blocking workers.
+    /// The global persistence guard additionally covers native/backup/rekey
+    /// paths; this worker lock keeps IPC jobs in order on blocking threads.
+    pub accounts_io_lock: Arc<Mutex<()>>,
 
     // The one resident RobloxNative.exe (see helper.rs). It replaces what used
     // to be a separate child per concern -- mutex holder, anti-AFK, PID
@@ -46,7 +51,6 @@ pub struct AppState {
     pub home_retry_deadline: Mutex<HashMap<String, i64>>,
 
     pub csrf_cache: Mutex<HashMap<String, (String, i64)>>,
-    pub ticket_cache: Mutex<HashMap<String, (String, i64)>>,
     pub last_launch_ts: Mutex<i64>,
     pub launch_lock: tokio::sync::Mutex<()>,
     /// account id -> flag the UI can set to abandon an in-flight launch.
@@ -88,8 +92,10 @@ impl AppState {
                 .build()
                 .expect("reqwest client (no redirect)"),
             session_pass: Mutex::new(None),
+            roblox_requests: crate::request_policy::RequestPolicy::default(),
             cached_key: Mutex::new(None),
             cached_legacy_key: Mutex::new(None),
+            accounts_io_lock: Arc::new(Mutex::new(())),
             helper: tokio::sync::Mutex::new(None),
             helper_child: Mutex::new(None),
             helper_shutdown: AtomicBool::new(false),
@@ -109,7 +115,6 @@ impl AppState {
             home_accounts: Mutex::new(std::collections::HashSet::new()),
             home_retry_deadline: Mutex::new(HashMap::new()),
             csrf_cache: Mutex::new(HashMap::new()),
-            ticket_cache: Mutex::new(HashMap::new()),
             last_launch_ts: Mutex::new(0),
             launch_lock: tokio::sync::Mutex::new(()),
             launch_cancel: Mutex::new(HashMap::new()),

@@ -28,6 +28,13 @@ pub fn derive_scrypt_key(pass: &str, salt: &str) -> [u8; KEY_LEN] {
     out
 }
 
+/// Return the already-derived key on success so unlocking does not need a
+/// second scrypt pass before reading the first account.
+pub fn verified_scrypt_key(pass: &str, salt: &str, verifier: &str, expected: &str) -> Option<[u8; KEY_LEN]> {
+    let key = derive_scrypt_key(pass, salt);
+    (decrypt_gcm(verifier, &key, "gs").as_deref() == Some(expected)).then_some(key)
+}
+
 pub fn derive_legacy_key(pass: &str) -> [u8; KEY_LEN] {
     let mut out = [0u8; KEY_LEN];
     pbkdf2_hmac::<Sha512>(
@@ -220,6 +227,22 @@ mod tests {
     // that's ours and that has to stay byte-compatible.
     const KEY: [u8; KEY_LEN] = [7u8; KEY_LEN];
     const OTHER_KEY: [u8; KEY_LEN] = [9u8; KEY_LEN];
+
+    #[test]
+    fn verified_key_can_decrypt_accounts_without_deriving_again() {
+        let key = derive_scrypt_key("test-passphrase", "test-salt");
+        let verifier = encrypt_gcm("verify-token", &key, "gs");
+        let account = encrypt_gcm("fake-session", &key, "gs");
+        let cached = verified_scrypt_key("test-passphrase", "test-salt", &verifier, "verify-token").unwrap();
+        assert_eq!(decrypt_gcm(&account, &cached, "gs").as_deref(), Some("fake-session"));
+    }
+
+    #[test]
+    fn verifier_does_not_return_a_key_for_the_wrong_password() {
+        let key = derive_scrypt_key("correct-passphrase", "test-salt");
+        let verifier = encrypt_gcm("verify-token", &key, "gs");
+        assert!(verified_scrypt_key("wrong-passphrase", "test-salt", &verifier, "verify-token").is_none());
+    }
 
     #[test]
     fn gcm_round_trips() {

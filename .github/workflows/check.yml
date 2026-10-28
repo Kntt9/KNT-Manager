@@ -1,0 +1,32 @@
+name: Check desktop and web
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test JavaScript and local web relay
+        run: npm test
+      - name: Build browser demo
+        run: npm run web:build
+      - name: Compile required native resource
+        shell: pwsh
+        run: |
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /optimize+ /platform:x64 /target:exe /r:System.Drawing.dll /out:src-tauri\resources\RobloxNative.exe src-tauri\resources\RobloxNative.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check Rust targets
+        run: cargo check --locked --all-targets --manifest-path src-tauri/Cargo.toml
+      - name: Test Rust
+        run: cargo test --locked --lib --manifest-path src-tauri/Cargo.toml

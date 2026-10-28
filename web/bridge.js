@@ -340,7 +340,7 @@
         let j = null;
         try { j = await r.json(); } catch {}
         if (r.ok && j && j.ok) return j;
-        if (j) return { ok: false, reason: j.reason || 'Cookie is expired or invalid' };
+        if (j) return { ...j, ok: false, reason: j.reason || 'Cookie could not be verified' };
       } catch {}
       // Offline fallback (relay unreachable — e.g. web/index.html opened directly):
       // accept a well-formed cookie, identity unverified.
@@ -627,6 +627,12 @@
     openExternal: (url) => { window.open(url, '_blank', 'noopener'); return Promise.resolve(); },
 
     // ── event subscriptions (mirror Tauri listen()) ───────────────────────
+    onWindowVisibility: cb => {
+      const changed = () => cb(document.hidden);
+      document.addEventListener('visibilitychange', changed);
+      return () => document.removeEventListener('visibilitychange', changed);
+    },
+    onRobloxHome: cb => on('roblox:home', cb),
     onChromeProgress: (cb) => on('chrome:download-progress', (e) => cb(e)),
     onRobloxClosed: (cb) => on('roblox:closed', (id) => cb(id)),
     onRobloxStarted: (cb) => on('roblox:started', (id) => cb(id)),

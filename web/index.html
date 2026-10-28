@@ -4,10 +4,10 @@
 <meta charset="UTF-8"/>
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.rbxcdn.com https://*.roblox.com; connect-src 'self' https://*.roblox.com https://core.bloxgen.net https://api.altgen.me https://discord.com; object-src 'none'; base-uri 'self'; frame-src 'none'"/>
 <title>KNT Manager</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/>
+<link rel="stylesheet" href="assets/fonts/fonts.css"/>
 <link rel="stylesheet" href="styles.css"/>
+<link rel="stylesheet" href="graphite.css"/>
+<link rel="stylesheet" href="workspace.css"/>
 <style>
 /* Boot cover: first paint, before styles.css/fonts/JS. Hides the empty app
    shell and stays up behind the encryption lock screen until content is ready. */
@@ -19,7 +19,7 @@
 @keyframes bootspin{to{transform:rotate(360deg)}}
 </style>
 </head>
-<body>
+<body class="theme-graphite">
 <div id="boot-cover"><div class="boot-inner"><div class="boot-logo">KNT Manager</div><div class="boot-spin"></div></div></div>
 <div id="titlebar">
   <div class="tb-brand">
@@ -52,46 +52,30 @@
 </div>
 
 <div id="layout">
-  <nav id="sidebar">
-    <div class="nav-label" data-i18n="nav.secManage">Manage</div>
-    <button class="nav-item active" id="nav-dashboard" onclick="goTo('dashboard')">
-      <span class="material-icons-round">dashboard</span><span data-i18n="nav.dashboard">Dashboard</span>
-    </button>
-    <button class="nav-item" id="nav-accounts" onclick="goTo('accounts')">
+  <nav id="sidebar" aria-label="Navigation">
+    <div class="sidebar-brand"><div class="sidebar-mark" aria-hidden="true">KNT</div><div><strong>KNT Manager</strong><small data-i18n="ui.brandSub">Account workspace</small></div></div>
+    <div class="sidebar-navigation">
+    <button class="nav-item active" id="nav-accounts" onclick="goTo('accounts')">
       <span class="material-icons-round">manage_accounts</span><span data-i18n="nav.accounts">Accounts</span>
     </button>
-    <button class="nav-item" id="nav-packages" onclick="goTo('packages')">
+<button class="nav-item" id="nav-packages" onclick="goTo('packages')">
       <span class="material-icons-round">inventory_2</span><span data-i18n="nav.groups">Groups</span>
     </button>
-    <button class="nav-item" id="nav-charts" onclick="goTo('charts')">
-      <span class="material-icons-round">videogame_asset</span><span data-i18n="nav.charts">Games</span>
-    </button>
-    <div class="nav-label" data-i18n="nav.secTools">Tools</div>
-    <button class="nav-item" id="nav-mixer" onclick="goTo('mixer')">
+<button class="nav-item" id="nav-mixer" onclick="goTo('mixer')">
       <span class="material-icons-round">graphic_eq</span><span data-i18n="nav.mixer">Mixer</span>
     </button>
-    <button class="nav-item" id="nav-generator" onclick="goTo('generator')">
-      <span class="material-icons-round">shuffle</span><span data-i18n="nav.generator">Generator</span>
+<button class="nav-item" id="nav-history" onclick="goTo('history')">
+      <span class="material-icons-round">history</span><span data-i18n="nav.history">History</span>
     </button>
-    <button class="nav-item" id="nav-tracking" onclick="goTo('tracking')">
-      <span class="material-icons-round">track_changes</span><span data-i18n="nav.tracking">Tracking</span>
-    </button>
-    <button class="nav-item" id="nav-exploits" onclick="goTo('exploits')">
-      <span class="material-icons-round">bolt</span><span data-i18n="nav.exploits">Exploits</span>
-    </button>
-    <div class="nav-label" data-i18n="nav.secApp">App</div>
+    <div class="sidebar-separator"></div>
     <button class="nav-item" id="nav-settings" onclick="goTo('settings')">
       <span class="material-icons-round">settings</span><span data-i18n="nav.settings">Settings</span>
     </button>
-    <button class="nav-item" id="nav-logs" onclick="goTo('logs')">
+<button class="nav-item" id="nav-logs" onclick="goTo('logs')">
       <span class="material-icons-round">terminal</span><span data-i18n="nav.logs">Logs</span>
     </button>
-    <button class="nav-item" id="nav-history" onclick="goTo('history')">
-      <span class="material-icons-round">history</span><span data-i18n="nav.history">History</span>
-    </button>
-    <button class="nav-item" id="nav-credits" onclick="goTo('credits')">
-      <span class="material-icons-round">favorite</span><span data-i18n="nav.credits">Credits</span>
-    </button>
+    <button class="nav-item" id="nav-tools" onclick="goTo('tools')"><span class="material-icons-round">construction</span><span data-i18n="layout.tools">Tools</span></button>
+    </div>
     <div class="nav-spacer"></div>
     <button class="btn btn-danger kill-roblox-btn" id="nav-kill" onclick="mixKillAll(this)">
       <span class="material-icons-round" style="font-size:15px">power_settings_new</span><span data-i18n="nav.kill">Kill Roblox</span>
@@ -107,11 +91,30 @@
         <div class="sb-saved-sub" id="sb-saved-time">Last saved just now</div>
       </div>
     </div>
+
   </nav>
   <main id="main">
     <div class="page-container">
+<div class="page" id="page-tools"><div class="ph"><div><div class="ph-title" data-i18n="layout.tools">Tools</div><div class="ph-sub" data-i18n="layout.toolsSubtitle">More workspaces and app information</div></div></div><div class="tools-workspace"><button class="nav-item tool-link" id="nav-dashboard" onclick="goTo('dashboard')">
+      <span class="material-icons-round">dashboard</span><span data-i18n="nav.dashboard">Dashboard</span>
+    <small data-i18n="layout.toolHint.dashboard"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
+<button class="nav-item tool-link" id="nav-charts" onclick="goTo('charts')">
+      <span class="material-icons-round">videogame_asset</span><span data-i18n="nav.charts">Games</span>
+    <small data-i18n="layout.toolHint.charts"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
+<button class="nav-item tool-link" id="nav-generator" onclick="goTo('generator')">
+      <span class="material-icons-round">shuffle</span><span data-i18n="nav.generator">Generator</span>
+    <small data-i18n="layout.toolHint.generator"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
+<button class="nav-item tool-link" id="nav-tracking" onclick="goTo('tracking')">
+      <span class="material-icons-round">track_changes</span><span data-i18n="nav.tracking">Tracking</span>
+    <small data-i18n="layout.toolHint.tracking"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
+<button class="nav-item tool-link" id="nav-exploits" onclick="goTo('exploits')">
+      <span class="material-icons-round">bolt</span><span data-i18n="nav.exploits">Exploits</span>
+    <small data-i18n="layout.toolHint.exploits"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
+<button class="nav-item tool-link" id="nav-credits" onclick="goTo('credits')">
+      <span class="material-icons-round">favorite</span><span data-i18n="nav.credits">Credits</span>
+    <small data-i18n="layout.toolHint.credits"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button></div></div>
       <!-- dashboard page -->
-      <div class="page active" id="page-dashboard">
+      <div class="page" id="page-dashboard">
         <div class="ph">
           <div>
             <div class="ph-title"><span class="material-icons-round" style="font-size:19px;color:var(--ac)">dashboard</span><span data-i18n="dash.title">Dashboard</span></div>
@@ -138,16 +141,17 @@
           </div>
         </div>
       </div>
-      <!-- accounts page -->
-      <div class="page" id="page-accounts">
-        <div class="ph">
-          <div>
-            <div class="ph-title" data-i18n="accounts.title">Accounts</div>
-            <div class="ph-sub" id="acct-sub">Loading…</div>
-          </div>
-          <div class="ph-actions">
-            <div class="search"><span class="material-icons-round">search</span><input id="acct-search" data-i18n-ph="accounts.searchPh" data-i18n-aria="accounts.searchPh" placeholder="Search accounts..." aria-label="Search accounts" oninput="onAcctSearch(this.value)"/></div>
-            <div class="filter-wrap">
+      <!-- accounts workspace: continuous table + selected group -->
+      <div class="page active" id="page-accounts">
+        <div class="ph"><div><div class="ph-title" data-i18n="layout.yourAccounts">Your accounts</div><div class="ph-sub" data-i18n="layout.accountSubtitle">Accounts, groups and destinations in one workspace.</div></div><div class="workspace-summary"><strong id="acct-sub">0 accounts</strong><small id="account-summary"></small></div></div>
+        <div class="account-workspace">
+          <section id="accounts-main" class="accounts-main">
+            <div class="account-toolbar"><div class="search"><span class="material-icons-round" aria-hidden="true">search</span><input id="acct-search" data-i18n-ph="accounts.searchPh" data-i18n-aria="accounts.searchPh" oninput="onAcctSearch(this.value)"/></div><div class="account-filters"><button class="account-filter" data-account-filter="all" onclick="setAcctFilter('all')"><span data-i18n="accounts.all"></span><b>0</b></button><button class="account-filter" data-account-filter="running" onclick="setAcctFilter('running')"><span data-i18n="ui.running"></span><b>0</b></button><button class="account-filter" data-account-filter="idle" onclick="setAcctFilter('idle')"><span data-i18n="ui.stopped"></span><b>0</b></button><button class="account-filter" data-account-filter="waiting" onclick="setAcctFilter('waiting')"><span data-i18n="ui.queue"></span><b>0</b></button></div><button class="btn btn-primary" id="acct-add-btn" onclick="openLogin()"><span class="material-icons-round">add</span><span data-i18n="accounts.addAccount">Add account</span></button></div>
+            <div class="account-options"><div class="category-control"><span class="material-icons-round" aria-hidden="true">label</span><select id="account-category-filter" onchange="workspaceCategory(this.value)" data-i18n-aria="accounts.category" aria-label="Category"></select><button class="btn btn-ghost" id="launch-category" onclick="workspaceLaunchCategory()" hidden data-i18n="folders.launch">Launch category</button></div><div class="account-option-actions"><div class="view-toggle">
+              <button class="vt active" id="vt-grid" onclick="setAcctView('grid')"><span class="material-icons-round">grid_view</span></button>
+              <button class="vt" id="vt-list" onclick="setAcctView('list')"><span class="material-icons-round">view_list</span></button>
+              <button class="vt" id="vt-compact" onclick="setAcctView('compact')" data-i18n-title="accounts.compactTip" title="Compact cards"><span class="material-icons-round">density_small</span></button>
+            </div><details class="workspace-more"><summary data-i18n="layout.moreActions">More actions</summary><div class="workspace-more-panel"><div class="filter-wrap">
               <button class="btn-out" id="filter-btn" onclick="toggleFilterMenu(event)"><span class="material-icons-round">filter_list</span><span data-i18n="accounts.filter">Filter</span></button>
               <div class="filter-menu" id="filter-menu">
                 <button class="active" data-f="all" onclick="setAcctFilter('all')" data-i18n="accounts.all">All accounts</button>
@@ -162,37 +166,19 @@
                 <button onclick="openCategories()"><span class="material-icons-round" style="font-size:14px">tune</span><span data-i18n="accounts.manageCategories">Manage categories…</span></button>
               </div>
             </div>
-            <button class="btn-out" onclick="openCategories()" data-i18n-title="accounts.categoriesTitle" title="Create, rename or delete categories">
-              <span class="material-icons-round">label</span><span data-i18n="accounts.categories">Categories</span>
-            </button>
-            <button class="btn-out" id="btn-trash" onclick="openTrash()" data-i18n-title="accounts.trashTitle" title="Trash — deleted accounts can be restored here">
+            <button class="btn-out" onclick="openCategories()" data-i18n="accounts.manageCategories">Manage categories</button><button class="btn-out" id="btn-trash" onclick="openTrash()" data-i18n-title="accounts.trashTitle" title="Trash — deleted accounts can be restored here">
               <span class="material-icons-round">delete</span><span data-i18n="accounts.trash">Trash</span>
               <span class="trash-count" id="trash-count" style="display:none">0</span>
-            </button>
-            <button class="btn-out" id="acct-sync-btn" onclick="syncInstances('accounts')" title="Sync running instances with reality">
+            </button><button class="btn-out" id="acct-sync-btn" onclick="syncInstances('accounts')" title="Sync running instances with reality">
               <span class="material-icons-round">sync</span><span data-i18n="common.sync">Sync</span>
-            </button>
-            <button class="btn-out" id="acct-closehome-btn" onclick="closeHomeAll()" data-i18n-title="accounts.closeHomeTip" title="Close the Roblox home/tray launcher" style="display:none">
-              <span class="material-icons-round">close</span><span data-i18n="accounts.closeHome">Close tray</span>
-            </button>
-            <button class="btn-out" id="acct-select-btn" onclick="toggleSelectMode()" data-i18n-title="accounts.selectTitle" title="Select multiple accounts for batch actions">
+            </button><button class="btn-out" id="acct-select-btn" onclick="toggleSelectMode()" data-i18n-title="accounts.selectTitle" title="Select multiple accounts for batch actions">
               <span class="material-icons-round">check_box</span><span data-i18n="accounts.select">Select</span>
-            </button>
-            <div class="view-toggle">
-              <button class="vt active" id="vt-grid" onclick="setAcctView('grid')"><span class="material-icons-round">grid_view</span></button>
-              <button class="vt" id="vt-list" onclick="setAcctView('list')"><span class="material-icons-round">view_list</span></button>
-              <button class="vt" id="vt-compact" onclick="setAcctView('compact')" data-i18n-title="accounts.compactTip" title="Compact cards"><span class="material-icons-round">density_small</span></button>
-            </div>
-          </div>
-        </div>
-        <div class="grid-wrap">
-          <div class="grid" id="grid"></div>
-          <div class="empty" id="empty" style="display:none">
-            <span class="material-icons-round">account_circle</span>
-            <div class="empty-title" data-i18n="accounts.emptyTitle">No accounts</div>
-            <div class="empty-sub" data-i18n="accounts.emptySub">Click "Add account" to sign in with Roblox.</div>
-            <button class="btn btn-primary" style="margin-top:8px;font-size:11.5px;padding:6px 14px" onclick="openLogin()" data-i18n="accounts.addAccount">Add account</button>
-          </div>
+            </button><button class="btn-out" id="acct-closehome-btn" onclick="closeHomeAll()" data-i18n-title="accounts.closeHomeTip" title="Close the Roblox home/tray launcher" style="display:none">
+              <span class="material-icons-round">close</span><span data-i18n="accounts.closeHome">Close tray</span>
+            </button></div></details></div></div>
+            <div class="grid-wrap account-table-scroll"><div id="account-table" role="table" data-i18n-aria="accounts.title" aria-label="Accounts"><div class="account-table-head" role="row"><div role="columnheader"><input id="account-select-all" type="checkbox" onchange="workspaceSelectAll(this)" data-i18n-aria="groups.selectAll" aria-label="Select all"/></div><div role="columnheader" data-i18n="layout.account">Account</div><div role="columnheader" data-i18n="layout.group">Group</div><div role="columnheader" data-i18n="layout.status">Status</div><div role="columnheader" data-i18n="ui.destination">Destination</div><div role="columnheader" data-i18n="layout.actions">Actions</div></div><div class="grid" id="grid"></div><div class="empty" id="empty" style="display:none"><span class="material-icons-round">account_circle</span><div class="empty-title" data-i18n="accounts.emptyTitle">No accounts</div><div class="empty-sub" data-i18n="accounts.emptySub">Add your first account.</div><button class="btn btn-primary" onclick="openLogin()" data-i18n="accounts.addAccount">Add account</button></div></div></div>
+          </section>
+          <aside class="group-inspector" id="account-group-panel" data-i18n-aria="ui.groupPanel" aria-label="Group workspace"></aside>
         </div>
       </div>
       <!-- packages page -->
@@ -308,7 +294,7 @@
           </div>
           <!-- FPS cap -->
           <div class="sc">
-            <div class="sc-head" data-i18n="mixer.fpsCap">FPS Cap</div>
+            <div class="sc-head" data-i18n="ui.fpsTitle">FPS Cap</div>
             <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
               <div class="sr-left">
                 <div class="sr-label" data-i18n="mixer.fpsTarget">Target framerate</div>
@@ -767,13 +753,7 @@
             </div>
             <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
               <div class="sr-left" style="width:100%"><div class="sr-label" data-i18n="settings.encKey">Encryption key</div><div class="sr-desc" data-i18n="settings.encKeyDesc">Change your encryption key here. You will need to re-enter it on your next launch.</div></div>
-              <div style="width:100%;display:flex;gap:8px;align-items:center">
-                <input type="password" class="sr-input" id="custom-key" data-i18n-ph="settings.encKeyPh" data-i18n-aria="settings.encKey" placeholder="e.g. SecureKey1234@A#" aria-label="Encryption key" style="flex:1;width:auto" oninput="onKeyInput()"/>
-                <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="toggleKeyVisibility()">
-                  <span class="material-icons-round" style="font-size:14px" id="key-vis-icon">visibility</span>
-                </button>
-                <button class="btn btn-primary" style="font-size:12px;height:40px;padding:0 12px" onclick="saveKeySettings()" id="btn-save-key" data-i18n="common.save">Save</button>
-              </div>
+              <button class="btn btn-ghost" onclick="openKeySettings()"><span class="material-icons-round">lock_reset</span><span data-i18n="ui.keyChange">Change encryption password</span></button>
             </div>
           </div>
           <!-- Backup (manual) -->
@@ -1085,7 +1065,7 @@
 </div>
 <!-- Package modal -->
 <div class="overlay" id="m-package" data-backdrop-close="false">
-  <div class="modal pm" onclick="event.stopPropagation()" style="width:440px;padding:0">
+  <div class="modal pm" onclick="event.stopPropagation()" style="width:760px;padding:0">
     <div class="pm-head">
       <div class="pm-title" id="pkg-modal-title" data-i18n="groups.titleNew">New group</div>
       <div class="pm-subtle" data-i18n="groups.subtle">Launch the whole set in one click from the Groups tab.</div>
@@ -1204,15 +1184,17 @@
       </div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('m-edit')">Cancel</button>
+      <button class="btn btn-ghost" onclick="closeModal('m-edit')" data-i18n="common.cancel">Cancel</button>
       <button class="btn btn-primary" onclick="saveEdit()"><span class="material-icons-round">save</span><span data-i18n="common.save">Save</span></button>
     </div>
   </div>
 </div>
 <!-- launch modal -->
 <div class="overlay" id="m-launch" onclick="if(event.target===this)cancelLaunchOrClose()">
-  <div class="modal" onclick="event.stopPropagation()" style="width:340px">
-    <div class="prev" id="launch-prev"></div>
+  <div class="modal" onclick="event.stopPropagation()" style="width:420px">
+    <div class="modal-title" data-i18n="ui.startTitle">Start account</div>
+    <div class="modal-sub" data-i18n="ui.startHint">Check the account and destination before starting.</div>
+    <div class="launch-layout"><div class="prev" id="launch-prev"></div><section id="launch-destination" class="launch-destination"></section></div>
     <div class="mst hidden" id="launch-status"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btn-launch-cancel" onclick="cancelLaunchOrClose()" data-i18n="common.cancel">Cancel</button>
@@ -1349,9 +1331,37 @@
     <span id="av-tip-created">Loading…</span>
   </div>
 </div>
+
+<div class="overlay" id="m-distribute" data-backdrop-close="true"><div class="modal distribution-dialog"><button class="modal-x" onclick="closeModal('m-distribute')" data-i18n-aria="common.close" aria-label="Close">×</button><div class="modal-title" data-i18n="layout.distributeTitle">Distribute group</div><div class="modal-sub" id="distribute-group-name"></div><div class="distribution-policy"><span class="material-icons-round" aria-hidden="true">call_split</span><div><strong data-i18n="layout.distributePolicy">Different public servers</strong><p data-i18n="ui.groupHint"></p></div></div><div class="distribution-columns"><span data-i18n="layout.account">Account</span><span data-i18n="ui.destination">Destination</span></div><div id="distribute-members"></div><p class="field-hint" data-i18n="layout.distributeFetch">Servers are checked when you start. Accounts without a destination are not launched.</p><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('m-distribute')" data-i18n="common.cancel">Cancel</button><button class="btn btn-primary" id="distribute-start" data-i18n="ui.distribute">Distribute</button></div></div></div>
+<div class="overlay" id="m-key-change" data-backdrop-close="false">
+  <div class="modal">
+    <button class="modal-x" onclick="if(!_savingKey)closeModal('m-key-change')" data-i18n-aria="common.close" aria-label="Close">×</button>
+    <div class="modal-title" data-i18n="ui.keyChange">Change encryption password</div>
+    <div class="modal-sub" data-i18n="ui.keyHint">The new key and encrypted data are verified before replacing your files.</div>
+    <form onsubmit="event.preventDefault();saveKeySettings()">
+      <div class="field"><label for="custom-key" data-i18n="ui.newPassword">New password</label>
+        <div style="display:flex;gap:8px"><input type="password" id="custom-key" class="sr-input" style="flex:1;width:100%" autocomplete="new-password" oninput="onKeyInput()"/>
+        <button type="button" class="btn btn-ghost" onclick="toggleKeyVisibility()" data-i18n-aria="ui.showPassword" aria-label="Show or hide password"><span class="material-icons-round" id="key-vis-icon">visibility</span></button></div>
+      </div>
+      <div class="field"><label for="custom-key-confirm" data-i18n="ui.confirmPassword">Confirm new password</label><input type="password" id="custom-key-confirm" style="width:100%" autocomplete="new-password" oninput="onKeyInput()"/></div>
+      <div class="key-change-note"><span class="material-icons-round">verified_user</span><span data-i18n="ui.keyPreserved">Accounts, trash and generation history are included in the change.</span></div>
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" id="key-change-cancel" onclick="closeModal('m-key-change')" data-i18n="common.cancel">Cancel</button><button class="btn btn-primary" id="btn-save-key" data-i18n="ui.savePassword">Save new password</button></div>
+    </form>
+  </div>
+</div>
+<div class="overlay" id="m-text-input" data-backdrop-close="true">
+  <div class="modal"><div class="modal-title" id="ui-text-title" data-i18n="ui.prompt">Enter a value</div>
+    <form id="ui-text-form"><div class="field"><input id="ui-text-value" style="width:100%" aria-label="Value"/><textarea id="ui-text-area" hidden aria-label="JSON"></textarea></div>
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('m-text-input')" data-i18n="common.cancel">Cancel</button><button class="btn btn-primary" data-i18n="common.save">Save</button></div>
+    </form>
+  </div>
+</div>
+
 <script src="i18n/en.js"></script>
 <script src="i18n/pt.js"></script>
 <script src="bridge.js"></script>
+<script src="ui-shell.js"></script>
+<script src="workspace-ui.js"></script>
 <script src="renderer.js"></script>
 <!-- help modal -->
 <div class="overlay" id="m-help" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-help')">

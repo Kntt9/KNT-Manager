@@ -7,35 +7,32 @@ fn read_json_array(path: &std::path::Path) -> Vec<Value> {
     crate::jsonfile::read_array(path)
 }
 pub fn write_json_array(path: &std::path::Path, v: &[Value]) -> std::io::Result<()> {
-    let json = serde_json::to_string_pretty(v).unwrap_or_else(|_| "[]".into());
+    let _guard = crate::persistence::data_guard()?;
+    crate::jsonfile::read_array_checked(path)?;
+    let json = serde_json::to_string_pretty(v)?;
     crate::jsonfile::write_atomic(path, &json)
 }
 
 pub fn load_accounts_raw() -> Vec<Value> {
+    let _guard = crate::persistence::data_guard().expect("Account storage needs recovery before reading");
     read_json_array(&accounts_path())
 }
 
 // Decrypt failure means the cookie is unusable -- flag it immediately
 // instead of waiting on the renderer's async validation to find out.
 pub fn decrypt_account(state: &AppState, mut a: Value) -> Value {
-    for field in ["cookie", "password"] {
-        if let Some(v) = a.get(field).and_then(|v| v.as_str()) {
-            if !v.is_empty() {
-                let dec = decrypt_field(state, v);
-                if field == "cookie" && dec.is_none() {
-                    a["_cookieInvalid"] = Value::Bool(true);
-                }
-                a[field] = Value::String(dec.unwrap_or_default());
-            }
-        }
-    }
-    a
+    let _guard = crate::persistence::data_guard().expect("Account storage needs recovery before decrypting");
+    crate::record_crypto::decrypt_for_display(a.take(), |text| decrypt_field(state, text))
 }
 fn encrypt_account(state: &AppState, mut a: Value) -> Result<Value, String> {
+    a = crate::record_crypto::restore_unreadable(a);
     for field in ["cookie", "password"] {
         if let Some(v) = a.get(field).and_then(|v| v.as_str()) {
             if !v.is_empty() && !is_encrypted(v) {
                 let enc = encrypt_field(state, v)?;
+                if decrypt_field(state, &enc).as_deref() != Some(v) {
+                    return Err(format!("Could not verify encrypted {field}; original accounts were preserved"));
+                }
                 a[field] = Value::String(enc);
             }
         }
@@ -45,6 +42,7 @@ fn encrypt_account(state: &AppState, mut a: Value) -> Result<Value, String> {
 }
 
 pub fn load_accounts(state: &AppState) -> Vec<Value> {
+    let _guard = crate::persistence::data_guard().expect("Account storage needs recovery before reading");
     read_json_array(&accounts_path())
         .into_iter()
         .map(|a| decrypt_account(state, a))
@@ -52,6 +50,7 @@ pub fn load_accounts(state: &AppState) -> Vec<Value> {
 }
 
 pub fn save_accounts(state: &AppState, accounts: Vec<Value>) -> Result<(), String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     // The file is there but didn't parse, so what we just loaded is an empty
     // list rather than the real accounts. Writing that back would destroy the
     // only copy -- refuse, and point at the backup instead.
@@ -63,17 +62,40 @@ pub fn save_accounts(state: &AppState, accounts: Vec<Value>) -> Result<(), Strin
                 .into(),
         );
     }
+    let out = prepare_accounts(state, accounts)?;
+    write_json_array(&path, &out).map_err(|e| e.to_string())
+}
+
+pub fn mark_last_used(state: &AppState, id: &str) -> Result<(Option<String>, Option<String>), String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
+    let mut accounts = load_accounts(state);
+    let Some(index) = find_index(&accounts, id) else { return Ok((None, None)); };
+    accounts[index]["lastUsed"] = Value::String(chrono::Utc::now().to_rfc3339());
+    let username = accounts[index].get("username").and_then(Value::as_str).map(str::to_owned);
+    let user_id = accounts[index].get("userId").and_then(Value::as_str).map(str::to_owned);
+    save_accounts(state, accounts)?;
+    Ok((username, user_id))
+}
+
+pub fn prepare_accounts(state: &AppState, accounts: Vec<Value>) -> Result<Vec<Value>, String> {
     let mut out = Vec::with_capacity(accounts.len());
     for a in accounts {
         out.push(encrypt_account(state, a)?);
     }
-    write_json_array(&path, &out).map_err(|e| e.to_string())
+    Ok(out)
+}
+
+pub fn load_accounts_strict(state: &AppState) -> Result<Vec<Value>, String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
+    let raw = crate::jsonfile::read_array_checked(&accounts_path()).map_err(|error| error.to_string())?;
+    crate::record_crypto::decrypt_strict(&raw, |text| decrypt_field(state, text))
 }
 
 // One-time upgrade of legacy (gcm:/cbc:) cookies to DPAPI storage. Skipped
 // entirely in passphrase mode, and aborts without writing if any cookie
 // fails to decrypt.
 pub fn migrate_account_encryption_to_keychain(state: &AppState) {
+    let Ok(_guard) = crate::persistence::data_guard() else { return; };
     if crate::encryption::passphrase_mode() {
         return;
     }
@@ -87,11 +109,9 @@ pub fn migrate_account_encryption_to_keychain(state: &AppState) {
     if !needs {
         return;
     }
-    let plain: Vec<Value> = raw
-        .iter()
-        .cloned()
-        .map(|a| decrypt_account(state, a))
-        .collect();
+    let Ok(plain) = crate::record_crypto::decrypt_strict(&raw, |text| decrypt_field(state, text)) else {
+        eprintln!("[migrate] decrypt failed; leaving accounts untouched"); return;
+    };
     for (orig, dec) in raw.iter().zip(plain.iter()) {
         let had = orig
             .get("cookie")
@@ -126,6 +146,7 @@ fn find_index(accounts: &[Value], id: &str) -> Option<usize> {
 }
 
 pub fn soft_delete_account(state: &AppState, id: &str) -> Result<bool, String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     let mut accounts = load_accounts(state);
     let Some(i) = find_index(&accounts, id) else {
         return Ok(false);
@@ -137,6 +158,7 @@ pub fn soft_delete_account(state: &AppState, id: &str) -> Result<bool, String> {
 }
 
 pub fn restore_account(state: &AppState, id: &str) -> Result<bool, String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     let mut accounts = load_accounts(state);
     let Some(i) = find_index(&accounts, id) else {
         return Ok(false);
@@ -150,6 +172,7 @@ pub fn restore_account(state: &AppState, id: &str) -> Result<bool, String> {
 }
 
 pub fn purge_account(state: &AppState, id: &str) -> Result<bool, String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     let accounts = load_accounts(state);
     let before = accounts.len();
     let filtered: Vec<Value> = accounts
@@ -166,6 +189,7 @@ pub fn purge_account(state: &AppState, id: &str) -> Result<bool, String> {
 /// Removes every trashed account and returns their ids so the caller can also
 /// drop in-memory bookkeeping (watched pids, launch history, etc.).
 pub fn empty_trash(state: &AppState) -> Result<Vec<String>, String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     let accounts = load_accounts(state);
     let mut removed = Vec::new();
     let mut kept = Vec::new();
@@ -186,27 +210,26 @@ pub fn empty_trash(state: &AppState) -> Result<Vec<String>, String> {
 }
 
 pub fn load_packages() -> Vec<Value> {
+    let _guard = crate::persistence::data_guard().expect("Storage needs recovery before reading groups");
     read_json_array(&packages_path())
 }
 pub fn save_packages(packages: &[Value]) -> Result<(), String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     write_json_array(&packages_path(), packages).map_err(|e| e.to_string())
 }
 
 fn decrypt_gen_entry(state: &AppState, mut e: Value) -> Value {
-    for field in ["password", "cookie"] {
-        if let Some(v) = e.get(field).and_then(|v| v.as_str()) {
-            if !v.is_empty() {
-                e[field] = Value::String(decrypt_field(state, v).unwrap_or_default());
-            }
-        }
-    }
-    e
+    crate::record_crypto::decrypt_for_display(e.take(), |text| decrypt_field(state, text))
 }
 fn encrypt_gen_entry(state: &AppState, mut e: Value) -> Result<Value, String> {
+    e = crate::record_crypto::restore_unreadable(e);
     for field in ["password", "cookie"] {
         if let Some(v) = e.get(field).and_then(|v| v.as_str()) {
             if !v.is_empty() && !is_encrypted(v) {
                 let enc = encrypt_field(state, v)?;
+                if decrypt_field(state, &enc).as_deref() != Some(v) {
+                    return Err(format!("Could not verify encrypted {field}; original history was preserved"));
+                }
                 e[field] = Value::String(enc);
             }
         }
@@ -215,12 +238,14 @@ fn encrypt_gen_entry(state: &AppState, mut e: Value) -> Result<Value, String> {
 }
 
 pub fn read_genhistory(state: &AppState) -> Vec<Value> {
+    let _guard = crate::persistence::data_guard().expect("Storage needs recovery before reading history");
     read_json_array(&genhistory_path())
         .into_iter()
         .map(|e| decrypt_gen_entry(state, e))
         .collect()
 }
 pub fn write_genhistory(state: &AppState, list: Vec<Value>) -> Result<(), String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
     let capped: Vec<Value> = list.into_iter().take(500).collect();
     let mut out = Vec::with_capacity(capped.len());
     for e in capped {

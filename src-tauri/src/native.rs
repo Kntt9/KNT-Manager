@@ -301,7 +301,6 @@ pub fn reset_state_for_wipe(state: &AppState) {
     state.manual_kills.lock().unwrap().clear();
     state.home_accounts.lock().unwrap().clear();
     state.csrf_cache.lock().unwrap().clear();
-    state.ticket_cache.lock().unwrap().clear();
     *state.last_launch_ts.lock().unwrap() = 0;
     clear_persisted_instances(state);
 }
@@ -2306,20 +2305,23 @@ pub async fn do_launch(
     }
 
     let csrf_token = crate::roblox_api::get_csrf_token(state, cookie).await;
-    let Some(csrf_token) = csrf_token else {
-        let accounts = crate::storage::load_accounts(state);
-        let username = find_username(&accounts, account_id);
-        emit_log(
-            app,
-            "err",
-            "launch",
-            &format!(
-                "Launch failed for {}: could not get CSRF token (cookie may be expired)",
-                username.clone().unwrap_or_else(|| account_id.to_string())
-            ),
-            Some(serde_json::json!({ "accountId": account_id, "username": username })),
-        );
-        return serde_json::json!({ "success": false, "error": "Failed to get CSRF token. Is the account cookie still valid?" });
+    let csrf_token = match csrf_token {
+        Ok(token) => token,
+        Err(error) => {
+            let accounts = crate::storage::load_accounts(state);
+            let username = find_username(&accounts, account_id);
+            emit_log(
+                app,
+                "err",
+                "launch",
+                &format!(
+                    "Launch failed for {}: {}",
+                    username.clone().unwrap_or_else(|| account_id.to_string()), error
+                ),
+                Some(serde_json::json!({ "accountId": account_id, "username": username })),
+            );
+            return serde_json::json!({ "success": false, "error": error });
+        }
     };
 
     let ticket_result =
@@ -2594,26 +2596,19 @@ pub async fn do_launch(
     apply_priority_policy(state, &launch_settings).await;
 
     *state.last_launch_ts.lock().unwrap() = now_ms();
-    crate::roblox_api::invalidate_ticket(state, &cookie);
 
-    let mut accounts = crate::storage::load_accounts(state);
-    let (username, user_id) = if let Some(idx) = accounts
-        .iter()
-        .position(|a| a.get("id").and_then(|v| v.as_str()) == Some(account_id))
-    {
-        accounts[idx]["lastUsed"] = Value::String(chrono::Utc::now().to_rfc3339());
-        let username = accounts[idx]
-            .get("username")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let user_id = accounts[idx]
-            .get("userId")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let _ = crate::storage::save_accounts(state, accounts.clone());
-        (username, user_id)
-    } else {
-        (None, None)
+    let save_app = app.clone();
+    let save_account_id = account_id.to_string();
+    let saved = tokio::task::spawn_blocking(move || {
+        let state = save_app.state::<AppState>();
+        crate::storage::mark_last_used(&state, &save_account_id)
+    }).await;
+    let (username, user_id) = match saved {
+        Ok(Ok(details)) => details,
+        _ => {
+            emit_log(app, "warn", "system", "Roblox launched, but its last-used timestamp could not be saved. Original account data was preserved.", None);
+            (None, None)
+        }
     };
     let pid = state.account_pids.lock().unwrap().get(account_id).copied();
 

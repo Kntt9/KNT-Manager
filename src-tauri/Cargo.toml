@@ -1,6 +1,6 @@
 [package]
 name = "mr_tauri"
-version = "2.4.0"
+version = "2.5.0"
 description = "Run and manage multiple Roblox accounts"
 authors = ["MultiRoblox"]
 edition = "2021"
@@ -60,3 +60,17 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Keep the existing scrypt parameters while making local development builds
+# usable. These CPU-heavy primitives otherwise run unoptimized in debug.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.pbkdf2]
+opt-level = 3

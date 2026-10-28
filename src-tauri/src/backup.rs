@@ -38,12 +38,13 @@ fn now_rfc3339() -> String {
 // session key is held in memory at this point) and are re-encrypted on
 // restore -- so a backup is readable even on another machine, unlike the raw
 // on-disk files which are tied to this device's key.
-fn collect_payload(state: &AppState) -> Payload {
-    Payload {
-        accounts: crate::storage::load_accounts(state),
-        packages: crate::storage::load_packages(),
-        settings: crate::settings::load_settings(),
-    }
+fn collect_payload(state: &AppState) -> Result<Payload, String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
+    Ok(Payload {
+        accounts: crate::storage::load_accounts_strict(state)?,
+        packages: crate::jsonfile::read_array_checked(&crate::paths::packages_path()).map_err(|error| error.to_string())?,
+        settings: crate::settings::try_load_settings().map_err(|error| error.to_string())?,
+    })
 }
 
 fn build_container(payload: &Payload, password: &str) -> Result<Value, String> {
@@ -118,17 +119,17 @@ fn open_container(container: &Value, password: &str) -> Result<Payload, String> 
         .get("accounts")
         .and_then(|a| a.as_array())
         .cloned()
-        .unwrap_or_default();
+        .ok_or("The backup account list is missing or invalid; nothing was restored.")?;
     let packages = v
         .get("packages")
         .and_then(|a| a.as_array())
         .cloned()
-        .unwrap_or_default();
+        .ok_or("The backup group list is missing or invalid; nothing was restored.")?;
     let settings = v
         .get("settings")
         .and_then(|o| o.as_object())
         .cloned()
-        .unwrap_or_default();
+        .ok_or("The backup settings are missing or invalid; nothing was restored.")?;
     Ok(Payload {
         accounts,
         packages,
@@ -149,6 +150,15 @@ fn sanitize_restored_settings(settings: &mut Map<String, Value>) {
         "encSetupDone",
     ] {
         settings.remove(k);
+    }
+}
+
+fn preserve_local_encryption(restored: &mut Map<String, Value>, current: &Map<String, Value>) {
+    sanitize_restored_settings(restored);
+    for key in ["customKey", "customKeyEnc", "keyVerifier", "kdfSalt", "_deviceKey", "encSetupDone"] {
+        if let Some(value) = current.get(key) {
+            restored.insert(key.into(), value.clone());
+        }
     }
 }
 
@@ -181,7 +191,10 @@ pub async fn create_backup(app: &AppHandle, state: &AppState, password: String) 
     if let Some(err) = unlock_required(state) {
         return json!({ "ok": false, "error": err });
     }
-    let payload = collect_payload(state);
+    let payload = match collect_payload(state) {
+        Ok(payload) => payload,
+        Err(error) => return json!({ "ok": false, "error": error }),
+    };
     let container = match build_container(&payload, &password) {
         Ok(c) => c,
         Err(e) => return json!({ "ok": false, "error": e }),
@@ -259,6 +272,7 @@ fn generate_password() -> String {
 // backups unattended; the UI shows it so the user can write it down for
 // restoring on another machine.
 pub fn ensure_auto_password() -> Value {
+    let Ok(_guard) = crate::persistence::data_guard() else { return json!({ "ok": false, "error": "Storage recovery is required" }); };
     let mut s = crate::settings::load_settings();
     let mut ab = s
         .get("autoBackup")
@@ -276,7 +290,7 @@ pub fn ensure_auto_password() -> Value {
             let p = generate_password();
             ab.insert("password".into(), Value::String(p.clone()));
             s.insert("autoBackup".into(), Value::Object(ab));
-            crate::settings::save_settings(&s);
+            if let Err(error) = crate::settings::try_save_settings(&s) { return json!({ "ok": false, "error": error.to_string() }); }
             p
         }
     };
@@ -312,7 +326,10 @@ pub async fn auto_create_backup(app: &AppHandle, state: &AppState, password: &st
     if let Some(err) = unlock_required(state) {
         return json!({ "ok": false, "error": err });
     }
-    let payload = collect_payload(state);
+    let payload = match collect_payload(state) {
+        Ok(payload) => payload,
+        Err(error) => return json!({ "ok": false, "error": error }),
+    };
     let container = match build_container(&payload, password) {
         Ok(c) => c,
         Err(e) => return json!({ "ok": false, "error": e }),
@@ -421,6 +438,23 @@ pub fn delete_backup(name: &str) -> Value {
     }
 }
 
+// Keep the full restore under the same lock as rekey and account mutations.
+// No guard crosses an await or a file dialog.
+fn apply_payload(state: &AppState, payload: &mut Payload) -> Result<(), String> {
+    let _guard = crate::persistence::data_guard().map_err(|error| error.to_string())?;
+    if let Some(error) = unlock_required(state) { return Err(error); }
+    crate::record_crypto::decrypt_strict(&payload.accounts, |text| Some(text.into()))?;
+    let accounts = crate::record_crypto::encrypt_verified(&payload.accounts,
+        |text| crate::encryption::encrypt_field(state, text),
+        |ciphertext| crate::encryption::decrypt_field(state, ciphertext))?;
+    preserve_local_encryption(&mut payload.settings, &crate::settings::try_load_settings().map_err(|error| error.to_string())?);
+    crate::file_transaction::commit(&crate::paths::app_data_dir(), vec![
+        ("accounts.json", serde_json::to_string_pretty(&accounts).map_err(|error| error.to_string())?),
+        ("packages.json", serde_json::to_string_pretty(&payload.packages).map_err(|error| error.to_string())?),
+        ("settings.json", serde_json::to_string_pretty(&payload.settings).map_err(|error| error.to_string())?),
+    ]).map_err(|error| error.to_string())
+}
+
 // Core restore used by both the dialog picker and the automatic-backup history.
 pub async fn do_restore(app: &AppHandle, state: &AppState, path: &std::path::Path, password: &str) -> Value {
     // Clone for the blocking closure; `path` is still needed below for the log.
@@ -443,16 +477,10 @@ pub async fn do_restore(app: &AppHandle, state: &AppState, path: &std::path::Pat
     };
     sanitize_restored_settings(&mut payload.settings);
 
-    // Replace everything in one shot. Accounts are re-encrypted under the
-    // app's current key by save_accounts; if that write fails, restore is
-    // refused outright so on-disk data is never left half old, half new.
-    if let Err(e) = crate::storage::save_accounts(state, payload.accounts.clone()) {
-        return json!({ "ok": false, "error": format!("Could not write restored accounts: {}", e) });
+    let restored = apply_payload(state, &mut payload);
+    if let Err(error) = restored {
+        return json!({ "ok": false, "error": error });
     }
-    if let Err(e) = crate::storage::save_packages(&payload.packages) {
-        return json!({ "ok": false, "error": format!("Could not write restored groups: {}", e) });
-    }
-    crate::settings::save_settings(&payload.settings);
 
     // Drop bookkeeping for accounts that no longer exist after the restore so
     // the watch loop and kill commands stop pointing at removed instances.
@@ -523,4 +551,57 @@ pub async fn restore_backup_path(app: &AppHandle, state: &AppState, path: String
         return json!({ "ok": false, "error": err });
     }
     do_restore(app, state, &std::path::PathBuf::from(path), &password).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_encrypted_payloads_are_rejected_instead_of_restored_as_empty_lists() {
+        let password = "test-backup-password";
+        let salt = "test-backup-salt";
+        let key = crypto::derive_scrypt_key(password, salt);
+        for payload in [json!({"packages":[],"settings":{}}), json!({"accounts":[],"packages":null,"settings":{}}), json!({"accounts":[],"packages":[],"settings":[]})] {
+            let container = json!({"type": BACKUP_TYPE, "version":BACKUP_VERSION, "encrypted":true, "salt":salt,
+                "authHash":hex::encode(sha2::Sha256::digest(key)),
+                "payload":crypto::encrypt_gcm(&serde_json::to_string(&payload).unwrap(), &key, "gs")});
+            assert!(open_container(&container,password).is_err());
+        }
+    }
+
+    #[test]
+    fn current_backup_format_still_opens_and_rejects_a_wrong_password() {
+        let payload = Payload { accounts: vec![json!({"cookie":"fake-cookie","password":"fake-password"})], packages: vec![], settings: Map::new() };
+        let container = build_container(&payload, "backup-password").unwrap();
+        let opened = open_container(&container, "backup-password").unwrap();
+        assert_eq!(opened.accounts,payload.accounts);
+        assert!(open_container(&container, "wrong-password").is_err());
+    }
+
+    #[test]
+    fn restore_keeps_passphrase_ciphertext_readable_after_settings_reload() {
+        let current = json!({ "keyVerifier": "local-verifier", "kdfSalt": "local-salt", "encSetupDone": true });
+        let key = crypto::derive_scrypt_key("local-password", "local-salt");
+        let ciphertext = crypto::encrypt_gcm("session-secret", &key, "gs");
+        let mut restored = json!({ "keyVerifier": "foreign-verifier", "kdfSalt": "foreign-salt", "language": "pt" }).as_object().unwrap().clone();
+        preserve_local_encryption(&mut restored, current.as_object().unwrap());
+        let reloaded: Map<String, Value> = serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+        let key_after_restart = crypto::derive_scrypt_key("local-password", reloaded["kdfSalt"].as_str().unwrap());
+        assert_eq!(crypto::decrypt_gcm(&ciphertext, &key_after_restart, "gs").as_deref(), Some("session-secret"));
+        assert_eq!(reloaded["keyVerifier"], "local-verifier");
+        assert_eq!(reloaded["language"], "pt");
+    }
+
+    #[test]
+    fn restore_keeps_local_device_key_and_rejects_foreign_passphrase_metadata() {
+        let current = json!({ "_deviceKey": "local-device-key", "encSetupDone": true });
+        let mut restored = json!({ "_deviceKey": "foreign-key", "customKey": "foreign-password", "keyVerifier": "foreign-verifier", "kdfSalt": "foreign-salt", "fpsCap": 60 }).as_object().unwrap().clone();
+        preserve_local_encryption(&mut restored, current.as_object().unwrap());
+        assert_eq!(restored["_deviceKey"], "local-device-key");
+        assert!(!restored.contains_key("customKey"));
+        assert!(!restored.contains_key("keyVerifier"));
+        assert!(!restored.contains_key("kdfSalt"));
+        assert_eq!(restored["fpsCap"], 60);
+    }
 }

@@ -1,9 +1,10 @@
 {
   "name": "mr_tauri",
   "private": true,
-  "version": "2.4.0",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
     "tauri": "tauri",
     "web:build": "node web/build-web.mjs",
     "web:serve": "node web/server.mjs"
