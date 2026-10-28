@@ -20,6 +20,8 @@ jobs:
           & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /optimize+ /platform:x64 /target:exe /r:System.Drawing.dll /out:src-tauri\resources\RobloxNative.exe src-tauri\resources\RobloxNative.cs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build optimized executable with static WebView2 loader
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml --bin MultiRoblox
       - name: Verify loader is incorporated
         shell: pwsh

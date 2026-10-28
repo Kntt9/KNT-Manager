@@ -19,6 +19,7 @@ if exist "%CSC%" (
   exit /b 1
 )
 
+set "RUSTFLAGS=%RUSTFLAGS% -C target-feature=+crt-static"
 cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path src-tauri\Cargo.toml --bin MultiRoblox
 if errorlevel 1 (echo Build failed & pause & exit /b 1)
 
