@@ -1,5 +1,5 @@
-/* Workspace presentation. Existing account/group commands remain in renderer.js.
-   No credentials, requests, timers or persistence are introduced by this view. */
+/* Workspace presentation, inspector state and group editing.
+   Existing account/process commands remain in renderer.js; writes use the shared bridge. */
 var _workspaceGroup = '';
 var _workspaceMenuTrigger = null;
 var _workspaceRendering = false;
@@ -53,7 +53,8 @@ function workspaceRowAction(event) {
   if (!row) return;
   const id = row.dataset.id;
   event.stopPropagation();
-  if (button.dataset.accountAction === 'start') { closeCardMenu(); openLaunch(id); }
+  if (button.dataset.accountAction === 'game') { openGamePicker([id]); }
+  else if (button.dataset.accountAction === 'start') { closeCardMenu(); openLaunch(id); }
   else {
     showCardMenu(id, Math.min(event.clientX || button.getBoundingClientRect().left, innerWidth - 220), event.clientY || button.getBoundingClientRect().bottom);
     _workspaceMenuTrigger=button;
@@ -78,7 +79,7 @@ function workspaceAccountRow(account) {
     <div class="account-groups" role="cell" title="${esc(groupNames)}">${groups.length ? '<span>'+esc(groups[0].name)+'</span>'+(groups.length > 1 ? '<small>+'+(groups.length-1)+'</small>' : '') : '<span class="text-muted">—</span>'}</div>
     <div role="cell"><span class="card-state" data-state="${state.state}">${esc(state.label)}</span></div>
     <div class="account-destination" role="cell"><span class="material-icons-round" aria-hidden="true">${target ? 'sports_esports' : 'home'}</span><div><strong id="gt-${esc(account.id)}">${esc(targetName)}</strong><small>${esc(target || t('layout.noGame'))}</small></div></div>
-    <div class="account-row-actions" role="cell" onclick="workspaceRowAction(event)"><button class="btn btn-launch" data-account-action="start" aria-label="${esc(t('launch.start'))}" title="${esc(t('launch.start'))}"><span class="material-icons-round" aria-hidden="true">play_arrow</span></button><button class="btn btn-ghost" data-account-action="more" aria-label="${esc(t('layout.moreActions'))}" title="${esc(t('layout.moreActions'))}"><span class="material-icons-round" aria-hidden="true">more_vert</span></button></div>
+    <div class="account-row-actions" role="cell" onclick="workspaceRowAction(event)"><button class="btn btn-launch" data-account-action="start" aria-label="${esc(t('launch.start'))}" title="${esc(t('launch.start'))}"><span class="material-icons-round" aria-hidden="true">play_arrow</span></button><button class="btn btn-ghost" data-account-action="game" aria-label="${esc(t('batch.setGame'))}" title="${esc(t('batch.setGame'))}"><span class="material-icons-round" aria-hidden="true">videogame_asset</span></button><button class="btn btn-ghost" data-account-action="more" aria-label="${esc(t('layout.moreActions'))}" title="${esc(t('layout.moreActions'))}"><span class="material-icons-round" aria-hidden="true">more_vert</span></button></div>
   </div>`;
 }
 function workspaceSyncAccounts() {
@@ -140,6 +141,7 @@ function workspaceGroupCatalog() {
   const catalog = document.getElementById('group-catalog');
   if (!catalog) return;
   const visible = visiblePackages();
+  catalog.closest('.groups-workspace')?.classList.toggle('is-empty',!visible.length);
   if (!visible.some(group => group.id === _workspaceGroup)) _workspaceGroup = visible[0]?.id || '';
   catalog.innerHTML = visible.map(group => {
     const members = pkgMembers(group), state = pkgState(group);
@@ -161,9 +163,15 @@ function workspaceGroupCatalog() {
         more.append(summary,actions); card.appendChild(more);
       }
     }
-    if (selected) card.querySelector('.pkg-members')?.classList.add('open');
+    if (selected) { card.querySelector('.pkg-members')?.classList.add('open'); workspaceGroupEditor(card); }
   });
-  document.getElementById('group-detail-placeholder').hidden = Boolean(_workspaceGroup);
+  document.getElementById('group-detail-placeholder').hidden = true;
+  const empty = document.getElementById('pkg-empty');
+  if (!visible.length && empty) {
+    const title = empty.querySelector('.empty-title'), sub = empty.querySelector('.empty-sub');
+    if (title) title.textContent = t(packages.length ? 'rework.noGroupResults' : 'groups.emptyTitle');
+    if (sub) sub.textContent = t(packages.length ? 'rework.clearFilters' : 'groups.emptySub');
+  }
   const title = document.getElementById('group-detail-title');
   if (title) title.textContent = t('layout.groupDetails');
 }
@@ -248,13 +256,7 @@ function workspaceInstall() {
   tracking?.classList.add('tracking-workspace');
   const batch = document.getElementById('batch-bar');
   document.getElementById('accounts-main')?.appendChild(batch);
-  if (batch && !batch.querySelector('.workspace-more')) {
-    const more=document.createElement('details');more.className='workspace-more';
-    const summary=document.createElement('summary');summary.setAttribute('data-i18n','layout.moreActions');summary.textContent='More actions';
-    const panel=document.createElement('div');panel.className='workspace-more-panel';
-    [...batch.children].filter(element=>element.matches('.filter-wrap') || (element.matches('button') && !['batchLaunch()','batchToGroup()','clearSelection()'].includes(element.getAttribute('onclick')))).forEach(element=>panel.appendChild(element));
-    more.append(summary,panel);batch.insertBefore(more,batch.querySelector('[onclick="clearSelection()"]'));
-  }
+  workspaceInstallControls(batch);
   const logs = document.getElementById('logs-list');
   if (logs && !document.getElementById('log-columns')) {
     const columns = document.createElement('div'); columns.id='log-columns'; columns.className='log-columns';
@@ -290,6 +292,170 @@ function workspacePrepareDialog(overlay) {
     });
   }
 }
+function workspaceInstallControls(batch) {
+  const more = document.querySelector('.account-option-actions > .workspace-more');
+  if (more) {
+    const actions = document.createElement('div'); actions.className = 'account-direct-actions';
+    actions.append(...more.querySelector('.workspace-more-panel').children);
+    more.replaceWith(actions);
+  }
+  if (batch) {
+    const header = document.createElement('div'); header.className = 'selection-heading';
+    const actions = document.createElement('div'); actions.className = 'selection-actions';
+    const cancel = batch.querySelector('[onclick="clearSelection()"]');
+    cancel.removeAttribute('data-i18n');
+    cancel.innerHTML = '<span class="material-icons-round">close</span><span data-i18n="rework.cancelSelection">Cancel selection</span>';
+    header.append(document.getElementById('batch-count'),cancel);
+    const order = ['batchLaunch()','openBatchTarget()','batchToGroup()','toggleBatchCats(event)','batchTrim()','batchCopyLogins()','batchKill()'];
+    const icons = ['play_arrow','videogame_asset','group_add','label','memory','content_copy','power_settings_new'];
+    order.forEach((command,index)=>{
+      const button = batch.querySelector('[onclick="'+command+'"]');
+      if (!button) return;
+      const key = button.getAttribute('data-i18n'); button.removeAttribute('data-i18n');
+      button.innerHTML = '<span class="material-icons-round" aria-hidden="true">'+icons[index]+'</span><span data-i18n="'+key+'"></span>';
+      actions.append(button.closest('.filter-wrap') || button);
+    });
+    batch.replaceChildren(header,actions);
+  }
+  const workspace = document.querySelector('.account-workspace');
+  const toggle = document.createElement('button'); toggle.id = 'group-panel-toggle';
+  toggle.className = 'group-panel-toggle'; toggle.setAttribute('aria-controls','account-group-panel');
+  toggle.innerHTML = '<span class="material-icons-round" aria-hidden="true">chevron_right</span>';
+  toggle.onclick = () => workspaceToggleInspector();
+  workspace.append(toggle);
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('knt_group_panel_collapsed') === '1'; } catch {}
+  workspace.classList.toggle('group-panel-collapsed',collapsed);
+  document.getElementById('account-group-panel').hidden = collapsed;
+}
+
+function workspaceToggleInspector() {
+  const workspace = document.querySelector('.account-workspace');
+  const collapsed = workspace.classList.toggle('group-panel-collapsed');
+  document.getElementById('account-group-panel').hidden = collapsed;
+  try { localStorage.setItem('knt_group_panel_collapsed',collapsed ? '1' : '0'); } catch {}
+  workspaceInspectorToggleLabel();
+}
+function workspaceInspectorToggleLabel() {
+  const button = document.getElementById('group-panel-toggle');
+  if (!button) return;
+  const collapsed = document.getElementById('account-group-panel').hidden;
+  button.title = t(collapsed ? 'rework.showGroup' : 'rework.hideGroup');
+  button.setAttribute('aria-label',button.title);
+  button.setAttribute('aria-expanded',String(!collapsed));
+  button.firstElementChild.textContent = collapsed ? 'chevron_left' : 'chevron_right';
+}
+function workspaceInspectorOptions(query = '') {
+  const select = document.getElementById('account-group-select');
+  if (!select) return;
+  const needle = query.trim().toLocaleLowerCase();
+  select.innerHTML = '<option value="">'+esc(t('rework.chooseGroup'))+'</option>'+packages
+    .filter(group=>group.id === _inspectorGroupId || group.name.toLocaleLowerCase().includes(needle))
+    .map(group=>'<option value="'+esc(group.id)+'">'+esc(group.name)+' · '+pkgMembers(group).length+'</option>').join('');
+  select.value = _inspectorGroupId;
+}
+function workspaceRenderInspector() {
+  const panel = document.getElementById('account-group-panel');
+  if (!panel) return;
+  workspaceInspectorToggleLabel();
+  if (!packages.some(group=>group.id === _inspectorGroupId)) _inspectorGroupId = '';
+  const signature = JSON.stringify([_lang,_inspectorGroupId,packages.map(g=>[g.id,g.name,g.accountIds,g.launchOrder,g.link]),accounts.map(a=>[a.id,a.username,a.nickname])]);
+  if (signature === _inspectorSignature) { refreshAccountStatuses(); return; }
+  _inspectorSignature = signature;
+  const group = packages.find(g=>g.id === _inspectorGroupId);
+  const heading = '<div class="inspector-heading"><span class="material-icons-round" aria-hidden="true">groups</span>'+esc(t('ui.groupPanel'))+'</div>';
+  const selector = packages.length ? '<label class="inspector-label" for="inspector-search">'+esc(t('ui.chooseGroup'))+'</label><input id="inspector-search" class="sr-input inspector-search" placeholder="'+esc(t('rework.searchGroup'))+'" oninput="workspaceInspectorOptions(this.value)"/><select id="account-group-select" class="inspector-select" aria-label="'+esc(t('ui.chooseGroup'))+'" onchange="_inspectorGroupId=this.value;renderGroupInspector()"></select>' : '';
+  panel.innerHTML = heading+selector+(group ?
+    '<div class="inspector-destination-heading"><span class="inspector-label">'+esc(t('ui.destination'))+'</span><button class="btn btn-ghost group-game-picker-btn" data-group-action="game" title="'+esc(t('rework.pickerTitle'))+'" aria-label="'+esc(t('rework.pickerTitle'))+'"><span class="material-icons-round" aria-hidden="true">videogame_asset</span></button></div><div class="inspector-game">'+pkgGameMarkup(group.link || '')+'</div><div class="inspector-actions"><button class="btn btn-primary" data-group-action="start">'+esc(t('groups.startAll'))+'</button><button class="btn btn-ghost" data-group-action="distribute">'+esc(t('pkg.distribute'))+'</button><button class="btn btn-ghost" data-group-action="edit">'+esc(t('ui.manageGroup'))+'</button></div><span class="inspector-label">'+esc(t('ui.members'))+' · '+pkgMembers(group).length+'</span>'+pkgMembers(group).map(account=>{
+      const state = accountUiState(account);
+      return '<div class="inspector-member" data-account-id="'+esc(account.id)+'"><span class="inspector-avatar">'+esc((account.username || '?')[0].toUpperCase())+'</span><strong>'+esc(account.nickname || account.username)+'</strong><span class="card-state" data-state="'+state.state+'">'+esc(state.label)+'</span></div>';
+    }).join('') : '<div class="inspector-empty"><span class="material-icons-round">group_work</span><p>'+esc(t(packages.length ? 'rework.chooseGroup' : 'groups.emptyTitle'))+'</p><button class="btn btn-ghost" data-group-action="create">'+esc(t('groups.new'))+'</button></div>');
+  workspaceInspectorOptions();
+  panel.onclick = event=>{
+    const action = event.target.closest('[data-group-action]')?.dataset.groupAction;
+    if (action === 'create') openCreatePackage();
+    if (action === 'edit') { _workspaceGroup = _inspectorGroupId; goTo('packages'); }
+    if (action === 'game') openGroupGamePicker(_inspectorGroupId);
+    if (action === 'start') launchPackage(_inspectorGroupId);
+    if (action === 'distribute') workspaceDistribute(_inspectorGroupId);
+  };
+  refreshAccountStatuses();
+}
+
+var _workspaceGroupSaving = false;
+async function workspacePersistGroups(next) {
+  const result = await api.savePackages(next);
+  if (result === false || result?.ok === false) throw new Error('Group persistence failed');
+}
+async function workspaceSaveGroup(id, patch) {
+  if (_workspaceGroupSaving || _pkgLaunchJobs.has(id)) return false;
+  const group = packages.find(item=>item.id === id);
+  if (!group) return false;
+  _workspaceGroupSaving = true;
+  try {
+    const next = packages.map(item=>item.id === id ? {...item,...patch} : item);
+    await workspacePersistGroups(next);
+    Object.assign(group,patch);
+    renderPackages(); workspaceSyncAccounts();
+    return true;
+  } catch { toast(t('rework.saveError'),'err'); return false; }
+  finally { _workspaceGroupSaving = false; }
+}
+function workspaceGroupEditor(card) {
+  if (card.querySelector('.group-editor')) return;
+  const group = packages.find(item=>item.id === card.dataset.id);
+  if (!group) return;
+  const busy = _pkgLaunchJobs.has(group.id);
+  const editor = document.createElement('form'); editor.className = 'group-editor';
+  editor.innerHTML = '<h3>'+esc(t('rework.groupSettings'))+'</h3><div class="group-fields"><label>'+esc(t('groups.name'))+'<input class="sr-input" name="name" required maxlength="100" value="'+esc(group.name)+'"/></label><label>'+esc(t('groups.delay'))+' (ms)<input class="sr-input" name="delay" type="number" min="0" max="60000" step="100" value="'+Number(group.launchDelay || 0)+'"/></label><label>'+esc(t('groups.color'))+'<input name="color" type="color" value="'+(/^#[a-fA-F0-9]{6}$/.test(group.color) ? group.color : '#8b6cef')+'"/></label></div><button class="btn btn-ghost" type="submit">'+esc(t('groups.save'))+'</button>';
+  editor.onsubmit = async event=>{
+    event.preventDefault(); const data = new FormData(editor);
+    const name = String(data.get('name')).trim(); if (!name) return;
+    const button = editor.querySelector('button'); button.disabled = true;
+    await workspaceSaveGroup(group.id,{name,launchDelay:Math.min(60000,Math.max(0,Number(data.get('delay')) || 0)),color:data.get('color')});
+    button.disabled = false;
+  };
+  editor.querySelectorAll('input,button').forEach(el=>el.disabled=busy);
+  card.querySelector('.pkg-status').after(editor);
+  const members = card.querySelector('.pkg-members');
+  const toolbar = document.createElement('div'); toolbar.className = 'group-members-toolbar';
+  toolbar.innerHTML = '<div><h3>'+esc(t('ui.members'))+' · '+pkgMembers(group).length+'</h3><p>'+esc(t('rework.membersHint'))+'</p></div><div class="group-member-actions"><button class="btn btn-primary" data-member-add><span class="material-icons-round">person_add</span>'+esc(t('rework.addMembers'))+'</button><button class="btn btn-ghost" data-member-remove disabled>'+esc(t('rework.removeMembers'))+'</button></div>';
+  toolbar.querySelector('[data-member-add]').disabled = busy;
+  toolbar.querySelector('[data-member-add]').onclick = ()=>openEditPackage(group.id);
+  const remove = toolbar.querySelector('[data-member-remove]');
+  remove.onclick = ()=>{
+    const selected = [...members.querySelectorAll('input:checked')].map(input=>input.value);
+    if (!selected.length) return;
+    confirmAction(t('rework.removeConfirm',{n:selected.length}),()=>workspaceSaveGroup(group.id,{
+      accountIds:(group.accountIds || []).filter(id=>!selected.includes(id)),
+      launchOrder:(group.launchOrder || group.accountIds || []).filter(id=>!selected.includes(id)),
+    }));
+  };
+  members.before(toolbar);
+  const ordered = pkgMembers(group);
+  members.querySelectorAll('[data-acc-id]').forEach((row,index)=>{
+    const checkbox = document.createElement('input'); checkbox.type='checkbox'; checkbox.value=row.dataset.accId; checkbox.disabled=busy;
+    checkbox.setAttribute('aria-label',t('layout.selectAccount',{name:ordered[index]?.nickname || ordered[index]?.username || ''}));
+    checkbox.onchange=()=>remove.disabled=busy || !members.querySelector('input:checked');
+    row.prepend(checkbox);
+    const controls = document.createElement('span'); controls.className='member-order-controls';
+    [-1,1].forEach(direction=>{
+      const button=document.createElement('button'); button.className='btn btn-ghost';
+      button.innerHTML='<span class="material-icons-round">'+(direction<0?'arrow_upward':'arrow_downward')+'</span>';
+      button.setAttribute('aria-label',t('groups.launchOrder')+' '+(index+1)+' → '+(index+direction+1));
+      button.disabled=busy || index+direction<0 || index+direction>=ordered.length;
+      button.onclick=async()=>{
+        const ids=ordered.map(a=>a.id); [ids[index],ids[index+direction]]=[ids[index+direction],ids[index]];
+        button.disabled=true; await workspaceSaveGroup(group.id,{launchOrder:ids}); button.disabled=false;
+      };
+      controls.append(button);
+    });
+    row.append(controls);
+  });
+  const edit = card.querySelector('.pkg-card-actions [onclick^="openEditPackage"]');
+  if (edit) edit.hidden=true;
+}
+
 workspaceInstall();
 document.addEventListener('click',event=>{
   document.querySelectorAll('details.workspace-more[open]').forEach(menu=>{

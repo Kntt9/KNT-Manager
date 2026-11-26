@@ -1890,7 +1890,7 @@ function goTo(p) {
   document.querySelectorAll('.nav-item').forEach(x => x.classList.remove('active'));
   document.getElementById('page-' + p).classList.add('active');
   document.getElementById('nav-' + p).classList.add('active');
-  if (['dashboard','charts','generator','tracking','exploits','credits'].includes(p)) document.getElementById('nav-tools')?.classList.add('active');
+  if (['dashboard','generator','tracking','exploits','credits'].includes(p)) document.getElementById('nav-tools')?.classList.add('active');
   positionNavSlider();
   if (p === 'settings') {
     document.getElementById('stat-count').textContent = accounts.length;
@@ -2397,44 +2397,15 @@ function refreshAccountStatuses() {
   const hasMembers = Boolean(group && pkgMembers(group).length);
   document.querySelectorAll('#account-group-panel [data-group-action]').forEach(button => {
     const action = button.dataset.groupAction;
-    if (['start','distribute','edit'].includes(action)) {
-      button.disabled = busy || (action !== 'edit' && !hasMembers) || (action === 'distribute' && !_pkgPublicPlace(group?.link));
+    if (['start','distribute','edit','game'].includes(action)) {
+      button.disabled = busy || (['start','distribute'].includes(action) && !hasMembers) || (action === 'distribute' && !_pkgPublicPlace(group?.link));
     }
   });
 }
 var _inspectorGroupId = '';
 var _inspectorSignature = '';
 function renderGroupInspector() {
-  const panel = document.getElementById('account-group-panel');
-  if (!panel) return;
-  if (!packages.some(group => group.id === _inspectorGroupId)) _inspectorGroupId = packages.find(group => group.pinned)?.id || packages[0]?.id || '';
-  const signature = JSON.stringify([_lang,_inspectorGroupId,packages.map(group => [group.id,group.name,group.accountIds,group.launchOrder,group.link]),accounts.map(account => [account.id,account.username,account.nickname])]);
-  if (signature === _inspectorSignature) { refreshAccountStatuses(); return; }
-  _inspectorSignature = signature;
-  const group = packages.find(group => group.id === _inspectorGroupId);
-  const heading = '<div class="inspector-heading"><span class="material-icons-round" aria-hidden="true">groups</span>'+esc(t('ui.groupPanel'))+'</div>';
-  if (!group) {
-    panel.innerHTML = heading+'<p class="inspector-hint">'+esc(t('ui.noGroups'))+'</p><div class="inspector-actions"><button class="btn btn-primary" data-group-action="create">'+esc(t('groups.new'))+'</button></div>';
-  } else {
-    const members = pkgMembers(group);
-    const target = group.link || '—';
-    panel.innerHTML = heading+'<label class="inspector-label" for="account-group-select">'+esc(t('ui.chooseGroup'))+'</label>'+
-      '<select id="account-group-select" class="inspector-select">'+packages.map(item=>'<option value="'+esc(item.id)+'"'+(item.id===group.id?' selected':'')+'>'+esc(item.name)+'</option>').join('')+'</select>'+
-      '<span class="inspector-label">'+esc(t('ui.destination'))+'</span><div class="inspector-game">'+pkgGameMarkup(target)+'</div>'+
-      '<div class="inspector-actions"><button class="btn btn-primary" data-group-action="start">'+esc(t('groups.startAll'))+'</button><button class="btn btn-ghost" data-group-action="distribute">'+esc(t('pkg.distribute'))+'</button><button class="btn btn-ghost" data-group-action="edit">'+esc(t('ui.manageGroup'))+'</button></div>'+
-      '<p class="inspector-hint">'+esc(t('ui.groupHint'))+'</p><span class="inspector-label">'+esc(t('ui.members'))+' · '+members.length+'</span>'+
-      members.map(account=>{const state=accountUiState(account);return '<div class="inspector-member" data-account-id="'+esc(account.id)+'"><span class="inspector-avatar">'+esc((account.username||'?')[0].toUpperCase())+'</span><strong>'+esc(account.nickname||account.username||'?')+'</strong><span class="card-state" data-state="'+state.state+'">'+esc(state.label)+'</span></div>';}).join('');
-    loadPkgCover(group.id, group.link || '');
-    document.getElementById('account-group-select').onchange = event => {_inspectorGroupId = event.target.value; renderGroupInspector();};
-  }
-  panel.onclick = event => {
-    const action = event.target.closest('[data-group-action]')?.dataset.groupAction;
-    if (action === 'create') openCreatePackage();
-    else if (action === 'edit') openEditPackage(_inspectorGroupId);
-    else if (action === 'start') launchPackage(_inspectorGroupId);
-    else if (action === 'distribute') workspaceDistribute(_inspectorGroupId);
-  };
-  refreshAccountStatuses();
+  workspaceRenderInspector();
 }
 function openKeySettings() {
   if (_savingKey) return;
@@ -2467,6 +2438,7 @@ function cardHtml(a, i) {
       <span class="card-state" data-state="${accountUiState(a).state}">${esc(accountUiState(a).label)}</span>
       <div class="card-game ${a.gameTarget ? 'visible' : ''}" id="gt-${a.id}" title="${esc(a.gameTarget || '')}">${a.gameTarget ? esc(truncate(_gameNameCache[a.id] || extractTargetLabel(a.gameTarget), 36)) : esc(t('accounts.noTarget') === 'accounts.noTarget' ? '—' : t('accounts.noTarget'))}</div>
       <div class="card-row">
+        <button class="btn btn-edit btn-game-target" onclick="openGamePicker(['${a.id}'])" title="${esc(t('batch.setGame'))}" aria-label="${esc(t('batch.setGame'))}"><span class="material-icons-round">videogame_asset</span></button>
         <button class="btn btn-launch" onclick="openLaunch('${a.id}')" title="${esc(t('launch.start'))}" aria-label="${esc(t('launch.start'))}">
           <span class="material-icons-round" style="font-size:15px">play_arrow</span>
         </button>
@@ -2564,6 +2536,9 @@ function updateBatchBar() {
   const n = _selectedIds.size;
   bar.style.display = _selectMode ? 'flex' : 'none';
   if (count) count.textContent = n + ' ' + t('batch.selected');
+  bar.querySelectorAll('.selection-actions button').forEach(button => {
+    button.disabled = !n || (button.getAttribute('onclick') === 'batchLaunch()' && _batchLaunchBusy);
+  });
 }
 async function batchKill() {
   const ids = [..._selectedIds];
@@ -2652,7 +2627,7 @@ function batchToGroup() {
   // Pre-check the selected accounts in the new group's picker.
   const picker = document.getElementById('pkg-account-picker');
   if (picker) {
-    picker.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = ids.includes(c.value); });
+    picker.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = ids.includes(c.value); if(c.checked) _pkgSelectedIds.add(c.value); });
     updatePkgCount();
     renderPkgOrder();
   }
@@ -2681,38 +2656,7 @@ async function batchSetCategory(catId) {
   toast(t('batch.categorySet', { n: ids.length }), 'ok');
   clearSelection();
 }
-function openBatchTarget() {
-  const ids = [..._selectedIds];
-  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
-  const inp = document.getElementById('batch-target-input');
-  if (inp) { inp.value = ''; }
-  const sub = document.getElementById('batch-target-sub');
-  if (sub) sub.textContent = t('batch.gameDescN', { n: ids.length, s: ids.length === 1 ? '' : 's' });
-  openModal('m-batch-target');
-  setTimeout(() => inp && inp.focus(), 60);
-}
-async function submitBatchTarget() {
-  const ids = [..._selectedIds];
-  if (!ids.length) { toast(t('batch.none'), 'err'); return; }
-  const inp = document.getElementById('batch-target-input');
-  const btn = document.getElementById('batch-target-save');
-  const target = (inp ? inp.value : '').trim();
-  if (!target) { toast(t('batch.gameEmpty'), 'err'); if (inp) inp.focus(); return; }
-  if (btn) btn.disabled = true;
-  let ok = 0;
-  for (const id of ids) {
-    const a = accounts.find(x => x.id === id);
-    if (!a) continue;
-    a.gameTarget = target;
-    try { delete _gameNameCache[id]; } catch {}
-    try { await api.updateAccount(id, { gameTarget: target }); ok++; } catch {}
-  }
-  if (btn) btn.disabled = false;
-  closeModal('m-batch-target');
-  render();
-  toast(t('batch.gameSet', { ok, total: ids.length }), ok === ids.length ? 'ok' : 'err');
-}
-
+function openBatchTarget() { openGamePicker([..._selectedIds]); }
 // Double-click the card nickname (or the pencil icon) to rename it inline.
 function inlineEditNickname(id, el) {
   if (_selectMode) return;
@@ -5097,7 +5041,10 @@ function renderPackages() {
   const list = document.getElementById('pkg-list'), empty = document.getElementById('pkg-empty');
   if (!list) return;
   const vis = visiblePackages();
-  if (!vis.length) { list.innerHTML = ''; empty.style.display = 'flex'; return; }
+  if (!vis.length) {
+    list.innerHTML = ''; empty.style.display = 'flex';
+    workspaceGroupCatalog(); renderDashboard(); return;
+  }
   empty.style.display = 'none';
   list.innerHTML = vis.map((p, i) => {
     const members = pkgMembers(p);
@@ -5156,6 +5103,7 @@ function renderPackages() {
           <input type="text" class="pkg-link-input" id="pkg-link-${p.id}" placeholder="${esc(t('groups.linkPh'))}"
             value="${esc(p.link || '')}" ${busy ? 'disabled' : ''} onchange="setPackageLink('${p.id}', this.value)"
             onkeydown="if(event.key==='Enter'){this.blur();}"/>
+          <button class="btn btn-ghost group-game-picker-btn" onclick="openGroupGamePicker('${p.id}')" ${busy ? 'disabled' : ''} title="${esc(t('rework.pickerTitle'))}" aria-label="${esc(t('rework.pickerTitle'))}"><span class="material-icons-round" aria-hidden="true">videogame_asset</span></button>
         </div>
         ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn" onclick="openPkgServerList('${p.id}')" ${busy ? 'disabled' : ''} title="${esc(t('srv.title'))}" aria-label="${esc(t('srv.title'))}"><span class="material-icons-round">dns</span></button>` : ''}
         ${pkgPlace ? `<button class="btn btn-ghost pkg-srv-btn pkg-distribute-btn" onclick="workspaceDistribute('${p.id}')" ${busy ? 'disabled' : ''} title="${esc(t('pkg.distribute'))}" aria-label="${esc(t('pkg.distribute'))}"><span class="material-icons-round">call_split</span><span>${esc(t('ui.distribute'))}</span></button>` : ''}
@@ -5190,6 +5138,7 @@ function renderPackages() {
 
 function openCreatePackage() {
   editingPackageId = null;
+  _pkgSelectedIds = new Set(); _pkgOrderIds = [];
   document.getElementById('pkg-modal-title').textContent = t('groups.titleNew');
   document.getElementById('in-pkg-name').value = '';
   document.getElementById('in-pkg-delay').value = 0;
@@ -5205,6 +5154,7 @@ function openCreatePackage() {
 function openEditPackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
   editingPackageId = id;
+  _pkgSelectedIds = new Set(p.accountIds || []);
   document.getElementById('pkg-modal-title').textContent = t('groups.titleEdit');
   document.getElementById('in-pkg-name').value = p.name || '';
   document.getElementById('in-pkg-delay').value = p.launchDelay || 0;
@@ -5245,18 +5195,20 @@ function pkgCustomColor(v) {
 }
 
 function collectPkgChecked() {
-  return Array.from(document.querySelectorAll('#pkg-account-picker input:checked')).map(c => c.value);
+  return [..._pkgSelectedIds];
 }
 
 function pkgPickAll(sel) {
-  document.querySelectorAll('#pkg-account-picker input').forEach(c => { c.checked = sel; });
+  document.querySelectorAll('#pkg-account-picker input').forEach(c => { c.checked = sel; if (sel) _pkgSelectedIds.add(c.value); else _pkgSelectedIds.delete(c.value); });
   updatePkgCount();
   renderPkgOrder();
 }
 
 // The picker shows accounts filtered by the search box; the launch-order row
 // always reflects the currently selected set.
+var _pkgSelectedIds = new Set();
 function renderPackagePicker(selectedIds) {
+  _pkgSelectedIds = new Set(selectedIds);
   const wrap = document.getElementById('pkg-account-picker');
   if (!wrap) return;
   const q = (document.getElementById('pkg-picker-search')?.value || '').trim().toLowerCase();
@@ -5269,7 +5221,7 @@ function renderPackagePicker(selectedIds) {
   }
   wrap.innerHTML = list.map(a => `
     <label class="pm-row">
-      <input type="checkbox" value="${a.id}" ${selectedIds.includes(a.id) ? 'checked' : ''} onchange="renderPkgOrder()"/>
+      <input type="checkbox" value="${a.id}" ${selectedIds.includes(a.id) ? 'checked' : ''} onchange="if(this.checked)_pkgSelectedIds.add(this.value);else _pkgSelectedIds.delete(this.value);renderPkgOrder();updatePkgCount()"/>
       <span class="pm-av" id="pkg-picker-av-${a.id}">${esc((a.username || '?')[0].toUpperCase())}</span>
       <span class="pm-info">
         <span class="pm-name">${esc(a.nickname || a.username || 'Unknown')}</span>
@@ -5329,47 +5281,52 @@ document.addEventListener('click', e => {
 function updatePkgCount() {
   const el = document.getElementById('pkg-count');
   if (!el) return;
-  const n = document.querySelectorAll('#pkg-account-picker input:checked').length;
+  const n = _pkgSelectedIds.size;
   el.textContent = t('groups.selected', { n: n, s: n !== 1 ? 's' : '' });
 }
 
-function savePackageModal() {
+async function savePackageModal() {
+  if (_workspaceGroupSaving || (editingPackageId && _pkgLaunchJobs.has(editingPackageId))) return;
   const name = document.getElementById('in-pkg-name').value.trim();
   if (!name) { toast(t('pkg.giveName'), 'err'); return; }
   const checked = collectPkgChecked();
   const color = document.querySelector('#pkg-color-row .pkg-color-swatch.sel')?.dataset.color || '';
   const delay = Math.max(0, Math.min(60000, Number(document.getElementById('in-pkg-delay').value) || 0));
   const order = (_pkgOrderIds && _pkgOrderIds.length ? _pkgOrderIds : checked);
-  if (editingPackageId) {
-    const p = packages.find(x => x.id === editingPackageId);
-    if (p) { p.name = name; p.accountIds = checked; p.color = color; p.launchDelay = delay; p.launchOrder = order; }
-  } else {
-    packages.push({ id: crypto.randomUUID(), name, accountIds: checked, link: '', color, pinned: false, launchDelay: delay, launchOrder: order });
-  }
-  api.savePackages(packages);
-  renderPackages();
-  closeModal('m-package');
-  toast(t('pkg.saved'), 'ok');
+  const id = editingPackageId || crypto.randomUUID();
+  if (editingPackageId && !packages.some(p => p.id === id)) return;
+  const patch = {name, accountIds:checked, color, launchDelay:delay, launchOrder:order};
+  const next = editingPackageId ? packages.map(p => p.id === id ? {...p,...patch} : p)
+    : [...packages,{id,link:'',pinned:false,...patch}];
+  _workspaceGroupSaving = true;
+  try {
+    await workspacePersistGroups(next);
+    packages = next; _workspaceGroup = id;
+    renderPackages(); workspaceSyncAccounts();
+    closeModal('m-package'); toast(t('pkg.saved'), 'ok');
+  } catch { toast(t('rework.saveError'), 'err'); }
+  finally { _workspaceGroupSaving = false; }
 }
 
 function deletePackage(id) {
   const p = packages.find(x => x.id === id); if (!p) return;
-  confirmAction(t('pkg.deleteConfirm', { name: p.name }), () => {
-    packages = packages.filter(x => x.id !== id);
-    api.savePackages(packages);
+  confirmAction(t('pkg.deleteConfirm', { name: p.name }), async () => {
+    if (_workspaceGroupSaving || _pkgLaunchJobs.has(id)) return;
+    const next = packages.filter(x => x.id !== id);
+    _workspaceGroupSaving = true;
+    try { await workspacePersistGroups(next); }
+    catch { toast(t('rework.saveError'), 'err'); return; }
+    finally { _workspaceGroupSaving = false; }
+    packages = next;
+    if (_inspectorGroupId === id) _inspectorGroupId = '';
+    _pkgExpanded.delete(id);
     renderPackages();
     toast(t('pkg.deleted'), 'err');
   });
 }
 
-function setPackageLink(id, value) {
-  const p = packages.find(x => x.id === id); if (!p) return;
-  p.link = value.trim();
-  api.savePackages(packages);
-  loadPkgCover(id, p.link);
-  // Re-render so the server-picker (🖥️) and distribute (↗️) buttons show
-  // up as soon as a numeric placeId is present.
-  renderPackages();
+async function setPackageLink(id, value) {
+  await workspaceSaveGroup(id, {link:value.trim()});
 }
 
 // ── Game cover images ─────────────────────────────────────────────────────
@@ -5808,7 +5765,7 @@ function randomGuid() {
   });
 }
 
-async function fetchRobloxGames(sortId) {
+async function fetchRobloxGamesUncached(sortId) {
   // Official Roblox explore API
   const sessionId = randomGuid();
   const url = `https://apis.roblox.com/explore-api/v1/get-sort-content?sessionId=${sessionId}&sortId=${sortId}&device=computer&country=all`;
@@ -5903,7 +5860,7 @@ function renderCharts(games, searchMode) {
   }).join('');
 }
 
-async function searchRobloxGames(query) {
+async function searchRobloxGamesUncached(query) {
   const sessionId = randomGuid();
   const url = `https://apis.roblox.com/search-api/omni-search?searchQuery=${encodeURIComponent(query)}&sessionId=${sessionId}`;
   const r = await api.robloxGet(url);

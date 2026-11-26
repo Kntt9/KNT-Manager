@@ -61,6 +61,7 @@
 <button class="nav-item" id="nav-packages" onclick="goTo('packages')">
       <span class="material-icons-round">inventory_2</span><span data-i18n="nav.groups">Groups</span>
     </button>
+<button class="nav-item" id="nav-charts" onclick="goTo('charts')"><span class="material-icons-round">videogame_asset</span><span data-i18n="nav.charts">Games</span></button>
 <button class="nav-item" id="nav-mixer" onclick="goTo('mixer')">
       <span class="material-icons-round">graphic_eq</span><span data-i18n="nav.mixer">Mixer</span>
     </button>
@@ -98,9 +99,7 @@
 <div class="page" id="page-tools"><div class="ph"><div><div class="ph-title" data-i18n="layout.tools">Tools</div><div class="ph-sub" data-i18n="layout.toolsSubtitle">More workspaces and app information</div></div></div><div class="tools-workspace"><button class="nav-item tool-link" id="nav-dashboard" onclick="goTo('dashboard')">
       <span class="material-icons-round">dashboard</span><span data-i18n="nav.dashboard">Dashboard</span>
     <small data-i18n="layout.toolHint.dashboard"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
-<button class="nav-item tool-link" id="nav-charts" onclick="goTo('charts')">
-      <span class="material-icons-round">videogame_asset</span><span data-i18n="nav.charts">Games</span>
-    <small data-i18n="layout.toolHint.charts"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
+
 <button class="nav-item tool-link" id="nav-generator" onclick="goTo('generator')">
       <span class="material-icons-round">shuffle</span><span data-i18n="nav.generator">Generator</span>
     <small data-i18n="layout.toolHint.generator"></small><span class="material-icons-round tool-arrow" aria-hidden="true">arrow_forward</span></button>
@@ -949,18 +948,6 @@
   </div>
   <button class="btn btn-ghost" onclick="clearSelection()" data-i18n="common.cancel"><span class="material-icons-round" style="font-size:15px">close</span></button>
 </div>
-<!-- batch set game -->
-<div class="overlay" id="m-batch-target" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-batch-target')">
-  <div class="modal" onclick="event.stopPropagation()" style="width:400px;max-width:92vw">
-    <div class="modal-title" data-i18n="batch.gameTitle">Set game for selected</div>
-    <div class="modal-sub" id="batch-target-sub" data-i18n="batch.gameDesc">Paste the game ID, link or server. Applies to every selected account at once.</div>
-    <input type="text" id="batch-target-input" class="sr-input" data-i18n-ph="batch.gamePh" data-i18n-aria="batch.gamePh" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..." aria-label="Game target" style="width:100%" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter')submitBatchTarget()"/>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('m-batch-target')" data-i18n="common.cancel">Cancel</button>
-      <button class="btn btn-primary" id="batch-target-save" onclick="submitBatchTarget()" data-i18n="common.save">Save</button>
-    </div>
-  </div>
-</div>
 <!-- tracking region picker -->
 <div class="overlay" id="m-region-picker" data-backdrop-close="true" onclick="if(event.target===this)closeRegionPicker()">
   <div class="modal" onclick="event.stopPropagation()" style="width:660px;max-width:92vw">
@@ -1099,7 +1086,7 @@
         <button class="btn btn-ghost" style="font-size:10.5px;padding:3px 8px;margin-left:auto" onclick="pkgPickAll(true)" data-i18n="groups.selectAll">Select all</button>
         <button class="btn btn-ghost" style="font-size:10.5px;padding:3px 8px" onclick="pkgPickAll(false)" data-i18n="groups.selectNone">None</button>
       </div>
-      <div class="search" style="margin:8px 0"><span class="material-icons-round">search</span><input id="pkg-picker-search" data-i18n-ph="groups.pickerSearchPh" data-i18n-aria="groups.pickerSearchPh" placeholder="Filter accounts..." aria-label="Filter accounts" oninput="renderPackagePicker(collectPkgChecked())"/></div>
+      <div class="search" style="margin:8px 0"><span class="material-icons-round">search</span><input id="pkg-picker-search" data-i18n-ph="groups.pickerSearchPh" data-i18n-aria="groups.pickerSearchPh" placeholder="Filter accounts..." aria-label="Filter accounts" oninput="renderPackagePicker([..._pkgSelectedIds])"/></div>
       <div class="pkg-account-picker" id="pkg-account-picker" onchange="updatePkgCount()"></div>
       <div class="pm-field-label" style="margin-top:10px" data-i18n="groups.launchOrder">Launch order</div>
       <div class="pkg-order-row" id="pkg-order-row"></div>
@@ -1362,6 +1349,7 @@
 <script src="bridge.js"></script>
 <script src="ui-shell.js"></script>
 <script src="workspace-ui.js"></script>
+<script src="game-picker.js"></script>
 <script src="renderer.js"></script>
 <!-- help modal -->
 <div class="overlay" id="m-help" data-backdrop-close="true" onclick="if(event.target===this)closeModal('m-help')">

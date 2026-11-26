@@ -82,6 +82,7 @@ copyFileSync(join(SRC, 'graphite.css'), join(WEB, 'graphite.css'));
 copyFileSync(join(SRC, 'ui-shell.js'), join(WEB, 'ui-shell.js'));
 copyFileSync(join(SRC, 'workspace.css'), join(WEB, 'workspace.css'));
 copyFileSync(join(SRC, 'workspace-ui.js'), join(WEB, 'workspace-ui.js'));
+copyFileSync(join(SRC, 'game-picker.js'), join(WEB, 'game-picker.js'));
 cpSync(join(SRC, 'assets'), join(WEB, 'assets'), { recursive: true });
 
 // ── renderer + i18n (plain copies) ─────────────────────────────────────────
